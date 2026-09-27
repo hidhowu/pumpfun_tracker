@@ -1,3 +1,0 @@
-{
-  "/api/traders/[address]/balance/route": "app/api/traders/[address]/balance/route.js"
-}
