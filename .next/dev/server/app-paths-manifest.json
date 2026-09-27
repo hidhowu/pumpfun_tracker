@@ -1,0 +1,12 @@
+{
+  "/api/leaderboard/route": "app/api/leaderboard/route.js",
+  "/api/traders/[address]/pnl/route": "app/api/traders/[address]/pnl/route.js",
+  "/api/traders/[address]/positions/route": "app/api/traders/[address]/positions/route.js",
+  "/api/traders/[address]/route": "app/api/traders/[address]/route.js",
+  "/api/traders/route": "app/api/traders/route.js",
+  "/blacklisted/page": "app/blacklisted/page.js",
+  "/leaderboard/page": "app/leaderboard/page.js",
+  "/page": "app/page.js",
+  "/settings/page": "app/settings/page.js",
+  "/traders/[address]/page": "app/traders/[address]/page.js"
+}

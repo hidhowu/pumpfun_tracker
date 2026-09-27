@@ -1,0 +1,3 @@
+{
+  "/api/traders/[address]/pnl/route": "app/api/traders/[address]/pnl/route.js"
+}

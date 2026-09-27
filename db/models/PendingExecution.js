@@ -1,0 +1,35 @@
+import mongoose from "mongoose";
+
+const { Schema, model, models } = mongoose;
+
+/**
+ * A queued simulated buy/sell, waiting out the "execution delay" (default
+ * 2s) that models real-world trade latency. Persisted (not an in-memory
+ * setTimeout) so a daemon restart never loses a pending fill - a poller
+ * just picks up anything with triggerAt <= now and status "pending".
+ */
+const PendingExecutionSchema = new Schema({
+  traderAddress: { type: String, required: true, index: true },
+  mint: { type: String, required: true },
+  action: { type: String, enum: ["buy", "sell"], required: true },
+  triggerAt: { type: Date, required: true, index: true },
+  sourceSignature: { type: String, required: true },
+  status: { type: String, enum: ["pending", "processing", "done", "skipped"], default: "pending", index: true },
+  skipReason: { type: String, default: null },
+  createdAt: { type: Date, default: Date.now },
+  processedAt: { type: Date, default: null },
+});
+
+// DB-level backstop against ever queuing two pending buys (or two pending
+// sells) for the same trader+mint at once - the application-level
+// `.exists()` check in db/simulation/engine.js has a TOCTOU race window
+// between two concurrent calls (e.g. two tracker processes momentarily
+// running at once), so this partial unique index is what actually
+// guarantees it can't happen: a second insert throws code 11000, which the
+// caller treats as "already queued."
+PendingExecutionSchema.index(
+  { traderAddress: 1, mint: 1, action: 1 },
+  { unique: true, partialFilterExpression: { status: "pending" } }
+);
+
+export const PendingExecution = models.PendingExecution || model("PendingExecution", PendingExecutionSchema);

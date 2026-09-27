@@ -1,0 +1,3 @@
+{
+  "/api/traders/[address]/reset/route": "app/api/traders/[address]/reset/route.js"
+}
