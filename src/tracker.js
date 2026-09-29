@@ -1,4 +1,5 @@
 import { fileURLToPath } from "url";
+import path from "path";
 import { EventEmitter } from "events";
 import { RpcPool } from "./rpcPool.js";
 import { LogSubscriber } from "./logSubscriber.js";
@@ -515,7 +516,12 @@ async function runCli() {
   tracker.startCommandPolling();
 }
 
-if (fileURLToPath(import.meta.url) === process.argv[1]) {
+// PM2 launches scripts through its own container wrapper, so process.argv[1]
+// is not this file's path there - also honour PM2's pm_exec_path.
+const isMain = [process.argv[1], process.env.pm_exec_path].some(
+  (p) => p && path.resolve(p) === fileURLToPath(import.meta.url),
+);
+if (isMain) {
   runCli().catch((err) => {
     console.error("[tracker] fatal:", err.message || err);
     process.exit(1);
