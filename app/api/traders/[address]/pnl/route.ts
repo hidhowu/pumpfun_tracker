@@ -12,13 +12,15 @@ const PERIOD_DAYS: Record<string, number> = { day: 1, week: 7, month: 30 };
 export async function GET(request: NextRequest, { params }: Params) {
   await connectDb();
   const { address } = await params;
+  const profileId = request.nextUrl.searchParams.get("profileId");
+  if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });
   const period = request.nextUrl.searchParams.get("period") || "week";
   const days = PERIOD_DAYS[period] ?? PERIOD_DAYS.week;
 
-  await ensureTodaySnapshot(address); // self-healing if the daemon missed today's snapshot
+  await ensureTodaySnapshot(profileId, address); // self-healing if the daemon missed today's snapshot
   const [pnl, negativeBalanceBreakdown] = await Promise.all([
-    computeRangePnl(address, days),
-    getNegativeBalanceBreakdown(address, days),
+    computeRangePnl(profileId, address, days),
+    getNegativeBalanceBreakdown(profileId, address, days),
   ]);
   return NextResponse.json({ period, ...pnl, negativeBalanceBreakdown });
 }

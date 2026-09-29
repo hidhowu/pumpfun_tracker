@@ -33,6 +33,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { getSettings, updateSettings, resetAllTraders } from "@/lib/api";
 import type { GlobalSettings } from "@/lib/types";
+import { TrailingStopsEditor } from "@/components/trailing-stops-editor";
+import { useProfile } from "@/lib/profile-context";
 
 type Draft = GlobalSettings;
 
@@ -90,30 +92,33 @@ function NumberField({
 }
 
 export default function SettingsPage() {
+  const { currentProfileId } = useProfile();
   const [saved, setSaved] = useState<Draft | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
-    getSettings()
+    if (!currentProfileId) return;
+    getSettings(currentProfileId)
       .then(({ settings }) => {
         setSaved(settings);
         setDraft(settings);
       })
       .catch(() => toast.error("Failed to load settings"));
-  }, []);
+  }, [currentProfileId]);
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
   }
 
   async function handleDefaultMutedChange(checked: boolean) {
+    if (!currentProfileId) return;
     // "muted" means notifications OFF, so the switch label is inverted from defaultMuted.
     const defaultMuted = !checked;
     set("defaultMuted", defaultMuted);
     try {
-      const { settings } = await updateSettings({ defaultMuted });
+      const { settings } = await updateSettings(currentProfileId, { defaultMuted });
       setSaved(settings);
       setDraft(settings);
       toast.success(`Notifications are now ${defaultMuted ? "off" : "on"} by default for new traders`);
@@ -125,9 +130,10 @@ export default function SettingsPage() {
   const dirty = draft && saved && JSON.stringify(draft) !== JSON.stringify(saved);
 
   async function handleResetAll() {
+    if (!currentProfileId) return;
     setResetting(true);
     try {
-      const { reset } = await resetAllTraders();
+      const { reset } = await resetAllTraders(currentProfileId);
       toast.success(`Reset ${reset.length} trader${reset.length === 1 ? "" : "s"} back to their starting balance`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to reset traders");
@@ -137,10 +143,10 @@ export default function SettingsPage() {
   }
 
   async function handleSave() {
-    if (!draft) return;
+    if (!draft || !currentProfileId) return;
     setSaving(true);
     try {
-      const { settings } = await updateSettings(draft);
+      const { settings } = await updateSettings(currentProfileId, draft);
       setSaved(settings);
       setDraft(settings);
       toast.success("Simulation defaults saved");
@@ -171,7 +177,8 @@ export default function SettingsPage() {
           <div>
             <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
             <p className="text-sm text-muted-foreground">
-              Global defaults for the copy-trade simulation. Any trader can override these individually.
+              Defaults for the currently-selected profile&apos;s strategy. Any trader can override these individually,
+              within this profile - other profiles have their own independent settings.
             </p>
           </div>
         </div>
@@ -311,32 +318,33 @@ export default function SettingsPage() {
 
           <Separator />
 
-          <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+          <NumberField
+            id="maxTradeTime"
+            label="Max trade time"
+            suffix="min"
+            step={5}
+            min={0}
+            value={draft.defaultMaxTradeTimeSeconds / 60}
+            onChange={(v) => set("defaultMaxTradeTimeSeconds", Math.max(0, v) * 60)}
+            description="0 = no limit (wait for the trader to sell, or another exit to trigger). e.g. 30 force-sells a position after 30 minutes if the trader still hasn't sold."
+          />
+
+          <Separator />
+
+          <div className="flex flex-col gap-2">
             <div className="flex flex-col">
-              <span className="text-sm font-medium">Bench cap</span>
+              <span className="text-sm font-medium">Trailing stops</span>
               <span className="text-xs text-muted-foreground">
-                Once a position first reaches this % unrealized gain, arm a trailing floor at the original entry price
-                - if it later falls back to breakeven or below, it auto-sells. Lets a winner run while protecting the
-                gain once it&apos;s proven itself.
+                Any number of independent rules: once a position first reaches "arm at" %, it auto-sells if it later
+                falls back to "exit at" % (which can be negative, e.g. arm at +25%, exit at -10%). Whichever
+                configured rule triggers first closes the position.
               </span>
             </div>
-            <Switch
-              checked={draft.defaultBenchCapPercent !== null}
-              onCheckedChange={(checked) => set("defaultBenchCapPercent", checked ? 30 : null)}
+            <TrailingStopsEditor
+              value={draft.defaultTrailingStops}
+              onChange={(next) => set("defaultTrailingStops", next)}
             />
           </div>
-          {draft.defaultBenchCapPercent !== null && (
-            <NumberField
-              id="benchCap"
-              label="Bench-cap level"
-              suffix="%"
-              step={5}
-              min={1}
-              value={draft.defaultBenchCapPercent}
-              onChange={(v) => set("defaultBenchCapPercent", v)}
-              description="e.g. 30 arms the floor once the position is up 30% - it then auto-sells if the gain fully evaporates."
-            />
-          )}
 
           <Separator />
 
@@ -438,14 +446,15 @@ export default function SettingsPage() {
           <CardTitle className="flex items-center gap-2 text-base text-negative">
             <TriangleAlert className="size-4" /> Danger zone
           </CardTitle>
-          <CardDescription>Irreversible actions affecting every tracked trader.</CardDescription>
+          <CardDescription>Irreversible actions affecting every tracked trader, within this profile only.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center justify-between rounded-lg border border-negative/30 bg-negative/5 px-4 py-3">
             <div className="flex flex-col">
-              <span className="text-sm font-medium">Reset all traders&apos; simulations</span>
+              <span className="text-sm font-medium">Reset all traders&apos; simulations (this profile)</span>
               <span className="text-xs text-muted-foreground">
-                Wipes every active trader&apos;s positions, trade history, and P&amp;L back to a fresh starting balance.
+                Wipes every active trader&apos;s positions, trade history, and P&amp;L back to a fresh starting balance
+                - in this profile only. Other profiles are untouched.
               </span>
             </div>
             <AlertDialog>
@@ -457,10 +466,10 @@ export default function SettingsPage() {
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Reset every active trader&apos;s simulation?</AlertDialogTitle>
+                  <AlertDialogTitle>Reset every active trader&apos;s simulation in this profile?</AlertDialogTitle>
                   <AlertDialogDescription>
                     This wipes every active trader&apos;s positions, trade history, and P&amp;L back to a fresh
-                    starting balance. This cannot be undone.
+                    starting balance, in this profile only. This cannot be undone.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>

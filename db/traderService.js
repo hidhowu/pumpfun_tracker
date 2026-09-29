@@ -1,11 +1,13 @@
 import bs58 from "bs58";
 import { Trader } from "./models/Trader.js";
+import { ProfileTrader } from "./models/ProfileTrader.js";
 import { BalanceAdjustment } from "./models/BalanceAdjustment.js";
 import { SimPosition } from "./models/SimPosition.js";
 import { PendingExecution } from "./models/PendingExecution.js";
 import { DailySnapshot } from "./models/DailySnapshot.js";
-import { ensureTraderInitialized } from "./simulation/init.js";
+import { NegativeBalanceEvent } from "./models/NegativeBalanceEvent.js";
 import { resolveTraderSettings } from "./settings.js";
+import { ensureTraderInitialized } from "./simulation/init.js";
 
 /**
  * A Solana address is a base58-encoded 32-byte public key. Rejecting
@@ -26,17 +28,17 @@ export function isValidSolanaAddress(address) {
 }
 
 /**
- * Adds one trader. If the address is already tracked, it's silently
- * ignored (no error, no duplicate) - returns { added: false } instead.
- * Initializes their simulated starting balance immediately (from whatever
- * allocationUsd resolves to right now).
+ * Adds one trader (shared identity, unaffected by profiles). If the address
+ * is already tracked, it's silently ignored (no error, no duplicate) -
+ * returns { added: false } instead. Each profile lazily initializes its own
+ * simulated balance for this address the first time it evaluates/tracks it
+ * (see db/simulation/init.js) - no eager per-profile write needed here.
  */
 export async function addTrader(address, { label = "" } = {}) {
   if (!isValidSolanaAddress(address)) return { added: false, invalid: true };
   const existing = await Trader.findOne({ address });
   if (existing) return { added: false, trader: existing };
   const trader = await Trader.create({ address, label });
-  await ensureTraderInitialized(trader);
   return { added: true, trader };
 }
 
@@ -78,7 +80,6 @@ export async function addTradersBulk(entries) {
       toInsert.map((e) => ({ address: e.address, label: e.label })),
       { ordered: false }
     );
-    for (const doc of docs) await ensureTraderInitialized(doc);
     added = docs.map((d) => d.address);
   }
 
@@ -93,8 +94,8 @@ export async function setBlacklisted(address, blacklisted) {
   );
 }
 
+/** muted: true | false | null (null clears the override, falling back to the shared default) - shared across every profile, not per-profile (a wallet's notification preference isn't a strategy choice). */
 export async function setMuted(address, muted) {
-  // muted: true | false | null (null clears the override, falling back to the global default)
   return Trader.findOneAndUpdate({ address }, { muted }, { returnDocument: "after" });
 }
 
@@ -106,56 +107,61 @@ export async function setTraderMeta(address, { label, notes } = {}) {
 }
 
 /**
- * Per-trader simulation setting overrides. Pass `null` for a field to clear
- * the override (fall back to the global default) - see db/settings.js.
+ * Per-(profile, trader) simulation setting overrides. Pass `null` for a
+ * field to clear the override (fall back to that profile's global default)
+ * - see db/settings.js. Upserts the ProfileTrader row since it may not
+ * exist yet (lazily created otherwise on first evaluation).
  */
-export async function setTraderSimSettings(address, patch) {
+export async function setTraderSimSettings(profileId, address, patch) {
   const update = {};
   for (const [key, value] of Object.entries(patch)) {
     if (value !== undefined) update[`settings.${key}`] = value;
   }
-  return Trader.findOneAndUpdate({ address }, { $set: update }, { returnDocument: "after" });
+  return ProfileTrader.findOneAndUpdate(
+    { profileId, traderAddress: address },
+    { $set: update },
+    { returnDocument: "after", upsert: true }
+  );
 }
 
-/** Manual balance top-up/deduction, with an audit trail (db/models/BalanceAdjustment.js). */
-export async function adjustBalance(address, amountUsd, reason = "") {
-  const trader = await Trader.findOne({ address });
-  if (!trader) throw new Error("Trader not found");
-  await ensureTraderInitialized(trader);
+/** Manual balance top-up/deduction for one trader within one profile, with an audit trail (db/models/BalanceAdjustment.js). */
+export async function adjustBalance(profileId, address, amountUsd, reason = "") {
+  let profileTrader = await ProfileTrader.findOne({ profileId, traderAddress: address });
+  if (!profileTrader) profileTrader = await ensureTraderInitialized(profileId, address);
 
-  const updated = await Trader.findOneAndUpdate(
-    { address },
+  const updated = await ProfileTrader.findOneAndUpdate(
+    { profileId, traderAddress: address },
     { $inc: { "sim.balanceUsd": amountUsd } },
     { returnDocument: "after" }
   );
-  await BalanceAdjustment.create({ traderAddress: address, amountUsd, reason, balanceAfterUsd: updated.sim.balanceUsd });
+  await BalanceAdjustment.create({ profileId, traderAddress: address, amountUsd, reason, balanceAfterUsd: updated.sim.balanceUsd });
   return updated;
 }
 
 /**
- * Full simulation reset for one trader: wipes every open/closed position,
- * pending execution, daily snapshot, and balance-adjustment record, then
- * resets balance back to their current effective starting allocation - as
- * if we'd just started tracking them fresh. Does NOT touch `Trade` (the
- * real on-chain trades we've observed from them), `label`/`notes`, or
- * `status` - this only resets simulation state, not the trader record
- * itself or the on-chain history we've recorded.
+ * Full simulation reset for one trader, within one profile: wipes every
+ * open/closed position, pending execution, daily snapshot, balance-
+ * adjustment record, and negative-balance event for this (profile, trader)
+ * pair, then resets balance back to that profile's current effective
+ * starting allocation - as if this profile had just started tracking this
+ * trader fresh. Does NOT touch `Trade` (the real on-chain trades we've
+ * observed from them - shared, unaffected by any profile), `label`/`notes`,
+ * or `status` - this only resets simulation state, not the trader record
+ * itself, and only within THIS profile (other profiles' state is untouched).
  */
-export async function resetTraderSimulation(address) {
-  const trader = await Trader.findOne({ address });
-  if (!trader) throw new Error("Trader not found");
-
-  const settings = await resolveTraderSettings(trader);
+export async function resetTraderSimulation(profileId, address) {
+  const settings = await resolveTraderSettings(profileId, address);
 
   await Promise.all([
-    SimPosition.deleteMany({ traderAddress: address }),
-    PendingExecution.deleteMany({ traderAddress: address }),
-    DailySnapshot.deleteMany({ traderAddress: address }),
-    BalanceAdjustment.deleteMany({ traderAddress: address }),
+    SimPosition.deleteMany({ profileId, traderAddress: address }),
+    PendingExecution.deleteMany({ profileId, traderAddress: address }),
+    DailySnapshot.deleteMany({ profileId, traderAddress: address }),
+    BalanceAdjustment.deleteMany({ profileId, traderAddress: address }),
+    NegativeBalanceEvent.deleteMany({ profileId, traderAddress: address }),
   ]);
 
-  return Trader.findOneAndUpdate(
-    { address },
+  return ProfileTrader.findOneAndUpdate(
+    { profileId, traderAddress: address },
     {
       $set: {
         sim: {
@@ -172,15 +178,15 @@ export async function resetTraderSimulation(address) {
         },
       },
     },
-    { returnDocument: "after" }
+    { returnDocument: "after", upsert: true }
   );
 }
 
-/** Resets simulation state for every active (non-blacklisted) trader. Returns the list of reset addresses. */
-export async function resetAllTradersSimulation() {
+/** Resets simulation state for every active (non-blacklisted) trader, within one profile. Returns the list of reset addresses. */
+export async function resetAllTradersSimulation(profileId) {
   const traders = await Trader.find({ status: "active" }, { address: 1 }).lean();
   for (const trader of traders) {
-    await resetTraderSimulation(trader.address);
+    await resetTraderSimulation(profileId, trader.address);
   }
   return traders.map((t) => t.address);
 }

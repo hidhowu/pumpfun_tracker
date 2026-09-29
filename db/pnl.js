@@ -30,8 +30,9 @@ function dayBoundsUtc(dateStr) {
   return { start, end };
 }
 
-async function combinedPnlForRange(traderAddress, start, end) {
+async function combinedPnlForRange(profileId, traderAddress, start, end) {
   const closedPositions = await SimPosition.find({
+    profileId,
     traderAddress,
     status: "closed",
     closedAt: { $gte: start, $lt: end },
@@ -50,26 +51,26 @@ async function combinedPnlForRange(traderAddress, start, end) {
  * (walletValueUsd - balance + mark-to-market of open positions) pass it in,
  * so this doesn't re-fetch prices for the same trader a second time.
  */
-export async function computeDailyPnl(traderAddress, dateStr, { currentValue } = {}) {
+export async function computeDailyPnl(profileId, traderAddress, dateStr, { currentValue } = {}) {
   const nextDateStr = addDaysUtc(dateStr, 1);
   const isToday = dateStr === todayUtcString();
 
   const [startSnap, endSnap] = await Promise.all([
-    DailySnapshot.findOne({ traderAddress, date: dateStr }).lean(),
-    DailySnapshot.findOne({ traderAddress, date: nextDateStr }).lean(),
+    DailySnapshot.findOne({ profileId, traderAddress, date: dateStr }).lean(),
+    DailySnapshot.findOne({ profileId, traderAddress, date: nextDateStr }).lean(),
   ]);
 
   const startValue = startSnap?.portfolioValueUsdAtOpen ?? null;
   let endValue = endSnap?.portfolioValueUsdAtOpen ?? null;
   if (endValue === null && isToday) {
-    endValue = currentValue !== undefined ? currentValue : await currentPortfolioValueUsd(traderAddress);
+    endValue = currentValue !== undefined ? currentValue : await currentPortfolioValueUsd(profileId, traderAddress);
   }
 
   const actualizedUsd = startValue !== null && endValue !== null ? endValue - startValue : null;
   const actualizedPercent = startValue ? (actualizedUsd / startValue) * 100 : null;
 
   const { start, end } = dayBoundsUtc(dateStr);
-  const combined = await combinedPnlForRange(traderAddress, start, end);
+  const combined = await combinedPnlForRange(profileId, traderAddress, start, end);
 
   return { date: dateStr, actualizedUsd, actualizedPercent, ...combined };
 }
@@ -82,21 +83,21 @@ export async function computeDailyPnl(traderAddress, dateStr, { currentValue } =
  * `currentValue` if the caller already has today's live portfolio value
  * (e.g. for walletValueUsd) to avoid fetching prices twice.
  */
-export async function computeTodayQuickStats(traderAddress, { currentValue } = {}) {
+export async function computeTodayQuickStats(profileId, traderAddress, { currentValue } = {}) {
   const today = todayUtcString();
-  const day = await computeDailyPnl(traderAddress, today, { currentValue });
+  const day = await computeDailyPnl(profileId, traderAddress, today, { currentValue });
   const decided = day.wins + day.losses;
   const winRatePercent = decided > 0 ? (day.wins / decided) * 100 : null;
   return { ...day, winRatePercent };
 }
 
 /** Day-by-day breakdown for the last `days` days (inclusive of today), oldest first. */
-export async function computeDailyBreakdown(traderAddress, days) {
+export async function computeDailyBreakdown(profileId, traderAddress, days) {
   const today = todayUtcString();
   const results = [];
   for (let i = days - 1; i >= 0; i--) {
     const dateStr = addDaysUtc(today, -i);
-    results.push(await computeDailyPnl(traderAddress, dateStr));
+    results.push(await computeDailyPnl(profileId, traderAddress, dateStr));
   }
   return results;
 }
@@ -152,8 +153,8 @@ export function computeStreaks(dailyBreakdown) {
 }
 
 /** Aggregate actualized + combined P&L across a range, plus the day-by-day breakdown and streaks. Use days=7 for "weekly", 30 for "monthly". */
-export async function computeRangePnl(traderAddress, days) {
-  const dailyBreakdown = await computeDailyBreakdown(traderAddress, days);
+export async function computeRangePnl(profileId, traderAddress, days) {
+  const dailyBreakdown = await computeDailyBreakdown(profileId, traderAddress, days);
 
   const firstWithStart = dailyBreakdown.find((d) => d.actualizedUsd !== null);
   const totalActualizedUsd = dailyBreakdown.reduce((sum, d) => sum + (d.actualizedUsd || 0), 0);

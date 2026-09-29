@@ -16,11 +16,13 @@ type Params = { params: Promise<{ address: string }> };
 export async function GET(request: NextRequest, { params }: Params) {
   await connectDb();
   const { address } = await params;
+  const profileId = request.nextUrl.searchParams.get("profileId");
+  if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });
   const status = request.nextUrl.searchParams.get("status");
   const page = Math.max(1, Number(request.nextUrl.searchParams.get("page") || "1"));
   const limit = Math.min(100, Math.max(1, Number(request.nextUrl.searchParams.get("limit") || "25")));
 
-  const filter: Record<string, unknown> = { traderAddress: address };
+  const filter: Record<string, unknown> = { profileId, traderAddress: address };
   if (status === "open" || status === "closed") filter.status = status;
 
   const sortField = status === "open" ? "openedAt" : "closedAt";

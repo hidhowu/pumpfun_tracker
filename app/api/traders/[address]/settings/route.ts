@@ -11,7 +11,7 @@ const FIELDS = [
   "dustSellFractionPercent",
   "stopLossPercent",
   "takeProfitPercent",
-  "benchCapPercent",
+  "maxTradeTimeSeconds",
   "allowNegativeBalance",
   "executionDelaySeconds",
   "feeUsd",
@@ -19,25 +19,47 @@ const FIELDS = [
 
 type Params = { params: Promise<{ address: string }> };
 
+function isValidTrailingStops(value: unknown): value is { armPercent: number; exitPercent: number }[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (r) =>
+        r &&
+        typeof r === "object" &&
+        typeof (r as { armPercent?: unknown }).armPercent === "number" &&
+        typeof (r as { exitPercent?: unknown }).exitPercent === "number"
+    )
+  );
+}
+
 /**
  * Per-trader simulation setting overrides. Body may include any subset of
  * the fields above; pass `null` to clear an override (fall back to global).
+ * `trailingStops` is separate: pass an array (whole-list override, [] means
+ * "no trailing stops for this trader") or `null` to inherit the global list.
  */
 export async function PATCH(request: NextRequest, { params }: Params) {
   await connectDb();
   const { address } = await params;
+  const profileId = request.nextUrl.searchParams.get("profileId");
+  if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });
   const body = await request.json().catch(() => ({}));
 
   const existing = await Trader.findOne({ address });
   if (!existing) return NextResponse.json({ error: "Trader not found" }, { status: 404 });
 
-  const patch: Record<string, number | boolean | null> = {};
+  const patch: Record<string, unknown> = {};
   for (const field of FIELDS) {
     if (field in body) patch[field] = body[field];
   }
+  if ("trailingStops" in body) {
+    if (body.trailingStops === null || isValidTrailingStops(body.trailingStops)) {
+      patch.trailingStops = body.trailingStops;
+    }
+  }
 
-  const updated = await setTraderSimSettings(address, patch);
-  const effectiveSettings = await resolveTraderSettings(updated!);
+  const updated = await setTraderSimSettings(profileId, address, patch);
+  const effectiveSettings = await resolveTraderSettings(profileId, address, { profileTrader: updated! });
   return NextResponse.json({
     settings: updated!.settings,
     effectiveSettings,

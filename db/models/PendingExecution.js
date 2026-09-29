@@ -9,6 +9,7 @@ const { Schema, model, models } = mongoose;
  * just picks up anything with triggerAt <= now and status "pending".
  */
 const PendingExecutionSchema = new Schema({
+  profileId: { type: Schema.Types.ObjectId, required: true, index: true },
   traderAddress: { type: String, required: true, index: true },
   mint: { type: String, required: true },
   action: { type: String, enum: ["buy", "sell"], required: true },
@@ -28,7 +29,7 @@ const PendingExecutionSchema = new Schema({
 // guarantees it can't happen: a second insert throws code 11000, which the
 // caller treats as "already queued."
 PendingExecutionSchema.index(
-  { traderAddress: 1, mint: 1, action: 1 },
+  { profileId: 1, traderAddress: 1, mint: 1, action: 1 },
   { unique: true, partialFilterExpression: { status: "pending" } }
 );
 

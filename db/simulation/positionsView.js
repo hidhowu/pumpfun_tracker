@@ -39,14 +39,14 @@ export async function markOpenPositions(positions) {
   );
 }
 
-/** Fetches + marks a trader's open positions in one call. */
-export async function getMarkedOpenPositions(traderAddress) {
-  const positions = await SimPosition.find({ traderAddress, status: "open" }).lean();
+/** Fetches + marks a trader's open positions, within one profile, in one call. */
+export async function getMarkedOpenPositions(profileId, traderAddress) {
+  const positions = await SimPosition.find({ profileId, traderAddress, status: "open" }).lean();
   return markOpenPositions(positions);
 }
 
-/** Total unrealized P&L (USD) across a trader's open positions, right now. */
-export async function getUnrealizedPnlUsd(traderAddress) {
-  const marked = await getMarkedOpenPositions(traderAddress);
+/** Total unrealized P&L (USD) across a trader's open positions in one profile, right now. */
+export async function getUnrealizedPnlUsd(profileId, traderAddress) {
+  const marked = await getMarkedOpenPositions(profileId, traderAddress);
   return marked.reduce((sum, p) => sum + (p.unrealizedPnlUsd || 0), 0);
 }

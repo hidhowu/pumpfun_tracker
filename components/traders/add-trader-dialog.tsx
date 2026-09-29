@@ -112,7 +112,7 @@ export function AddTraderDialog({ onAdded }: { onAdded: () => void }) {
           Add Trader
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add trader(s) to track</DialogTitle>
           <DialogDescription>
@@ -170,7 +170,13 @@ export function AddTraderDialog({ onAdded }: { onAdded: () => void }) {
                 placeholder={"One per line, or comma-separated:\nAddr1...\nAddr2..., Addr3..."}
                 value={bulkText}
                 onChange={(e) => setBulkText(e.target.value)}
-                className="min-h-[140px] font-mono text-sm"
+                // The base Textarea uses field-sizing:content (grows to fit
+                // whatever's pasted, in both directions, unbounded) - great
+                // for a short chat-style input, actively broken for pasting
+                // 100 addresses. Force it back to a fixed box that scrolls
+                // internally instead, and wrap/break so one giant
+                // comma-joined line can't stretch it sideways either.
+                className="field-sizing-fixed h-40 max-h-40 resize-none overflow-x-hidden overflow-y-auto font-mono text-sm break-all whitespace-pre-wrap"
               />
               <p className="text-xs text-muted-foreground">
                 {bulkAddresses.length} address{bulkAddresses.length === 1 ? "" : "es"} detected

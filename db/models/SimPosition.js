@@ -9,6 +9,7 @@ const { Schema, model, models } = mongoose;
  * full simulated trade history.
  */
 const SimPositionSchema = new Schema({
+  profileId: { type: Schema.Types.ObjectId, required: true, index: true },
   traderAddress: { type: String, required: true, index: true },
   mint: { type: String, required: true },
   status: { type: String, enum: ["open", "closed"], default: "open", index: true },
@@ -21,9 +22,12 @@ const SimPositionSchema = new Schema({
   openedAt: { type: Date, default: Date.now },
   openTriggerSignature: { type: String, required: true }, // the real trader's buy tx that triggered this
 
-  // Set once unrealized gain first reaches the trader's benchCapPercent -
-  // arms the "back to entry" auto-sell (see db/simulation/executor.js).
-  benchArmed: { type: Boolean, default: false },
+  // _id strings (as text) of every GlobalSettings.defaultTrailingStops /
+  // Trader.settings.trailingStops rule that has armed for this position -
+  // see db/simulation/executor.js's checkRiskExits. A rule arms once
+  // unrealized gain first reaches its armPercent, and stays armed
+  // (independent of the others) until the position closes.
+  armedTrailingStopIds: { type: [String], default: [] },
 
   // Peak (max favorable excursion) reached at any point while open, sampled
   // on the risk-check interval - answers "it eventually closed at +40%, but
@@ -37,7 +41,14 @@ const SimPositionSchema = new Schema({
 
   // Sell side (set when closed)
   closedAt: { type: Date, default: null },
-  closeReason: { type: String, enum: ["trader_sell", "stop_loss", "take_profit", "bench", null], default: null },
+  // "bench" is kept only so pre-existing closed positions (from before the
+  // single bench-cap was replaced by the trailingStops rule list) keep
+  // rendering correctly - it's never written for new closes.
+  closeReason: {
+    type: String,
+    enum: ["trader_sell", "stop_loss", "take_profit", "bench", "trailing_stop", "max_hold_time", null],
+    default: null,
+  },
   closeTriggerSignature: { type: String, default: null },
   sellPriceUsd: { type: Number, default: null },
   proceedsUsd: { type: Number, default: null }, // gross proceeds, excludes fee
@@ -46,16 +57,20 @@ const SimPositionSchema = new Schema({
   realizedPnlPercent: { type: Number, default: null }, // realizedPnlUsd / (costBasis + buyFee) * 100
 });
 
-SimPositionSchema.index({ traderAddress: 1, status: 1 });
-SimPositionSchema.index({ traderAddress: 1, closedAt: -1 });
+SimPositionSchema.index({ profileId: 1, traderAddress: 1, status: 1 });
+SimPositionSchema.index({ profileId: 1, traderAddress: 1, closedAt: -1 });
 
 // Ultimate DB-level backstop for "never buy the same mint twice for a
-// trader": it is structurally impossible to have two *open* positions for
-// the same (trader, mint) at once, regardless of any race above this layer.
-// (This also serves as the general traderAddress+mint lookup index - every
-// query against that key pair in this codebase filters to status:"open"
-// anyway, so a separate unfiltered {traderAddress,mint} index would just be
-// a duplicate key pattern - Mongoose warns about and skips those.)
-SimPositionSchema.index({ traderAddress: 1, mint: 1 }, { unique: true, partialFilterExpression: { status: "open" } });
+// trader, within a given profile": it is structurally impossible to have
+// two *open* positions for the same (profile, trader, mint) at once,
+// regardless of any race above this layer. (This also serves as the
+// general profileId+traderAddress+mint lookup index - every query against
+// that key combo in this codebase filters to status:"open" anyway, so a
+// separate unfiltered index would just be a duplicate key pattern -
+// Mongoose warns about and skips those.)
+SimPositionSchema.index(
+  { profileId: 1, traderAddress: 1, mint: 1 },
+  { unique: true, partialFilterExpression: { status: "open" } }
+);
 
 export const SimPosition = models.SimPosition || model("SimPosition", SimPositionSchema);

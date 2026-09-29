@@ -5,12 +5,14 @@ import {
   Anchor,
   ChevronLeft,
   ChevronRight,
+  Clock,
   ExternalLink,
   Gauge,
   History,
   ShieldAlert,
   Target,
   UserCheck,
+  Waves,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { getPositions } from "@/lib/api";
+import { useProfile } from "@/lib/profile-context";
 import { formatAddress, formatRelativeTime, formatTokenAmount, formatUsd } from "@/lib/format";
 import type { SimPosition } from "@/lib/types";
 
@@ -33,6 +36,8 @@ const CLOSE_REASON_META: Record<
   stop_loss: { label: "Stop-loss", icon: ShieldAlert, className: "border-negative/30 text-negative" },
   take_profit: { label: "Take-profit", icon: Target, className: "border-positive/30 text-positive" },
   bench: { label: "Bench", icon: Anchor, className: "border-primary/30 text-primary" },
+  trailing_stop: { label: "Trailing stop", icon: Waves, className: "border-primary/30 text-primary" },
+  max_hold_time: { label: "Max hold time", icon: Clock, className: "border-border/60 text-muted-foreground" },
 };
 
 function CloseReasonBadge({ reason }: { reason: SimPosition["closeReason"] }) {
@@ -188,6 +193,7 @@ function TradeDetailDialog({ position, onClose }: { position: SimPosition | null
 }
 
 export function TradeHistoryList({ address }: Props) {
+  const { currentProfileId } = useProfile();
   const [positions, setPositions] = useState<SimPosition[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -196,16 +202,17 @@ export function TradeHistoryList({ address }: Props) {
 
   const load = useCallback(
     async (targetPage: number) => {
+      if (!currentProfileId) return;
       setLoading(true);
       try {
-        const res = await getPositions(address, "closed", targetPage, 20);
+        const res = await getPositions(currentProfileId, address, "closed", targetPage, 20);
         setPositions(res.positions);
         setTotalPages(Math.max(1, res.totalPages));
       } finally {
         setLoading(false);
       }
     },
-    [address]
+    [currentProfileId, address]
   );
 
   useEffect(() => {
@@ -260,6 +267,7 @@ export function TradeHistoryList({ address }: Props) {
                 <TableRow>
                   <TableHead>Mint</TableHead>
                   <TableHead className="text-right">Realized P&amp;L</TableHead>
+                  <TableHead className="text-right">Peak</TableHead>
                   <TableHead>Closed by</TableHead>
                   <TableHead className="text-right">Closed</TableHead>
                 </TableRow>
@@ -268,6 +276,9 @@ export function TradeHistoryList({ address }: Props) {
                 {positions.map((position) => {
                   const pnlPositive = (position.realizedPnlUsd || 0) > 0;
                   const pnlNegative = (position.realizedPnlUsd || 0) < 0;
+                  const peakPercent = position.maxUnrealizedPnlPercent;
+                  const peakPositive = peakPercent != null && peakPercent > 0;
+                  const peakNegative = peakPercent != null && peakPercent < 0;
                   return (
                     <TableRow
                       key={position._id}
@@ -293,6 +304,21 @@ export function TradeHistoryList({ address }: Props) {
                           <span className="text-[11px] opacity-80">
                             {position.realizedPnlPercent !== null ? `${position.realizedPnlPercent.toFixed(1)}%` : "-"}
                           </span>
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <span
+                          className={[
+                            "inline-flex items-center justify-end gap-1",
+                            peakPositive && "text-positive",
+                            peakNegative && "text-negative",
+                            peakPercent == null && "text-muted-foreground",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                        >
+                          <Gauge className="size-3 opacity-70" />
+                          {peakPercent != null ? `${peakPercent.toFixed(1)}%` : "—"}
                         </span>
                       </TableCell>
                       <TableCell>

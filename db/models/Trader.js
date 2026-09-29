@@ -2,24 +2,16 @@ import mongoose from "mongoose";
 
 const { Schema, model, models } = mongoose;
 
-// Per-trader overrides for simulation behavior. null on any field means
-// "inherit the matching default from GlobalSettings" - see db/settings.js.
-const SimSettingsSchema = new Schema(
-  {
-    allocationUsd: { type: Number, default: null }, // only used at first-init of sim.balanceUsd - see db/settings.js
-    tradeSizeUsd: { type: Number, default: null },
-    dustBuyUsd: { type: Number, default: null },
-    dustSellFractionPercent: { type: Number, default: null },
-    stopLossPercent: { type: Number, default: null }, // null (explicit) = disabled for this trader
-    takeProfitPercent: { type: Number, default: null }, // null = disabled - auto-sell once unrealized gain reaches this %
-    benchCapPercent: { type: Number, default: null }, // null = disabled - arms a "back to entry" auto-sell once this % gain is reached
-    allowNegativeBalance: { type: Boolean, default: null },
-    executionDelaySeconds: { type: Number, default: null },
-    feeUsd: { type: Number, default: null },
-  },
-  { _id: false }
-);
-
+/**
+ * Trader identity + tracking-layer state only - shared across every
+ * Profile. Simulation settings/state used to live here (`settings`/`sim`)
+ * but moved to db/models/ProfileTrader.js so each Profile can run an
+ * independent strategy over the same tracked wallet. Pre-existing documents
+ * still physically have those old fields in MongoDB (deliberately not
+ * stripped during the multi-profile migration - see
+ * C:\Users\Randytech\.claude\plans\modular-floating-gosling.md) but nothing
+ * reads or writes them anymore.
+ */
 const TraderSchema = new Schema({
   address: { type: String, required: true, unique: true, index: true },
   label: { type: String, default: "" },
@@ -29,6 +21,13 @@ const TraderSchema = new Schema({
   muted: { type: Boolean, default: null },
   addedAt: { type: Date, default: Date.now },
   blacklistedAt: { type: Date, default: null },
+
+  // Which RpcEndpoint currently owns this address's live log subscription -
+  // null means "needs (re)assignment", which is also the correct read for
+  // any pre-existing document from before this field existed (no backfill
+  // migration needed - see db/rpcAssignment.js's rebalanceAssignments).
+  assignedRpcUrl: { type: String, default: null },
+  subscriptionStatus: { type: String, enum: ["pending", "subscribed", "failed"], default: "pending" },
 
   // Stats about the REAL trader's own on-chain activity (not our simulation).
   stats: {
@@ -40,25 +39,6 @@ const TraderSchema = new Schema({
     wins: { type: Number, default: 0 },
     losses: { type: Number, default: 0 },
     lastTradeAt: { type: Date, default: null },
-  },
-
-  settings: { type: SimSettingsSchema, default: () => ({}) },
-
-  // Our copy-trade simulation state for this trader.
-  sim: {
-    initialized: { type: Boolean, default: false },
-    startingAllocationUsd: { type: Number, default: 0 }, // locked in at init time, for reference
-    balanceUsd: { type: Number, default: 0 },
-    everBoughtMints: { type: [String], default: [] }, // permanent dup-protection - a mint here is never bought again
-    negativeBalanceEventCount: { type: Number, default: 0 },
-    maxNegativeBalanceUsd: { type: Number, default: 0 }, // magnitude of the deepest negative point reached
-    openPositionCount: { type: Number, default: 0 },
-    closedPositionCount: { type: Number, default: 0 },
-    realizedPnlUsd: { type: Number, default: 0 },
-    // When our sim wallet last actually acted (opened/closed a position) -
-    // deliberately NOT the tracked wallet's own on-chain last-trade time,
-    // since what matters here is our own simulated activity.
-    lastActionAt: { type: Date, default: null },
   },
 });
 

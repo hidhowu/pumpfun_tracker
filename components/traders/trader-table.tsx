@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Copy,
@@ -13,6 +13,9 @@ import {
   Minus,
   Target,
   Layers,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
 } from "lucide-react";
 import {
   Table,
@@ -54,6 +57,63 @@ type TraderTableProps = {
   emptyMessage?: string;
 };
 
+type SortKey =
+  | "address"
+  | "activeTrades"
+  | "dailyPnl"
+  | "winRate"
+  | "balance"
+  | "value"
+  | "combinedPnl"
+  | "lastActive";
+type SortDir = "asc" | "desc";
+
+const SORT_ACCESSORS: Record<SortKey, (t: Trader) => number | string> = {
+  address: (t) => t.address.toLowerCase(),
+  activeTrades: (t) => t.sim.openPositionCount,
+  dailyPnl: (t) => t.today.actualizedUsd ?? -Infinity,
+  winRate: (t) => t.today.winRatePercent ?? -Infinity,
+  balance: (t) => t.sim.balanceUsd,
+  value: (t) => t.walletValueUsd,
+  combinedPnl: (t) => (t.today.closedTradeCount > 0 ? t.today.combinedPercent : -Infinity),
+  lastActive: (t) => (t.sim.lastActionAt ? new Date(t.sim.lastActionAt).getTime() : -Infinity),
+};
+
+function SortableHead({
+  label,
+  sortKey,
+  activeKey,
+  dir,
+  onSort,
+  align = "right",
+}: {
+  label: string;
+  sortKey: SortKey;
+  activeKey: SortKey | null;
+  dir: SortDir;
+  onSort: (key: SortKey) => void;
+  align?: "left" | "right";
+}) {
+  const isActive = activeKey === sortKey;
+  const Icon = isActive ? (dir === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
+  return (
+    <TableHead className={align === "right" ? "text-right" : undefined}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={cn(
+          "inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wide transition-colors hover:text-foreground",
+          align === "right" && "flex-row-reverse",
+          isActive ? "text-foreground" : "text-muted-foreground"
+        )}
+      >
+        {label}
+        <Icon className={cn("size-3", !isActive && "opacity-40")} />
+      </button>
+    </TableHead>
+  );
+}
+
 function PnlValue({ value }: { value: number | null }) {
   if (value === null) return <span className="text-muted-foreground">-</span>;
   const positive = value > 0;
@@ -87,6 +147,33 @@ export function TraderTable({
   emptyMessage,
 }: TraderTableProps) {
   const [pendingAddress, setPendingAddress] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  function handleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      // Address reads naturally A-Z first; every numeric column reads
+      // naturally highest-first (biggest profit/value on top).
+      setSortDir(key === "address" ? "asc" : "desc");
+    }
+  }
+
+  const sortedTraders = useMemo(() => {
+    if (!sortKey) return traders;
+    const accessor = SORT_ACCESSORS[sortKey];
+    const sorted = [...traders].sort((a, b) => {
+      const av = accessor(a);
+      const bv = accessor(b);
+      if (av < bv) return -1;
+      if (av > bv) return 1;
+      return 0;
+    });
+    if (sortDir === "desc") sorted.reverse();
+    return sorted;
+  }, [traders, sortKey, sortDir]);
 
   async function handleBlacklistToggle(address: string, blacklist: boolean) {
     setPendingAddress(address);
@@ -131,14 +218,34 @@ export function TraderTable({
       <Table>
         <TableHeader>
           <TableRow className="border-border/60 hover:bg-transparent">
-            <TableHead className="pl-4">Trader</TableHead>
-            <TableHead className="text-right">Active Trades</TableHead>
-            <TableHead className="text-right">Daily PnL (Actualized)</TableHead>
-            <TableHead className="text-right">Daily Win Rate</TableHead>
-            <TableHead className="text-right">Balance</TableHead>
-            <TableHead className="text-right">Value</TableHead>
-            <TableHead className="text-right">Daily Combined PnL</TableHead>
-            <TableHead className="text-right">Last Active</TableHead>
+            <TableHead className="pl-4">
+              <button
+                type="button"
+                onClick={() => handleSort("address")}
+                className={cn(
+                  "inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wide transition-colors hover:text-foreground",
+                  sortKey === "address" ? "text-foreground" : "text-muted-foreground"
+                )}
+              >
+                Trader
+                {sortKey === "address" ? (
+                  sortDir === "asc" ? (
+                    <ArrowUp className="size-3" />
+                  ) : (
+                    <ArrowDown className="size-3" />
+                  )
+                ) : (
+                  <ArrowUpDown className="size-3 opacity-40" />
+                )}
+              </button>
+            </TableHead>
+            <SortableHead label="Active Trades" sortKey="activeTrades" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+            <SortableHead label="Daily PnL (Actualized)" sortKey="dailyPnl" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+            <SortableHead label="Daily Win Rate" sortKey="winRate" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+            <SortableHead label="Balance" sortKey="balance" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+            <SortableHead label="Value" sortKey="value" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+            <SortableHead label="Daily Combined PnL" sortKey="combinedPnl" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+            <SortableHead label="Last Active" sortKey="lastActive" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
             <TableHead className="text-center">Notify</TableHead>
             <TableHead className="pr-4 text-right">Action</TableHead>
           </TableRow>
@@ -154,7 +261,7 @@ export function TraderTable({
               </TableRow>
             ))}
 
-          {traders.map((trader) => {
+          {sortedTraders.map((trader) => {
             const isPending = pendingAddress === trader.address;
             const today = trader.today;
             const hasClosedToday = today.closedTradeCount > 0;

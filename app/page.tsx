@@ -8,24 +8,27 @@ import { AddTraderDialog } from "@/components/traders/add-trader-dialog";
 import { StatTile } from "@/components/traders/stat-tile";
 import { listTraders, updateTrader } from "@/lib/api";
 import { formatUsd } from "@/lib/format";
+import { useProfile } from "@/lib/profile-context";
 import type { Trader } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 8000;
 
 export default function DashboardPage() {
+  const { currentProfileId } = useProfile();
   const [traders, setTraders] = useState<Trader[]>([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
+    if (!currentProfileId) return;
     try {
-      const { traders } = await listTraders("active");
+      const { traders } = await listTraders(currentProfileId, "active");
       setTraders(traders);
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentProfileId]);
 
   useEffect(() => {
     refresh();
@@ -34,8 +37,9 @@ export default function DashboardPage() {
   }, [refresh]);
 
   async function handleBlacklistToggle(address: string, blacklist: boolean) {
+    if (!currentProfileId) return;
     try {
-      await updateTrader(address, { status: blacklist ? "blacklisted" : "active" });
+      await updateTrader(currentProfileId, address, { status: blacklist ? "blacklisted" : "active" });
       toast.success(blacklist ? "Trader blacklisted" : "Trader unblacklisted");
       await refresh();
     } catch (err) {
@@ -44,8 +48,9 @@ export default function DashboardPage() {
   }
 
   async function handleMuteToggle(address: string, muted: boolean | null) {
+    if (!currentProfileId) return;
     try {
-      await updateTrader(address, { muted });
+      await updateTrader(currentProfileId, address, { muted });
       await refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update notifications");

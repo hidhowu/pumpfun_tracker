@@ -4,6 +4,7 @@ const { Schema, model, models } = mongoose;
 
 /** Audit trail for manual balance top-ups (or deductions) from the dashboard. */
 const BalanceAdjustmentSchema = new Schema({
+  profileId: { type: Schema.Types.ObjectId, required: true, index: true },
   traderAddress: { type: String, required: true, index: true },
   amountUsd: { type: Number, required: true }, // signed
   reason: { type: String, default: "" },

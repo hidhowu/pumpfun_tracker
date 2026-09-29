@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getLeaderboard } from "@/lib/api";
+import { useProfile } from "@/lib/profile-context";
 import { formatAddress, formatUsd } from "@/lib/format";
 import type { LeaderboardEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -52,21 +53,26 @@ function StreakBadge({ streak }: { streak: LeaderboardEntry["streaks"]["currentS
 }
 
 export default function LeaderboardPage() {
+  const { currentProfileId } = useProfile();
   const [period, setPeriod] = useState<Period>("week");
   const [entries, setEntries] = useState<LeaderboardEntry[] | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const refresh = useCallback(async (p: Period) => {
-    setLoading(true);
-    try {
-      const { leaderboard } = await getLeaderboard(p);
-      setEntries(leaderboard);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load leaderboard");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const refresh = useCallback(
+    async (p: Period) => {
+      if (!currentProfileId) return;
+      setLoading(true);
+      try {
+        const { leaderboard } = await getLeaderboard(currentProfileId, p);
+        setEntries(leaderboard);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Failed to load leaderboard");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [currentProfileId]
+  );
 
   useEffect(() => {
     refresh(period);

@@ -18,6 +18,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { adjustBalance } from "@/lib/api";
+import { useProfile } from "@/lib/profile-context";
 import { formatUsd } from "@/lib/format";
 import type { TraderDetail } from "@/lib/types";
 
@@ -27,6 +28,7 @@ type Props = {
 };
 
 export function SimBalanceCard({ trader, onAdjusted }: Props) {
+  const { currentProfileId } = useProfile();
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
@@ -43,6 +45,7 @@ export function SimBalanceCard({ trader, onAdjusted }: Props) {
   const totalNegative = totalPnl < 0;
 
   async function handleSubmit() {
+    if (!currentProfileId) return;
     const amountUsd = Number(amount);
     if (!amountUsd || Number.isNaN(amountUsd)) {
       toast.error("Enter a non-zero amount");
@@ -50,7 +53,7 @@ export function SimBalanceCard({ trader, onAdjusted }: Props) {
     }
     setSubmitting(true);
     try {
-      const { balanceUsd } = await adjustBalance(trader.address, amountUsd, reason.trim() || undefined);
+      const { balanceUsd } = await adjustBalance(currentProfileId, trader.address, amountUsd, reason.trim() || undefined);
       onAdjusted({ ...trader, sim: { ...sim, balanceUsd } });
       toast.success(`Balance ${amountUsd > 0 ? "topped up" : "reduced"} to ${formatUsd(balanceUsd)}`);
       setOpen(false);

@@ -3,6 +3,7 @@ import { Trade } from "./models/Trade.js";
 import { PositionLot } from "./models/PositionLot.js";
 
 const EPSILON = 1e-9;
+const TRADE_PURGE_MS = 48 * 60 * 60 * 1000;
 
 /**
  * Records a trade (from extractPumpTrades) against a trader: stores the
@@ -41,6 +42,9 @@ export async function recordTrade(trade) {
       quoteMint: trade.quoteMint,
       slot: trade.slot,
       blockTime: trade.blockTime,
+      // Assume "not actioned" until evaluateRealTrade proves otherwise -
+      // markTradeActioned() clears this the moment a sim buy/sell is queued.
+      purgeAt: new Date(Date.now() + TRADE_PURGE_MS),
     });
   } catch (err) {
     if (err?.code === 11000) return false; // already recorded this exact leg
@@ -115,6 +119,21 @@ export async function recordTrade(trade) {
 
   await Trader.updateOne({ address: traderAddress }, { $inc: statsInc, $set: { "stats.lastTradeAt": lastTradeAt } });
   return true;
+}
+
+/**
+ * Exempts a real trade from the 48h no-action purge because it actually
+ * queued a simulated buy/sell. Called from the tracker right after
+ * evaluateRealTrade() reports it acted on the trade - cheap best-effort
+ * (not awaited-critical: worst case a trade we acted on still gets purged
+ * on schedule, which would only affect dust-fraction math for that one
+ * mint if a much later sell needs the full history beyond 48h back).
+ */
+export async function markTradeActioned(trade) {
+  await Trade.updateOne(
+    { traderAddress: trade.wallet, signature: trade.signature, mint: trade.mint, type: trade.type },
+    { $set: { purgeAt: null } }
+  );
 }
 
 /**

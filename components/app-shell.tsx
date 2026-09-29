@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Radar, ShieldBan, Settings, Activity, Trophy } from "lucide-react";
+import { Radar, ShieldBan, Settings, Activity, Trophy, ScrollText, Router } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -19,11 +19,14 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
+import { ProfileSwitcher } from "@/components/profile-switcher";
 
 const NAV_ITEMS = [
   { href: "/", label: "Traders", icon: Radar },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
   { href: "/blacklisted", label: "Blacklisted", icon: ShieldBan },
+  { href: "/rpc", label: "RPC", icon: Router },
+  { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -76,7 +79,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/60 px-4">
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-5" />
-          <span className="text-sm text-muted-foreground">Real-time pump.fun trader activity</span>
+          <span className="hidden text-sm text-muted-foreground sm:inline">Real-time pump.fun trader activity</span>
+          <div className="ml-auto">
+            <ProfileSwitcher />
+          </div>
         </header>
         <div className="flex-1 overflow-auto p-4 md:p-6">{children}</div>
       </SidebarInset>

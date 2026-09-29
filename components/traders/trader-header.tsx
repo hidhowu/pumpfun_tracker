@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { updateTrader } from "@/lib/api";
+import { useProfile } from "@/lib/profile-context";
 import { formatRelativeTime } from "@/lib/format";
 import type { TraderDetail } from "@/lib/types";
 
@@ -31,6 +32,7 @@ type Props = {
 };
 
 export function TraderHeader({ trader, onUpdated }: Props) {
+  const { currentProfileId } = useProfile();
   const [copied, setCopied] = useState(false);
   const [editingLabel, setEditingLabel] = useState(false);
   const [editingNotes, setEditingNotes] = useState(false);
@@ -47,9 +49,9 @@ export function TraderHeader({ trader, onUpdated }: Props) {
 
   const saveLabel = async () => {
     setEditingLabel(false);
-    if (labelDraft === trader.label) return;
+    if (labelDraft === trader.label || !currentProfileId) return;
     try {
-      const { trader: updated } = await updateTrader(trader.address, { label: labelDraft });
+      const { trader: updated } = await updateTrader(currentProfileId, trader.address, { label: labelDraft });
       onUpdated(updated);
       toast.success("Label updated");
     } catch (e) {
@@ -60,9 +62,9 @@ export function TraderHeader({ trader, onUpdated }: Props) {
 
   const saveNotes = async () => {
     setEditingNotes(false);
-    if (notesDraft === trader.notes) return;
+    if (notesDraft === trader.notes || !currentProfileId) return;
     try {
-      const { trader: updated } = await updateTrader(trader.address, { notes: notesDraft });
+      const { trader: updated } = await updateTrader(currentProfileId, trader.address, { notes: notesDraft });
       onUpdated(updated);
       toast.success("Notes updated");
     } catch (e) {
@@ -72,8 +74,9 @@ export function TraderHeader({ trader, onUpdated }: Props) {
   };
 
   const setMuted = async (muted: boolean) => {
+    if (!currentProfileId) return;
     try {
-      const { trader: updated } = await updateTrader(trader.address, { muted });
+      const { trader: updated } = await updateTrader(currentProfileId, trader.address, { muted });
       onUpdated(updated);
       toast.success(muted ? "Notifications muted for this trader" : "Notifications unmuted");
     } catch (e) {
@@ -82,9 +85,10 @@ export function TraderHeader({ trader, onUpdated }: Props) {
   };
 
   const blacklist = async () => {
+    if (!currentProfileId) return;
     setBusy(true);
     try {
-      const { trader: updated } = await updateTrader(trader.address, { status: "blacklisted" });
+      const { trader: updated } = await updateTrader(currentProfileId, trader.address, { status: "blacklisted" });
       onUpdated(updated);
       toast.success("Trader blacklisted — tracking stopped");
     } catch (e) {
@@ -95,9 +99,10 @@ export function TraderHeader({ trader, onUpdated }: Props) {
   };
 
   const unblacklist = async () => {
+    if (!currentProfileId) return;
     setBusy(true);
     try {
-      const { trader: updated } = await updateTrader(trader.address, { status: "active" });
+      const { trader: updated } = await updateTrader(currentProfileId, trader.address, { status: "active" });
       onUpdated(updated);
       toast.success("Trader unblacklisted — tracking resumed");
     } catch (e) {

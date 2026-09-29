@@ -6,24 +6,27 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getPositions } from "@/lib/api";
+import { useProfile } from "@/lib/profile-context";
 import { formatAddress, formatRelativeTime, formatTokenAmount, formatUsd } from "@/lib/format";
 import type { SimPosition } from "@/lib/types";
 
 type Props = { address: string; refreshKey?: number };
 
 export function OpenPositionsTable({ address, refreshKey }: Props) {
+  const { currentProfileId } = useProfile();
   const [positions, setPositions] = useState<SimPosition[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
+    if (!currentProfileId) return;
     setLoading(true);
     try {
-      const res = await getPositions(address, "open", 1, 50);
+      const res = await getPositions(currentProfileId, address, "open", 1, 50);
       setPositions(res.positions);
     } finally {
       setLoading(false);
     }
-  }, [address]);
+  }, [currentProfileId, address]);
 
   useEffect(() => {
     load();

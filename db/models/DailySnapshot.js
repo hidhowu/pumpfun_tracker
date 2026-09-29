@@ -9,12 +9,13 @@ const { Schema, model, models } = mongoose;
  * actualized P&L. See db/pnl.js.
  */
 const DailySnapshotSchema = new Schema({
+  profileId: { type: Schema.Types.ObjectId, required: true, index: true },
   traderAddress: { type: String, required: true, index: true },
   date: { type: String, required: true }, // "YYYY-MM-DD", UTC
   portfolioValueUsdAtOpen: { type: Number, required: true },
   createdAt: { type: Date, default: Date.now },
 });
 
-DailySnapshotSchema.index({ traderAddress: 1, date: 1 }, { unique: true });
+DailySnapshotSchema.index({ profileId: 1, traderAddress: 1, date: 1 }, { unique: true });
 
 export const DailySnapshot = models.DailySnapshot || model("DailySnapshot", DailySnapshotSchema);

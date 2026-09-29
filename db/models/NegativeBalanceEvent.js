@@ -12,13 +12,14 @@ const { Schema, model, models } = mongoose;
  * "how deep today").
  */
 const NegativeBalanceEventSchema = new Schema({
+  profileId: { type: Schema.Types.ObjectId, required: true, index: true },
   traderAddress: { type: String, required: true, index: true },
   occurredAt: { type: Date, default: Date.now },
   balanceUsd: { type: Number, required: true }, // the resulting (negative) balance at this moment
   depthUsd: { type: Number, required: true }, // abs(balanceUsd) - how deep, always positive
 });
 
-NegativeBalanceEventSchema.index({ traderAddress: 1, occurredAt: -1 });
+NegativeBalanceEventSchema.index({ profileId: 1, traderAddress: 1, occurredAt: -1 });
 
 export const NegativeBalanceEvent =
   models.NegativeBalanceEvent || model("NegativeBalanceEvent", NegativeBalanceEventSchema);

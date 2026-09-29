@@ -6,14 +6,16 @@ import { resolveTraderDetailView } from "@/lib/traderView";
 
 type Params = { params: Promise<{ address: string }> };
 
-export async function GET(_request: NextRequest, { params }: Params) {
+export async function GET(request: NextRequest, { params }: Params) {
   await connectDb();
   const { address } = await params;
+  const profileId = request.nextUrl.searchParams.get("profileId");
+  if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });
 
   const trader = await Trader.findOne({ address });
   if (!trader) return NextResponse.json({ error: "Trader not found" }, { status: 404 });
 
-  const view = await resolveTraderDetailView(trader);
+  const view = await resolveTraderDetailView(profileId, trader);
   return NextResponse.json({ trader: view });
 }
 
@@ -26,6 +28,8 @@ export async function GET(_request: NextRequest, { params }: Params) {
 export async function PATCH(request: NextRequest, { params }: Params) {
   await connectDb();
   const { address } = await params;
+  const profileId = request.nextUrl.searchParams.get("profileId");
+  if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });
   const body = await request.json().catch(() => ({}));
 
   const existing = await Trader.findOne({ address });
@@ -47,6 +51,6 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   }
 
   const updated = await Trader.findOne({ address });
-  const view = await resolveTraderDetailView(updated!);
+  const view = await resolveTraderDetailView(profileId, updated!);
   return NextResponse.json({ trader: view });
 }

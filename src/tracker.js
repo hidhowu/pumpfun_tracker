@@ -7,7 +7,8 @@ import { extractPumpTrades } from "./extractPumpTrades.js";
 import { config } from "./env.js";
 import { connectDb } from "../db/connect.js";
 import { Trader } from "../db/models/Trader.js";
-import { recordTrade } from "../db/positionLedger.js";
+import { RpcEndpoint } from "../db/models/RpcEndpoint.js";
+import { recordTrade, markTradeActioned } from "../db/positionLedger.js";
 import { addTradersBulk } from "../db/traderService.js";
 import { evaluateRealTrade } from "../db/simulation/engine.js";
 import {
@@ -15,10 +16,17 @@ import {
   checkRiskExits,
 } from "../db/simulation/executor.js";
 import { ensureTodaySnapshotsForAllActiveTraders } from "../db/simulation/snapshot.js";
-import { getGlobalSettings } from "../db/models/GlobalSettings.js";
+import { getSystemSettings } from "../db/models/SystemSettings.js";
+import { logEvent } from "../db/systemLog.js";
+import { SystemCommand } from "../db/models/SystemCommand.js";
+import { ensureRpcEndpointsSeeded, rebalanceAssignments, markSubscribed, markSubscriptionFailed } from "../db/rpcAssignment.js";
 
 function deriveWsFromHttp(rpcUrls) {
   return rpcUrls.map((u) => u.replace(/^http/, "ws"));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -28,11 +36,17 @@ function deriveWsFromHttp(rpcUrls) {
  * db/positionLedger) so any of them can be swapped or reused independently
  * elsewhere in the app.
  *
- * Which addresses get watched is driven by MongoDB (the `Trader` collection
- * with status "active") via startDbSync(), polled on an interval - not by
- * change streams, since those need a replica-set MongoDB and a plain local
- * install is standalone. watch()/unwatch() are still available directly for
- * ad-hoc use without a DB (e.g. the CLI's plain-address mode).
+ * Tracked addresses are spread across however many RPC WebSocket endpoints
+ * are registered in the `RpcEndpoint` collection (managed from the /rpc UI)
+ * - one `LogSubscriber` per active endpoint, each handling only the subset
+ * of addresses assigned to it (see db/rpcAssignment.js for the sticky
+ * load-balancer). This exists specifically because resubscribing ~90
+ * addresses on a single connection blows through a single RPC provider's
+ * requests-per-second limit - splitting across endpoints (ideally different
+ * providers) relieves that. Which addresses get watched, and which endpoint
+ * each lives on, is driven by MongoDB via startDbSync(), polled on an
+ * interval - not by change streams, since those need a replica-set MongoDB
+ * and a plain local install is standalone.
  *
  * Events emitted: "connected", "disconnected", "watching", "unwatched",
  * "failedTx" ({address, signature, err}), "parsed" ({address, parsed}),
@@ -42,15 +56,14 @@ function deriveWsFromHttp(rpcUrls) {
 export class TrackerService extends EventEmitter {
   constructor({
     rpcUrls = config.rpcUrls,
-    wsUrls = config.wsUrls,
     commitment = config.commitment,
   } = {}) {
     super();
     this.rpcPool = new RpcPool(rpcUrls);
-    this.subscriber = new LogSubscriber(
-      wsUrls.length ? wsUrls : deriveWsFromHttp(rpcUrls),
-      { commitment },
-    );
+    this.commitment = commitment;
+    // url -> LogSubscriber, one per active RpcEndpoint - populated/torn down
+    // by syncWatchedFromDb as RpcEndpoint documents are added/removed/toggled.
+    this.subscribers = new Map();
     // Bounded set to dedupe the (rare) case of a duplicate notification for
     // the same signature without growing unbounded over a long-running process.
     this.seenSignatures = new Set();
@@ -60,56 +73,213 @@ export class TrackerService extends EventEmitter {
     this._riskTimer = null;
     this._riskLoopActive = false;
     this._snapshotTimer = null;
-
-    this.subscriber.on("signature", (evt) => this._handleSignature(evt));
-    this.subscriber.on("error", (err) => this.emit("error", err));
-    this.subscriber.on("connected", (url) => this.emit("connected", url));
-    this.subscriber.on("disconnected", (url) => this.emit("disconnected", url));
-    this.subscriber.on("resubscribing", (count) => this.emit("resubscribing", count));
-    this.subscriber.on("watching", (address) => this.emit("watching", address));
-    this.subscriber.on("unwatched", (address) =>
-      this.emit("unwatched", address),
-    );
+    this._commandTimer = null;
+    this._syncInProgress = false;
   }
 
-  async watch(address) {
-    return this.subscriber.watch(address);
+  /** Creates and wires a LogSubscriber dedicated to exactly one RPC endpoint. */
+  _createSubscriber(url) {
+    // A single-element URL array: LogSubscriber's own reconnect logic always
+    // retries `this.wsUrls[this.urlIndex % this.wsUrls.length]`, which with
+    // one element always resolves back to this same URL - it keeps retrying
+    // *this* endpoint forever rather than hopping to a different one, which
+    // is the semantic we want (each RpcEndpoint has its own identity/status).
+    const sub = new LogSubscriber([url], { commitment: this.commitment });
+    this._wireSubscriber(url, sub);
+    this.subscribers.set(url, sub);
+    return sub;
   }
 
-  async unwatch(address) {
-    return this.subscriber.unwatch(address);
+  /** Closes and forgets a subscriber - only call after its addresses have been moved elsewhere. */
+  _teardownSubscriber(url) {
+    const sub = this.subscribers.get(url);
+    if (!sub) return;
+    sub.close(); // sets closedByUser, so its own auto-reconnect loop stops
+    this.subscribers.delete(url);
   }
 
+  _wireSubscriber(url, sub) {
+    sub.on("signature", (evt) => this._handleSignature(evt));
+    sub.on("error", (err) => {
+      this.emit("error", err);
+      logEvent("rpc", `RPC error (${url}): ${err.message || err}`, { level: "error", meta: { url } });
+      RpcEndpoint.updateOne({ url }, { $set: { lastError: err.message || String(err), lastErrorAt: new Date() } }).catch(() => {});
+    });
+    sub.on("connected", () => {
+      this.emit("connected", url);
+      logEvent("rpc", `Connected: ${url}`, { meta: { url } });
+      RpcEndpoint.updateOne({ url }, { $set: { status: "connected", lastConnectedAt: new Date() } }).catch(() => {});
+    });
+    sub.on("disconnected", () => {
+      this.emit("disconnected", url);
+      const retrySeconds = Math.round(sub.reconnectDelayMs / 1000);
+      logEvent("rpc", `Disconnected: ${url} - retrying in ${retrySeconds}s`, {
+        level: "warn",
+        meta: { url, retryInMs: sub.reconnectDelayMs },
+      });
+      RpcEndpoint.updateOne({ url }, { $set: { status: "disconnected", lastDisconnectedAt: new Date() } }).catch(() => {});
+      // Every address assigned to this endpoint was live a moment ago but
+      // isn't anymore - without this, the /rpc page kept showing them as
+      // "subscribed" (green) the whole time the connection was actually
+      // down, since nothing had ever told the DB otherwise. They flip back
+      // to "subscribed" on their own once "watching" fires again after
+      // reconnect (see the "watching" handler below).
+      Trader.updateMany({ assignedRpcUrl: url }, { $set: { subscriptionStatus: "pending" } }).catch((err) => this.emit("error", err));
+    });
+    sub.on("resubscribing", (count) => {
+      this.emit("resubscribing", count);
+      logEvent("rpc", `Reconnected (${url}) - resubscribing to ${count} address(es)`, { meta: { url } });
+    });
+    sub.on("watching", (address) => {
+      this.emit("watching", address);
+      logEvent("tracker", `Watching ${address}`, { meta: { address, url } });
+      // The single source of truth for "this address is actually live" -
+      // covers both an explicit watch() call AND automatic resubscription
+      // after a reconnect (which calls the LogSubscriber directly, not
+      // through TrackerService.watch() below), so a disconnect/reconnect
+      // cycle always correctly flips addresses back to "subscribed" once
+      // they're truly resubscribed, not just the addresses newly assigned
+      // this poll cycle.
+      markSubscribed(address, url).catch((err) => this.emit("error", err));
+    });
+    sub.on("unwatched", (address) => {
+      this.emit("unwatched", address);
+      logEvent("tracker", `Stopped watching ${address}`, { meta: { address, url } });
+    });
+  }
+
+  /**
+   * Watches one address on a specific RPC endpoint's subscriber. Success
+   * marks it "subscribed" via the "watching" event handler above (the
+   * single place that happens, so automatic resubscription after a
+   * reconnect - which bypasses this method - gets the same DB update).
+   */
+  async watch(address, url) {
+    const sub = this.subscribers.get(url);
+    if (!sub) throw new Error(`No active subscriber for RPC endpoint ${url}`);
+    try {
+      await sub.watch(address);
+    } catch (err) {
+      await markSubscriptionFailed(address).catch(() => {});
+      throw err;
+    }
+  }
+
+  /** Stops watching one address on a specific endpoint's subscriber. No-op if that endpoint no longer exists. */
+  async unwatch(address, url) {
+    const sub = this.subscribers.get(url);
+    if (!sub) return;
+    await sub.unwatch(address);
+  }
+
+  /** All addresses currently watched, across every active endpoint. */
   watchedAddresses() {
-    return this.subscriber.watchedAddresses();
+    const all = [];
+    for (const sub of this.subscribers.values()) all.push(...sub.watchedAddresses());
+    return all;
   }
 
-  /** One pass: make the watched set match Trader{status:"active"} in Mongo. */
+  /**
+   * Force-reconnects one RPC endpoint's WebSocket (triggering its normal
+   * auto-reconnect + resubscribe flow), or every endpoint if no url is given.
+   */
+  reconnect(url) {
+    if (url) {
+      const sub = this.subscribers.get(url);
+      if (!sub) throw new Error(`No active subscriber for RPC endpoint ${url}`);
+      logEvent("rpc", `Manual reconnect requested: ${url}`, { meta: { url } });
+      sub.forceReconnect();
+      return;
+    }
+    logEvent("rpc", "Manual reconnect requested (all endpoints)");
+    for (const sub of this.subscribers.values()) sub.forceReconnect();
+  }
+
+  /**
+   * One pass: make the RpcEndpoint pool, the address-to-endpoint assignment,
+   * and the live watched set all match what's in MongoDB. Guarded against
+   * overlapping runs - with enough tracked addresses, one pass (200ms
+   * stagger per new watch()) can take longer than the poll interval, and a
+   * second pass starting before the first finishes could queue a second
+   * concurrent watch() for an address still mid-assignment, double-
+   * subscribing it (every real signature notification then arrives twice,
+   * multiplying parse/RPC load and burning through RPS limits for no
+   * reason - this exact bug was hit and fixed once already this session).
+   */
   async syncWatchedFromDb() {
-    await connectDb();
-    const traders = await Trader.find(
-      { status: "active" },
-      { address: 1 },
-    ).lean();
-    const desired = new Set(traders.map((t) => t.address));
-    const current = new Set(this.watchedAddresses());
-
-    for (const address of desired) {
-      if (!current.has(address)) {
-        await this.watch(address).catch((err) => this.emit("error", err));
-        // Small stagger so subscribing to many new addresses at once (e.g.
-        // a bulk add) doesn't burst past a provider's requests-per-second cap.
-        await new Promise((resolve) => setTimeout(resolve, 200));
-      }
-    }
-    for (const address of current) {
-      if (!desired.has(address)) {
-        await this.unwatch(address).catch((err) => this.emit("error", err));
-      }
+    if (this._syncInProgress) return;
+    this._syncInProgress = true;
+    try {
+      await this._doSyncWatchedFromDb();
+    } finally {
+      this._syncInProgress = false;
     }
   }
 
-  /** Starts polling Mongo for trader add/blacklist/unblacklist changes. */
+  async _doSyncWatchedFromDb() {
+    await connectDb();
+
+    // 1. Make the live subscriber pool match RpcEndpoint (enabled ones only get a connection).
+    const endpoints = await RpcEndpoint.find({}, { url: 1, enabled: 1 }).lean();
+    const activeEndpointUrls = new Set(endpoints.filter((e) => e.enabled).map((e) => e.url));
+    for (const ep of endpoints) {
+      if (ep.enabled && !this.subscribers.has(ep.url)) this._createSubscriber(ep.url);
+    }
+
+    // 2. Sticky rebalance: persists assignedRpcUrl for every active trader
+    // against the currently-active endpoints, touching only what changed.
+    await rebalanceAssignments();
+
+    // 3. Reconcile live watch state against the (now up to date) assignment.
+    const traders = await Trader.find({ status: "active" }, { address: 1, assignedRpcUrl: 1 }).lean();
+    const desiredAddresses = new Set(traders.map((t) => t.address));
+
+    for (const trader of traders) {
+      const targetUrl = trader.assignedRpcUrl;
+      if (!targetUrl || !this.subscribers.has(targetUrl)) continue; // unresolved - no active endpoint to place it on
+      const targetSub = this.subscribers.get(targetUrl);
+      if (targetSub.watchedAddresses().includes(trader.address)) continue; // already correctly placed
+
+      await this.watch(trader.address, targetUrl).catch((err) => this.emit("error", err));
+      await sleep(200); // stagger so a burst of new/moved addresses doesn't spike RPS
+
+      // If it's still live on a different endpoint (a move, or a leftover
+      // inconsistency from a crash mid-move), clean that up too.
+      for (const [url, sub] of this.subscribers) {
+        if (url === targetUrl || !sub.watchedAddresses().includes(trader.address)) continue;
+        if (sub.ws && sub.ws.readyState === WebSocket.OPEN) {
+          await this.unwatch(trader.address, url).catch((err) => this.emit("error", err));
+        } else {
+          // That endpoint is currently disconnected (most likely why this
+          // address got moved off it in the first place - see
+          // db/rpcAssignment.js's stuck-endpoint exclusion). Sending
+          // logsUnsubscribe would just queue behind its reconnect, and if
+          // left tracked there it would get resubscribed to on the SAME
+          // endpoint it just moved away from once that finally reconnects -
+          // double-subscribed, once on each. Nothing to actually unsubscribe
+          // server-side anyway (the old socket already died) - just forget it locally.
+          sub.forget(trader.address);
+        }
+      }
+    }
+
+    // 4. Unwatch anything no longer desired (blacklisted/removed trader), wherever it currently lives.
+    for (const [url, sub] of this.subscribers) {
+      for (const address of sub.watchedAddresses()) {
+        if (!desiredAddresses.has(address)) {
+          await this.unwatch(address, url).catch((err) => this.emit("error", err));
+        }
+      }
+    }
+
+    // 5. Tear down subscribers for endpoints that are gone/disabled - their
+    // addresses were already relocated in step 3.
+    for (const url of [...this.subscribers.keys()]) {
+      if (!activeEndpointUrls.has(url)) this._teardownSubscriber(url);
+    }
+  }
+
+  /** Starts polling Mongo for trader/RPC-endpoint changes. */
   startDbSync(intervalMs = 15000) {
     this.syncWatchedFromDb().catch((err) => this.emit("error", err));
     this._dbSyncTimer = setInterval(() => {
@@ -121,6 +291,46 @@ export class TrackerService extends EventEmitter {
     if (this._dbSyncTimer) {
       clearInterval(this._dbSyncTimer);
       this._dbSyncTimer = null;
+    }
+  }
+
+  /**
+   * Polls SystemCommand for a manual "reconnect" request queued from the UI
+   * (the web app and this daemon are separate Node processes with no direct
+   * channel, so Mongo is the handoff). Claims each due command atomically
+   * (pending -> processing) before acting, same pattern as PendingExecution.
+   */
+  async _pollCommands() {
+    const claimed = await SystemCommand.findOneAndUpdate(
+      { type: "reconnect_rpc", status: "pending" },
+      { $set: { status: "processing" } },
+      { returnDocument: "after" }
+    ).catch((err) => {
+      this.emit("error", err);
+      return null;
+    });
+    if (!claimed) return;
+    try {
+      this.reconnect(claimed.targetUrl || null);
+      await SystemCommand.updateOne({ _id: claimed._id }, { $set: { status: "done", completedAt: new Date() } });
+    } catch (err) {
+      await SystemCommand.updateOne(
+        { _id: claimed._id },
+        { $set: { status: "failed", completedAt: new Date(), error: err.message || String(err) } }
+      );
+    }
+  }
+
+  startCommandPolling(intervalMs = 5000) {
+    this._commandTimer = setInterval(() => {
+      this._pollCommands().catch((err) => this.emit("error", err));
+    }, intervalMs);
+  }
+
+  stopCommandPolling() {
+    if (this._commandTimer) {
+      clearInterval(this._commandTimer);
+      this._commandTimer = null;
     }
   }
 
@@ -147,9 +357,11 @@ export class TrackerService extends EventEmitter {
 
   /**
    * Self-rescheduling (not setInterval) specifically so the interval can be
-   * changed live from Settings (GlobalSettings.riskCheckIntervalSeconds) -
-   * each cycle re-reads it before scheduling the next one, so a change
-   * takes effect on the very next tick, no daemon restart needed.
+   * changed live from Settings (SystemSettings.riskCheckIntervalSeconds - a
+   * system-wide cadence, not per-profile, since one sweep covers every open
+   * position across every profile) - each cycle re-reads it before
+   * scheduling the next one, so a change takes effect on the very next
+   * tick, no daemon restart needed.
    */
   async _runRiskCheckLoop() {
     if (!this._riskLoopActive) return;
@@ -163,7 +375,7 @@ export class TrackerService extends EventEmitter {
 
     let intervalSeconds = 20;
     try {
-      const settings = await getGlobalSettings();
+      const settings = await getSystemSettings();
       intervalSeconds = Math.max(5, settings.riskCheckIntervalSeconds || 20);
     } catch (err) {
       this.emit("error", err);
@@ -184,6 +396,13 @@ export class TrackerService extends EventEmitter {
 
   async _handleSignature({ address, signature, err }) {
     if (err) {
+      // NOT persisted to SystemLog: on a wallet list this size, on-chain tx
+      // failures (bad slippage, front-run, etc.) happen at a volume that
+      // would drown out anything actually useful in the Logs UI and blow
+      // through Mongo write throughput between the TTL sweeps that are
+      // supposed to bound it - this is chain noise, not a tracking/RPC
+      // health signal. Still emitted for the console/PM2 log if anyone
+      // wants that level of detail.
       this.emit("failedTx", { address, signature, err });
       return;
     }
@@ -200,21 +419,31 @@ export class TrackerService extends EventEmitter {
       for (const trade of trades) {
         try {
           const isNew = await recordTrade(trade);
-          if (isNew) await evaluateRealTrade(trade);
+          if (isNew) {
+            const actioned = await evaluateRealTrade(trade);
+            if (actioned) await markTradeActioned(trade);
+          }
         } catch (dbErr) {
           this.emit("dbError", { address, signature, error: dbErr });
+          logEvent("tracker", `Failed to persist trade for ${signature}: ${dbErr.message}`, {
+            level: "error",
+            meta: { address, signature },
+          });
         }
         this.emit("trade", trade);
       }
     } catch (error) {
       this.emit("parseError", { address, signature, error });
+      logEvent("tracker", `Failed to parse ${signature}: ${error.message}`, { level: "error", meta: { address, signature } });
     }
   }
 
   close() {
     this.stopDbSync();
     this.stopSimulationLoops();
-    this.subscriber.close();
+    this.stopCommandPolling();
+    for (const sub of this.subscribers.values()) sub.close();
+    this.subscribers.clear();
   }
 }
 
@@ -231,6 +460,12 @@ async function runCli() {
     if (invalid.length)
       console.error(`[tracker] not valid Solana addresses, ignored: ${invalid.join(", ")}`);
   }
+
+  // One-time: seed RpcEndpoint from .env if nothing's been configured via
+  // the /rpc UI yet. After this, .env's SOLANA_WS_URLS is never consulted
+  // again - endpoints are added/removed from the UI from here on.
+  const seedWsUrls = config.wsUrls.length ? config.wsUrls : deriveWsFromHttp(config.rpcUrls);
+  await ensureRpcEndpointsSeeded(seedWsUrls);
 
   const tracker = new TrackerService();
   tracker.on("connected", (url) => console.log(`[tracker] connected: ${url}`));
@@ -273,10 +508,11 @@ async function runCli() {
   });
 
   console.log(
-    "[tracker] watch list is driven by MongoDB (Trader collection, status=active), polled every 15s.",
+    "[tracker] watch list is driven by MongoDB (Trader + RpcEndpoint collections), polled every 15s.",
   );
   tracker.startDbSync(15000);
   tracker.startSimulationLoops();
+  tracker.startCommandPolling();
 }
 
 if (fileURLToPath(import.meta.url) === process.argv[1]) {

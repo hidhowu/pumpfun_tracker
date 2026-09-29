@@ -22,7 +22,16 @@ export type SimStats = {
   lastActionAt: string | null; // when the sim wallet last opened/closed a position - NOT the tracked wallet's own on-chain activity
 };
 
+/** One trailing-stop rule: arms once unrealized gain first reaches armPercent, auto-sells if it later falls to exitPercent. */
+export type TrailingStop = {
+  _id: string;
+  armPercent: number;
+  exitPercent: number;
+};
+
 // Per-trader simulation setting overrides - null means "inherit the global default".
+// trailingStops is the exception: null = inherit the global list, an array
+// (including []) is a whole-list override for this trader.
 export type TraderSimSettings = {
   allocationUsd: number | null;
   tradeSizeUsd: number | null;
@@ -30,7 +39,8 @@ export type TraderSimSettings = {
   dustSellFractionPercent: number | null;
   stopLossPercent: number | null;
   takeProfitPercent: number | null;
-  benchCapPercent: number | null;
+  maxTradeTimeSeconds: number | null; // null = inherit; 0 (inherited or set) = disabled/infinite
+  trailingStops: TrailingStop[] | null;
   allowNegativeBalance: boolean | null;
   executionDelaySeconds: number | null;
   feeUsd: number | null;
@@ -44,7 +54,8 @@ export type EffectiveSettings = {
   dustSellFractionPercent: number;
   stopLossPercent: number | null; // null = disabled
   takeProfitPercent: number | null; // null = disabled
-  benchCapPercent: number | null; // null = disabled
+  maxTradeTimeSeconds: number; // 0 = disabled/infinite
+  trailingStops: TrailingStop[];
   allowNegativeBalance: boolean;
   executionDelaySeconds: number;
   feeUsd: number;
@@ -100,7 +111,8 @@ export type SimPosition = {
   buyPriceUsd: number;
   openedAt: string;
   openTriggerSignature: string;
-  benchArmed: boolean;
+  // _id strings of whichever configured trailing-stop rules have armed for this position - see db/simulation/executor.js.
+  armedTrailingStopIds: string[];
   // Peak reached at any point while open (sampled on the risk-check interval, plus the closing price itself).
   // Nullable in the type even though the schema requires it on new writes:
   // documents created before this field existed can still be missing it
@@ -110,7 +122,8 @@ export type SimPosition = {
   maxUnrealizedPnlUsd: number | null;
   maxUnrealizedPnlPercent: number | null;
   closedAt: string | null;
-  closeReason: "trader_sell" | "stop_loss" | "take_profit" | "bench" | null;
+  // "bench" only appears on positions closed before the trailingStops rule list replaced the single bench-cap.
+  closeReason: "trader_sell" | "stop_loss" | "take_profit" | "bench" | "trailing_stop" | "max_hold_time" | null;
   closeTriggerSignature: string | null;
   sellPriceUsd: number | null;
   proceedsUsd: number | null;
@@ -184,9 +197,10 @@ export type Trade = {
   recordedAt: string;
 };
 
+/** Merged view of two backend collections: GlobalSettings (per-profile strategy defaults) + SystemSettings (defaultMuted/riskCheckIntervalSeconds, shared across every profile). See app/api/settings/route.ts. */
 export type GlobalSettings = {
   _id: string;
-  key: string;
+  profileId: string;
   defaultMuted: boolean;
   defaultAllocationUsd: number;
   defaultTradeSizeUsd: number;
@@ -194,12 +208,54 @@ export type GlobalSettings = {
   defaultDustSellFractionPercent: number;
   defaultStopLossPercent: number | null;
   defaultTakeProfitPercent: number | null;
-  defaultBenchCapPercent: number | null;
+  defaultMaxTradeTimeSeconds: number; // 0 = disabled/infinite
+  defaultTrailingStops: TrailingStop[];
   defaultAllowNegativeBalance: boolean;
   defaultExecutionDelaySeconds: number;
   defaultFeeUsd: number;
-  // System-wide, not a per-trader override - how often stop-loss/take-profit/bench are re-checked.
+  // System-wide, not a per-trader override - how often stop-loss/take-profit/trailing-stops are re-checked.
   riskCheckIntervalSeconds: number;
+};
+
+/** Operational log entry for the Logs UI section - see db/systemLog.js. Auto-expires after 24h. */
+export type SystemLogEntry = {
+  _id: string;
+  category: "rpc" | "tracker" | "trade";
+  level: "info" | "warn" | "error";
+  message: string;
+  meta: Record<string, unknown> | null;
+  createdAt: string;
+};
+
+/** A WebSocket RPC endpoint traders are distributed across - see /rpc and db/rpcAssignment.js. */
+export type RpcEndpointView = {
+  _id: string;
+  url: string;
+  label: string;
+  enabled: boolean;
+  status: "connected" | "disconnected" | "connecting";
+  lastConnectedAt: string | null;
+  lastDisconnectedAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  createdAt: string;
+  addressCount: number;
+};
+
+export type RpcEndpointAddress = {
+  address: string;
+  label: string;
+  subscriptionStatus: "pending" | "subscribed" | "failed";
+  // Present on the cross-endpoint "unresolved addresses" list (GET /api/rpc); omitted on a single endpoint's own address list, where it's implicit.
+  assignedRpcUrl?: string | null;
+};
+
+/** An independent copy-trading strategy - see db/models/Profile.js. */
+export type Profile = {
+  _id: string;
+  name: string;
+  isDefault: boolean;
+  createdAt: string;
 };
 
 export type LeaderboardEntry = {

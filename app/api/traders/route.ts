@@ -7,10 +7,12 @@ import { resolveTraderViews } from "@/lib/traderView";
 export async function GET(request: NextRequest) {
   await connectDb();
   const status = request.nextUrl.searchParams.get("status"); // "active" | "blacklisted" | null (all)
+  const profileId = request.nextUrl.searchParams.get("profileId");
+  if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });
 
   const query = status ? { status } : {};
   const traders = await Trader.find(query).sort({ addedAt: -1 }).lean();
-  const views = await resolveTraderViews(traders);
+  const views = await resolveTraderViews(profileId, traders);
 
   return NextResponse.json({ traders: views });
 }

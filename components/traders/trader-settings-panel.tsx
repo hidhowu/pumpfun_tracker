@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Coins, RefreshCw, RotateCcw, ShieldAlert, SlidersHorizontal, Timer, Wallet } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,7 +22,9 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { resetTrader, updateTraderSettings } from "@/lib/api";
-import type { EffectiveSettings, TraderDetail, TraderSimSettings } from "@/lib/types";
+import { useProfile } from "@/lib/profile-context";
+import type { EffectiveSettings, TraderDetail, TraderSimSettings, TrailingStop } from "@/lib/types";
+import { TrailingStopsEditor } from "@/components/trailing-stops-editor";
 
 type Props = {
   address: string;
@@ -126,12 +128,67 @@ function OverrideField({
   );
 }
 
+function TrailingStopsOverride({
+  override,
+  effective,
+  onSave,
+  onClear,
+}: {
+  override: TrailingStop[] | null;
+  effective: TrailingStop[];
+  onSave: (rules: TrailingStop[]) => void;
+  onClear: () => void;
+}) {
+  const isOverridden = override !== null;
+  const [draft, setDraft] = useState<TrailingStop[]>(override ?? effective);
+
+  useEffect(() => {
+    setDraft(override ?? effective);
+  }, [override, effective]);
+
+  const dirty = isOverridden && JSON.stringify(draft) !== JSON.stringify(override);
+
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+      <div className="flex items-center justify-between">
+        <div className="flex flex-col">
+          <span className="text-sm font-medium">Trailing stops</span>
+          <span className="text-xs text-muted-foreground">
+            {isOverridden
+              ? "Overridden for this trader"
+              : `Inherited from global default (${effective.length} rule${effective.length === 1 ? "" : "s"})`}
+          </span>
+        </div>
+        <Switch
+          checked={isOverridden}
+          onCheckedChange={(checked) => {
+            if (checked) {
+              setDraft(effective);
+              onSave(effective); // starts the override as a copy of the current effective list
+            } else {
+              onClear();
+            }
+          }}
+        />
+      </div>
+      <TrailingStopsEditor value={draft} onChange={setDraft} disabled={!isOverridden} />
+      {isOverridden && dirty && (
+        <Button size="sm" className="w-fit" onClick={() => onSave(draft)}>
+          Save rules
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export function TraderSettingsPanel({ address, settings, effectiveSettings, onUpdated, onReset }: Props) {
+  const { currentProfileId } = useProfile();
   const [resetting, setResetting] = useState(false);
 
   async function save(patch: Partial<TraderSimSettings>) {
+    if (!currentProfileId) return;
     try {
-      const result = await updateTraderSettings(address, patch);
+      const result = await updateTraderSettings(currentProfileId, address, patch);
       onUpdated(result);
       toast.success("Trader setting updated");
     } catch (e) {
@@ -140,9 +197,10 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
   }
 
   async function handleReset() {
+    if (!currentProfileId) return;
     setResetting(true);
     try {
-      const { trader } = await resetTrader(address);
+      const { trader } = await resetTrader(currentProfileId, address);
       onReset?.(trader);
       toast.success("Simulation reset - balance back to starting allocation");
     } catch (e) {
@@ -154,7 +212,6 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
 
   const stopLossOverridden = settings.stopLossPercent !== null;
   const takeProfitOverridden = settings.takeProfitPercent !== null;
-  const benchCapOverridden = settings.benchCapPercent !== null;
   const negBalanceOverridden = settings.allowNegativeBalance !== null;
 
   return (
@@ -305,37 +362,25 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
               </div>
             </div>
 
-            <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-              <div className="flex flex-col">
-                <span className="text-sm font-medium">Bench-cap (trail to breakeven)</span>
-                <span className="text-xs text-muted-foreground">
-                  {benchCapOverridden
-                    ? `Overridden for this trader: arms at ${settings.benchCapPercent}% gain`
-                    : effectiveSettings.benchCapPercent !== null
-                      ? `Inherited from global default: arms at ${effectiveSettings.benchCapPercent}% gain`
-                      : "Inherited from global default: disabled"}
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                {benchCapOverridden && (
-                  <Input
-                    type="number"
-                    step={5}
-                    min={1}
-                    className="h-8 w-20"
-                    defaultValue={settings.benchCapPercent ?? undefined}
-                    onBlur={(e) => {
-                      const num = Number(e.target.value);
-                      if (Number.isFinite(num)) save({ benchCapPercent: num });
-                    }}
-                  />
-                )}
-                <Switch
-                  checked={benchCapOverridden}
-                  onCheckedChange={(checked) => save({ benchCapPercent: checked ? effectiveSettings.benchCapPercent ?? 30 : null })}
-                />
-              </div>
-            </div>
+            <OverrideField
+              id="ov-maxTradeTime"
+              label="Max trade time"
+              suffix="min"
+              step={5}
+              min={0}
+              override={settings.maxTradeTimeSeconds !== null ? settings.maxTradeTimeSeconds / 60 : null}
+              effective={effectiveSettings.maxTradeTimeSeconds / 60}
+              onSave={(v) => save({ maxTradeTimeSeconds: Math.max(0, v) * 60 })}
+              onClear={() => save({ maxTradeTimeSeconds: null })}
+              description="0 = no limit. e.g. 30 force-sells after 30 minutes if the trader still hasn't sold."
+            />
+
+            <TrailingStopsOverride
+              override={settings.trailingStops}
+              effective={effectiveSettings.trailingStops}
+              onSave={(rules) => save({ trailingStops: rules })}
+              onClear={() => save({ trailingStops: null })}
+            />
 
             <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
               <div className="flex flex-col">

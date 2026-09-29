@@ -7,6 +7,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getPnl } from "@/lib/api";
+import { useProfile } from "@/lib/profile-context";
 import { formatUsd } from "@/lib/format";
 import type { PnlBreakdown as PnlBreakdownType } from "@/lib/types";
 
@@ -14,19 +15,21 @@ type Props = { address: string };
 type Period = "day" | "week" | "month";
 
 export function PnlBreakdown({ address }: Props) {
+  const { currentProfileId } = useProfile();
   const [period, setPeriod] = useState<Period>("week");
   const [data, setData] = useState<PnlBreakdownType | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async (p: Period) => {
+    if (!currentProfileId) return;
     setLoading(true);
     try {
-      const res = await getPnl(address, p);
+      const res = await getPnl(currentProfileId, address, p);
       setData(res);
     } finally {
       setLoading(false);
     }
-  }, [address]);
+  }, [currentProfileId, address]);
 
   useEffect(() => {
     load(period);

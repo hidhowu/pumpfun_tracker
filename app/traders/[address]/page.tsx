@@ -14,6 +14,7 @@ import { TradeHistoryList } from "@/components/traders/trade-history-list";
 import { PnlBreakdown } from "@/components/traders/pnl-breakdown";
 import { TraderSettingsPanel } from "@/components/traders/trader-settings-panel";
 import { getTrader } from "@/lib/api";
+import { useProfile } from "@/lib/profile-context";
 import type { TraderDetail } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 10_000;
@@ -21,14 +22,16 @@ const POLL_INTERVAL_MS = 10_000;
 export default function TraderDetailPage() {
   const params = useParams<{ address: string }>();
   const address = params.address;
+  const { currentProfileId } = useProfile();
 
   const [trader, setTrader] = useState<TraderDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!currentProfileId) return;
     try {
-      const { trader } = await getTrader(address);
+      const { trader } = await getTrader(currentProfileId, address);
       setTrader(trader);
       setError(null);
     } catch (e) {
@@ -36,7 +39,7 @@ export default function TraderDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [address]);
+  }, [address, currentProfileId]);
 
   useEffect(() => {
     refresh();

@@ -4,24 +4,27 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { TraderTable } from "@/components/traders/trader-table";
 import { listTraders, updateTrader } from "@/lib/api";
+import { useProfile } from "@/lib/profile-context";
 import type { Trader } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 15000;
 
 export default function BlacklistedPage() {
+  const { currentProfileId } = useProfile();
   const [traders, setTraders] = useState<Trader[]>([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
+    if (!currentProfileId) return;
     try {
-      const { traders } = await listTraders("blacklisted");
+      const { traders } = await listTraders(currentProfileId, "blacklisted");
       setTraders(traders);
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentProfileId]);
 
   useEffect(() => {
     refresh();
@@ -30,8 +33,9 @@ export default function BlacklistedPage() {
   }, [refresh]);
 
   async function handleBlacklistToggle(address: string, blacklist: boolean) {
+    if (!currentProfileId) return;
     try {
-      await updateTrader(address, { status: blacklist ? "blacklisted" : "active" });
+      await updateTrader(currentProfileId, address, { status: blacklist ? "blacklisted" : "active" });
       toast.success(blacklist ? "Trader blacklisted" : "Trader unblacklisted - tracking resumes");
       await refresh();
     } catch (err) {
@@ -40,8 +44,9 @@ export default function BlacklistedPage() {
   }
 
   async function handleMuteToggle(address: string, muted: boolean | null) {
+    if (!currentProfileId) return;
     try {
-      await updateTrader(address, { muted });
+      await updateTrader(currentProfileId, address, { muted });
       await refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update notifications");
