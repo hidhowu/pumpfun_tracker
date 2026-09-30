@@ -36,7 +36,7 @@ import { extractProgramDataEvents } from "../src/logStack.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const WS_URL =
-  "wss://mainnet.solana.validationcloud.io/v1/rTq0Q78kqSI1X4Fft7bhHk1kLZWk9945yGPpy1OGQWg"; //"wss://api.mainnet-beta.solana.com";
+  "wss://solana-mainnet.core.chainstack.com/93da075b31e6a3070e2cfea22fb8b971"; //"wss://mainnet.solana.validationcloud.io/v1/rTq0Q78kqSI1X4Fft7bhHk1kLZWk9945yGPpy1OGQWg"; //"wss://api.mainnet-beta.solana.com";
 const COMMITMENT = process.env.TEST_COMMITMENT || "processed";
 const TARGET_COUNT = Number(process.env.TEST_TARGET_COUNT || 1000);
 const SUBSCRIBE_STAGGER_MS = 250; // spread out logsSubscribe calls so the endpoint's rate limit isn't tripped on connect
