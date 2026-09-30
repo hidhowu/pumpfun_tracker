@@ -59,6 +59,43 @@ export async function removeTradersFromWallet(walletId, addresses) {
   return result.deletedCount || 0;
 }
 
+/**
+ * Full simulation reset for one wallet: wipes every open/closed position,
+ * pending execution, and daily snapshot, resets the wallet's own balance/P&L
+ * back to its starting balance, and resets every assigned trader's per-wallet
+ * stats (everBoughtMints/position counts/realizedPnlUsd/lastActionAt) back to
+ * zero - as if this wallet had just been created fresh. Deliberately does
+ * NOT touch `settings` (the wallet's trade-size/fee/stop-loss/etc config) or
+ * the WalletTrader rows themselves (the trader assignments stay exactly as
+ * they were) - only trade history and the numbers derived from it are wiped.
+ */
+export async function resetWallet(id) {
+  await Promise.all([
+    WalletPosition.deleteMany({ walletId: id }),
+    WalletPendingExecution.deleteMany({ walletId: id }),
+    WalletDailySnapshot.deleteMany({ walletId: id }),
+    WalletTrader.updateMany(
+      { walletId: id },
+      { $set: { everBoughtMints: [], openPositionCount: 0, closedPositionCount: 0, realizedPnlUsd: 0, lastActionAt: null } }
+    ),
+  ]);
+
+  const wallet = await Wallet.findById(id);
+  if (!wallet) return null;
+  return Wallet.findOneAndUpdate(
+    { _id: id },
+    {
+      $set: {
+        balanceUsd: wallet.startingBalanceUsd,
+        realizedPnlUsd: 0,
+        openPositionCount: 0,
+        closedPositionCount: 0,
+      },
+    },
+    { returnDocument: "after" }
+  );
+}
+
 /** Every wallet, lightweight summary for the /wallets list page. */
 export async function listWallets() {
   const [wallets, traderCounts] = await Promise.all([

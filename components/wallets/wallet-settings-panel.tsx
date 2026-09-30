@@ -2,21 +2,33 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Coins, ShieldAlert, SlidersHorizontal, Timer, Wallet as WalletIcon } from "lucide-react";
+import { Coins, Loader2, RefreshCw, ShieldAlert, SlidersHorizontal, Timer, TriangleAlert, Wallet as WalletIcon } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { TrailingStopsEditor } from "@/components/trailing-stops-editor";
-import { updateWalletSettings } from "@/lib/api";
-import type { TrailingStop, WalletSettings } from "@/lib/types";
+import { resetWallet, updateWalletSettings } from "@/lib/api";
+import type { TrailingStop, WalletSettings, WalletView } from "@/lib/types";
 
 type Props = {
   walletId: string;
   settings: WalletSettings;
   onUpdated: (settings: WalletSettings) => void;
+  onReset?: (wallet: WalletView) => void;
 };
 
 function NumberField({
@@ -125,7 +137,9 @@ function TrailingStopsSection({ trailingStops, onSave }: { trailingStops: Traili
  * settings object (independent of every Profile/trader), so every field is
  * a direct value that saves immediately.
  */
-export function WalletSettingsPanel({ walletId, settings, onUpdated }: Props) {
+export function WalletSettingsPanel({ walletId, settings, onUpdated, onReset }: Props) {
+  const [resetting, setResetting] = useState(false);
+
   async function save(patch: Partial<WalletSettings>) {
     try {
       const { wallet } = await updateWalletSettings(walletId, patch);
@@ -136,21 +150,35 @@ export function WalletSettingsPanel({ walletId, settings, onUpdated }: Props) {
     }
   }
 
+  async function handleReset() {
+    setResetting(true);
+    try {
+      const { wallet } = await resetWallet(walletId);
+      onReset?.(wallet);
+      toast.success("Wallet reset - balance back to starting balance, trade history cleared");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to reset wallet");
+    } finally {
+      setResetting(false);
+    }
+  }
+
   const hasStopLoss = settings.stopLossPercent !== null;
   const hasTakeProfit = settings.takeProfitPercent !== null;
 
   return (
-    <Card className="border-border/60">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <SlidersHorizontal className="size-4 text-primary" /> Wallet settings
-        </CardTitle>
-        <CardDescription>
-          Independent of any Profile or individual trader - these apply to every trade this wallet takes, using its
-          own balance.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
+      <Card className="border-border/60">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <SlidersHorizontal className="size-4 text-primary" /> Wallet settings
+          </CardTitle>
+          <CardDescription>
+            Independent of any Profile or individual trader - these apply to every trade this wallet takes, using its
+            own balance.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
         <div>
           <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <WalletIcon className="size-3.5" /> TRADE SIZE &amp; FEE
@@ -300,5 +328,53 @@ export function WalletSettingsPanel({ walletId, settings, onUpdated }: Props) {
         </div>
       </CardContent>
     </Card>
+
+    <Card className="border-negative/30">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base text-negative">
+          <TriangleAlert className="size-4" /> Danger zone
+        </CardTitle>
+        <CardDescription>Irreversible actions affecting this wallet&apos;s own simulation only.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-negative/30 bg-negative/5 px-4 py-3">
+          <div className="flex min-w-0 flex-col">
+            <span className="text-sm font-medium">Reset wallet</span>
+            <span className="text-xs text-muted-foreground">
+              Wipes every position and trade history, and resets balance back to the starting balance. Settings and
+              assigned traders are untouched - only their per-wallet stats reset to zero alongside the trade history.
+            </span>
+          </div>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="destructive" size="sm" disabled={resetting} className="gap-1.5">
+                {resetting ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+                Reset
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Reset this wallet&apos;s simulation?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This wipes every position and trade history back to a fresh starting balance. Settings and assigned
+                  traders stay exactly as they are - only trade history and the stats derived from it are cleared.
+                  This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-negative text-negative-foreground hover:bg-negative/90"
+                  onClick={handleReset}
+                >
+                  Reset wallet
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      </CardContent>
+    </Card>
+    </div>
   );
 }

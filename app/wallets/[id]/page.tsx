@@ -190,6 +190,7 @@ export default function WalletDetailPage() {
                 walletId={wallet._id}
                 settings={wallet.settings}
                 onUpdated={(settings) => setWallet((prev) => (prev ? { ...prev, settings } : prev))}
+                onReset={(updated) => setWallet(updated)}
               />
             </TabsContent>
           </Tabs>

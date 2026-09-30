@@ -297,6 +297,11 @@ export function deleteWallet(id: string): Promise<{ deleted: true }> {
   return request(`/api/wallets/${id}`, { method: "DELETE" });
 }
 
+/** Wipes this wallet's trade history (positions, pending fills, daily snapshots) and every assigned trader's per-wallet stats, resetting balance back to the wallet's starting balance. Preserves settings and trader assignments. */
+export function resetWallet(id: string): Promise<{ wallet: WalletView }> {
+  return request(`/api/wallets/${id}/reset`, { method: "POST" });
+}
+
 export function getWalletTraders(
   id: string,
   period: "day" | "week" | "month" = "day"
