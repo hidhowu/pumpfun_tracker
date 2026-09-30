@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Radar, ShieldBan, Settings, Activity, Trophy, ScrollText, Router, Shuffle } from "lucide-react";
+import { Radar, ShieldBan, Settings, Activity, Trophy, ScrollText, Router, Shuffle, Wallet } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -24,6 +24,7 @@ import { OpenTradesBanner } from "@/components/open-trades-banner";
 
 const NAV_ITEMS = [
   { href: "/", label: "Traders", icon: Radar },
+  { href: "/wallets", label: "Wallets", icon: Wallet },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
   { href: "/blacklisted", label: "Blacklisted", icon: ShieldBan },
   { href: "/rpc", label: "RPC", icon: Router },

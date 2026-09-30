@@ -70,6 +70,7 @@ export default function BlacklistedPage() {
         loading={loading}
         onBlacklistToggle={handleBlacklistToggle}
         onMuteToggle={handleMuteToggle}
+        onListsChanged={refresh}
         emptyMessage="No blacklisted traders."
       />
     </div>

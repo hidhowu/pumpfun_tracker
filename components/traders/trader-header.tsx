@@ -21,6 +21,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ManageWalletsMenu } from "@/components/traders/manage-wallets-menu";
 import { updateTrader } from "@/lib/api";
 import { useProfile } from "@/lib/profile-context";
 import { formatRelativeTime } from "@/lib/format";
@@ -174,6 +175,8 @@ export function TraderHeader({ trader, onUpdated }: Props) {
                   : "This trader has an explicit override, independent of the global default."}
               </TooltipContent>
             </Tooltip>
+
+            <ManageWalletsMenu traderAddress={trader.address} />
 
             {trader.status === "active" ? (
               <AlertDialog>

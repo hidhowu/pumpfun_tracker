@@ -18,6 +18,9 @@ import {
   checkRiskExits,
 } from "../db/simulation/executor.js";
 import { ensureTodaySnapshotsForAllActiveTraders } from "../db/simulation/snapshot.js";
+import { evaluateWalletTrade } from "../db/simulation/walletEngine.js";
+import { processDueWalletExecutions, checkWalletRiskExits } from "../db/simulation/walletExecutor.js";
+import { ensureTodaySnapshotsForAllWallets } from "../db/simulation/walletSnapshot.js";
 import { getSystemSettings } from "../db/models/SystemSettings.js";
 import { logEvent } from "../db/systemLog.js";
 import { SystemCommand } from "../db/models/SystemCommand.js";
@@ -84,6 +87,12 @@ export class TrackerService extends EventEmitter {
     this._snapshotTimer = null;
     this._commandTimer = null;
     this._syncInProgress = false;
+    // Wallets: a second, fully independent simulation - own timers, own
+    // self-rescheduling risk loop, never shared with the Profile-scoped ones above.
+    this._walletExecutionTimer = null;
+    this._walletRiskTimer = null;
+    this._walletRiskLoopActive = false;
+    this._walletSnapshotTimer = null;
   }
 
   /** Creates and wires a LogSubscriber dedicated to exactly one RPC endpoint. */
@@ -454,6 +463,61 @@ export class TrackerService extends EventEmitter {
     this._snapshotTimer = null;
   }
 
+  /**
+   * Wallet-scoped mirror of startSimulationLoops/​_runRiskCheckLoop/
+   * stopSimulationLoops above - same three-loop shape (fill queued
+   * executions, sweep open positions for risk exits, keep today's snapshot
+   * warm), entirely separate timers acting on entirely separate
+   * collections. Starting/stopping this never touches the Profile-scoped
+   * loops, and vice versa.
+   */
+  startWalletSimulationLoops({ executionIntervalMs = 2000, snapshotIntervalMs = 3600000 } = {}) {
+    ensureTodaySnapshotsForAllWallets().catch((err) => this.emit("error", err));
+
+    this._walletExecutionTimer = setInterval(() => {
+      processDueWalletExecutions().catch((err) => this.emit("error", err));
+    }, executionIntervalMs);
+
+    this._walletRiskLoopActive = true;
+    this._runWalletRiskCheckLoop();
+
+    this._walletSnapshotTimer = setInterval(() => {
+      ensureTodaySnapshotsForAllWallets().catch((err) => this.emit("error", err));
+    }, snapshotIntervalMs);
+  }
+
+  /** Same self-rescheduling shape as _runRiskCheckLoop, reusing the same SystemSettings.riskCheckIntervalSeconds cadence (one system-wide "how often do we sweep open positions" setting, applies to wallets too). */
+  async _runWalletRiskCheckLoop() {
+    if (!this._walletRiskLoopActive) return;
+    try {
+      const count = await checkWalletRiskExits();
+      if (count > 0) this.emit("walletRiskExitTriggered", count);
+    } catch (err) {
+      this.emit("error", err);
+    }
+    if (!this._walletRiskLoopActive) return;
+
+    let intervalSeconds = 20;
+    try {
+      const settings = await getSystemSettings();
+      intervalSeconds = Math.max(5, settings.riskCheckIntervalSeconds || 20);
+    } catch (err) {
+      this.emit("error", err);
+    }
+    this._walletRiskTimer = setTimeout(() => this._runWalletRiskCheckLoop(), intervalSeconds * 1000);
+  }
+
+  stopWalletSimulationLoops() {
+    this._walletRiskLoopActive = false;
+    if (this._walletRiskTimer) clearTimeout(this._walletRiskTimer);
+    this._walletRiskTimer = null;
+    for (const timer of [this._walletExecutionTimer, this._walletSnapshotTimer]) {
+      if (timer) clearInterval(timer);
+    }
+    this._walletExecutionTimer = null;
+    this._walletSnapshotTimer = null;
+  }
+
   async _handleSignature({ address, signature, err }) {
     if (err) {
       // NOT persisted to SystemLog: on a wallet list this size, on-chain tx
@@ -482,6 +546,18 @@ export class TrackerService extends EventEmitter {
           if (isNew) {
             const actioned = await evaluateRealTrade(trade);
             if (actioned) await markTradeActioned(trade);
+            // Wallets are a second, fully independent simulation - same
+            // trigger, own try/catch, and its outcome deliberately does NOT
+            // feed into `actioned`/markTradeActioned above (that's the
+            // Profile-scoped 48h-purge-exemption signal only). A failure
+            // here can never block or affect the Profile-scoped path.
+            evaluateWalletTrade(trade).catch((err) => {
+              this.emit("dbError", { address, signature, error: err });
+              logEvent("tracker", `Failed to evaluate wallet trade for ${signature}: ${err.message}`, {
+                level: "error",
+                meta: { address, signature },
+              });
+            });
           }
         } catch (dbErr) {
           this.emit("dbError", { address, signature, error: dbErr });
@@ -502,6 +578,7 @@ export class TrackerService extends EventEmitter {
     this.stopDbSync();
     this.stopHttpRpcPoolSync();
     this.stopSimulationLoops();
+    this.stopWalletSimulationLoops();
     this.stopCommandPolling();
     for (const sub of this.subscribers.values()) sub.close();
     this.subscribers.clear();
@@ -574,6 +651,7 @@ async function runCli() {
   tracker.startDbSync(15000);
   tracker.startHttpRpcPoolSync(15000);
   tracker.startSimulationLoops();
+  tracker.startWalletSimulationLoops();
   tracker.startCommandPolling();
 }
 

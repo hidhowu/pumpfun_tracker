@@ -45,8 +45,10 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { ManageListsMenu } from "./manage-lists-menu";
+import { ManageWalletsMenu } from "./manage-wallets-menu";
 import type { Trader } from "@/lib/types";
-import { formatAddress, formatRelativeTime, formatSol, formatUsd } from "@/lib/format";
+import { formatAddress, formatRelativeTime, formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type TraderTableProps = {
@@ -55,6 +57,7 @@ type TraderTableProps = {
   loading?: boolean;
   onBlacklistToggle: (address: string, blacklist: boolean) => Promise<void> | void;
   onMuteToggle: (address: string, muted: boolean | null) => Promise<void> | void;
+  onListsChanged?: () => void;
   emptyMessage?: string;
 };
 
@@ -80,9 +83,11 @@ const SORT_ACCESSORS: Record<SortKey, (t: Trader) => number | string> = {
   value: (t) => t.walletValueUsd,
   combinedPnl: (t) => (t.today.closedTradeCount > 0 ? t.today.combinedPercent : -Infinity),
   lastActive: (t) => (t.sim.lastActionAt ? new Date(t.sim.lastActionAt).getTime() : -Infinity),
-  // The tracked wallet's own lifetime on-chain stats - not our simulation.
-  lifetimeTrades: (t) => t.stats.tradeCount,
-  lifetimePnl: (t) => t.stats.realizedPnlSol,
+  // OUR simulated copy-trade lifetime stats - never the tracked wallet's own
+  // on-chain activity, which this app only ever uses as a buy/sell signal,
+  // never for any calculation shown in the UI.
+  lifetimeTrades: (t) => t.sim.closedPositionCount + t.sim.openPositionCount,
+  lifetimePnl: (t) => t.sim.realizedPnlUsd,
 };
 
 function SortableHead({
@@ -150,6 +155,7 @@ export function TraderTable({
   loading,
   onBlacklistToggle,
   onMuteToggle,
+  onListsChanged,
   emptyMessage,
 }: TraderTableProps) {
   const [pendingAddress, setPendingAddress] = useState<string | null>(null);
@@ -312,7 +318,7 @@ export function TraderTable({
                 <TableCell className="text-right font-mono text-sm">
                   <span className="inline-flex items-center justify-end gap-1 text-muted-foreground">
                     <History className="size-3.5" />
-                    {trader.stats.tradeCount}
+                    {trader.sim.closedPositionCount + trader.sim.openPositionCount}
                   </span>
                 </TableCell>
 
@@ -320,18 +326,18 @@ export function TraderTable({
                   <span
                     className={cn(
                       "inline-flex items-center gap-1",
-                      trader.stats.realizedPnlSol > 0 && "text-positive",
-                      trader.stats.realizedPnlSol < 0 && "text-negative"
+                      trader.sim.realizedPnlUsd > 0 && "text-positive",
+                      trader.sim.realizedPnlUsd < 0 && "text-negative"
                     )}
                   >
-                    {trader.stats.realizedPnlSol > 0 ? (
+                    {trader.sim.realizedPnlUsd > 0 ? (
                       <TrendingUp className="size-3.5" />
-                    ) : trader.stats.realizedPnlSol < 0 ? (
+                    ) : trader.sim.realizedPnlUsd < 0 ? (
                       <TrendingDown className="size-3.5" />
                     ) : (
                       <Minus className="size-3.5 text-muted-foreground" />
                     )}
-                    {formatSol(trader.stats.realizedPnlSol)}
+                    {formatUsd(trader.sim.realizedPnlUsd)}
                   </span>
                 </TableCell>
 
@@ -420,6 +426,13 @@ export function TraderTable({
                 </TableCell>
 
                 <TableCell className="pr-4 text-right">
+                  <div className="flex items-center justify-end gap-1">
+                  <ManageListsMenu
+                    traderAddress={trader.address}
+                    currentListIds={trader.listIds}
+                    onChanged={() => onListsChanged?.()}
+                  />
+                  <ManageWalletsMenu traderAddress={trader.address} />
                   {mode === "active" ? (
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
@@ -466,6 +479,7 @@ export function TraderTable({
                       Unblacklist
                     </Button>
                   )}
+                  </div>
                 </TableCell>
               </TableRow>
             );

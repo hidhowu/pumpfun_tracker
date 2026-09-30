@@ -6,35 +6,52 @@ import { Users, Layers, Wallet, Coins } from "lucide-react";
 import { TraderTable } from "@/components/traders/trader-table";
 import { AddTraderDialog } from "@/components/traders/add-trader-dialog";
 import { StatTile } from "@/components/traders/stat-tile";
-import { listTraders, updateTrader } from "@/lib/api";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { listTraderLists, listTraders, updateTrader } from "@/lib/api";
 import { formatUsd } from "@/lib/format";
 import { useProfile } from "@/lib/profile-context";
-import type { Trader } from "@/lib/types";
+import type { Trader, TraderListView } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 8000;
+const ALL_TRADERS_VALUE = "__all__"; // Select can't use "" as an item value, so this stands in for "no list filter"
 
 export default function DashboardPage() {
   const { currentProfileId } = useProfile();
   const [traders, setTraders] = useState<Trader[]>([]);
   const [loading, setLoading] = useState(true);
+  const [lists, setLists] = useState<TraderListView[]>([]);
+  const [listId, setListId] = useState<string>(ALL_TRADERS_VALUE);
 
   const refresh = useCallback(async () => {
     if (!currentProfileId) return;
     try {
-      const { traders } = await listTraders(currentProfileId, "active");
+      const { traders } = await listTraders(currentProfileId, "active", listId === ALL_TRADERS_VALUE ? undefined : listId);
       setTraders(traders);
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
-  }, [currentProfileId]);
+  }, [currentProfileId, listId]);
+
+  const refreshLists = useCallback(async () => {
+    try {
+      const { lists } = await listTraderLists();
+      setLists(lists);
+    } catch (err) {
+      console.error(err);
+    }
+  }, []);
 
   useEffect(() => {
     refresh();
     const interval = setInterval(refresh, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  useEffect(() => {
+    refreshLists();
+  }, [refreshLists]);
 
   async function handleBlacklistToggle(address: string, blacklist: boolean) {
     if (!currentProfileId) return;
@@ -84,10 +101,25 @@ export default function DashboardPage() {
         />
       </div>
 
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-muted-foreground">
-          {traders.length} trader{traders.length === 1 ? "" : "s"} tracked
-        </span>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-muted-foreground">
+            {traders.length} trader{traders.length === 1 ? "" : "s"} tracked
+          </span>
+          <Select value={listId} onValueChange={setListId}>
+            <SelectTrigger size="sm" className="w-44">
+              <SelectValue placeholder="All traders" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_TRADERS_VALUE}>All traders</SelectItem>
+              {lists.map((list) => (
+                <SelectItem key={list._id} value={list._id}>
+                  {list.name} ({list.memberCount})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <AddTraderDialog onAdded={refresh} />
       </div>
 
@@ -97,6 +129,10 @@ export default function DashboardPage() {
         loading={loading}
         onBlacklistToggle={handleBlacklistToggle}
         onMuteToggle={handleMuteToggle}
+        onListsChanged={() => {
+          refresh();
+          refreshLists();
+        }}
         emptyMessage="No traders tracked yet - add one to get started."
       />
     </div>

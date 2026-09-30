@@ -29,6 +29,11 @@ const TraderSchema = new Schema({
   assignedRpcUrl: { type: String, default: null },
   subscriptionStatus: { type: String, enum: ["pending", "subscribed", "failed"], default: "pending" },
 
+  // Which user-created TraderLists (db/models/TraderList.js) this trader has
+  // been tagged into - many-to-many, purely organizational (dashboard
+  // filtering), unrelated to status/blacklist.
+  listIds: { type: [Schema.Types.ObjectId], default: [], index: true },
+
   // Stats about the REAL trader's own on-chain activity (not our simulation).
   stats: {
     tradeCount: { type: Number, default: 0 },

@@ -17,7 +17,7 @@ const CLOSING_OUT_FRACTION_PERCENT = 95;
  * Shared across every profile (one price lookup, not one per profile) since
  * it only depends on the trade/mint, not on any profile's settings.
  */
-async function estimateTradeUsdValue(trade) {
+export async function estimateTradeUsdValue(trade) {
   if (!trade.tokenAmount) return null;
   const coin = await getCoinInfo(trade.mint).catch(() => null);
   const price = priceFromCoinInfo(coin);
@@ -31,7 +31,7 @@ async function estimateTradeUsdValue(trade) {
  * profile sees the exact same real trading history for a wallet; only the
  * *decision* of whether to act on it varies per profile).
  */
-async function sumTraderTokenAmount(traderAddress, mint, type, { beforeBlockTime } = {}) {
+export async function sumTraderTokenAmount(traderAddress, mint, type, { beforeBlockTime } = {}) {
   const match = { traderAddress, mint, type };
   if (beforeBlockTime !== undefined) match.blockTime = { $lt: beforeBlockTime };
   const [row] = await Trade.aggregate([{ $match: match }, { $group: { _id: null, total: { $sum: "$tokenAmount" } } }]);

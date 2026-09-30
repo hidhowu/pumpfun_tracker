@@ -9,12 +9,18 @@ import type {
   ProxyView,
   RpcEndpointAddress,
   RpcEndpointView,
+  TraderListView,
   SimPosition,
   SystemLogEntry,
   Trade,
   Trader,
   TraderDetail,
   TraderSimSettings,
+  WalletPnlBreakdown,
+  WalletPositionView,
+  WalletSettings,
+  WalletTraderPerformance,
+  WalletView,
 } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -29,9 +35,14 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-export function listTraders(profileId: string, status?: "active" | "blacklisted"): Promise<{ traders: Trader[] }> {
+export function listTraders(
+  profileId: string,
+  status?: "active" | "blacklisted",
+  listId?: string
+): Promise<{ traders: Trader[] }> {
   const qs = new URLSearchParams({ profileId });
   if (status) qs.set("status", status);
+  if (listId) qs.set("listId", listId);
   return request(`/api/traders?${qs.toString()}`);
 }
 
@@ -234,4 +245,87 @@ export function deleteProxiesBulk(ids: string[]): Promise<{ deletedCount: number
 /** Live connectivity check through this one proxy - a pass also un-blacklists it. */
 export function testProxy(id: string): Promise<{ ok: boolean; error: string | null; proxy: ProxyView }> {
   return request(`/api/proxies/${id}/test`, { method: "POST" });
+}
+
+export function listTraderLists(): Promise<{ lists: TraderListView[] }> {
+  return request(`/api/lists`);
+}
+
+export function createTraderList(name: string): Promise<{ list: TraderListView }> {
+  return request(`/api/lists`, { method: "POST", body: JSON.stringify({ name }) });
+}
+
+export function renameTraderList(id: string, name: string): Promise<{ list: TraderListView }> {
+  return request(`/api/lists/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+}
+
+export function deleteTraderList(id: string): Promise<{ deleted: true }> {
+  return request(`/api/lists/${id}`, { method: "DELETE" });
+}
+
+export function addTradersToList(listId: string, addresses: string[]): Promise<{ modifiedCount: number }> {
+  return request(`/api/lists/${listId}/members`, { method: "POST", body: JSON.stringify({ addresses }) });
+}
+
+export function removeTradersFromList(listId: string, addresses: string[]): Promise<{ modifiedCount: number }> {
+  return request(`/api/lists/${listId}/members`, { method: "DELETE", body: JSON.stringify({ addresses }) });
+}
+
+// --- Wallets ---
+
+export function listWallets(): Promise<{ wallets: WalletView[] }> {
+  return request(`/api/wallets`);
+}
+
+export function getWallet(id: string): Promise<{ wallet: WalletView }> {
+  return request(`/api/wallets/${id}`);
+}
+
+export function createWallet(name: string, startingBalanceUsd: number): Promise<{ wallet: WalletView }> {
+  return request(`/api/wallets`, { method: "POST", body: JSON.stringify({ name, startingBalanceUsd }) });
+}
+
+export function renameWallet(id: string, name: string): Promise<{ wallet: WalletView }> {
+  return request(`/api/wallets/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+}
+
+export function updateWalletSettings(id: string, settings: Partial<WalletSettings>): Promise<{ wallet: WalletView }> {
+  return request(`/api/wallets/${id}`, { method: "PATCH", body: JSON.stringify({ settings }) });
+}
+
+export function deleteWallet(id: string): Promise<{ deleted: true }> {
+  return request(`/api/wallets/${id}`, { method: "DELETE" });
+}
+
+export function getWalletTraders(
+  id: string,
+  period: "day" | "week" | "month" = "day"
+): Promise<{ period: string; traders: WalletTraderPerformance[] }> {
+  return request(`/api/wallets/${id}/traders?period=${period}`);
+}
+
+export function addTradersToWallet(walletId: string, addresses: string[]): Promise<{ added: string[] }> {
+  return request(`/api/wallets/${walletId}/traders`, { method: "POST", body: JSON.stringify({ addresses }) });
+}
+
+export function removeTradersFromWallet(walletId: string, addresses: string[]): Promise<{ removedCount: number }> {
+  return request(`/api/wallets/${walletId}/traders`, { method: "DELETE", body: JSON.stringify({ addresses }) });
+}
+
+export function getWalletPositions(
+  walletId: string,
+  status: "open" | "closed",
+  page = 1,
+  limit = 25
+): Promise<{ positions: WalletPositionView[]; page: number; totalPages: number; total: number }> {
+  return request(`/api/wallets/${walletId}/positions?status=${status}&page=${page}&limit=${limit}`);
+}
+
+export function getWalletPnl(walletId: string, period: "day" | "week" | "month" = "week"): Promise<WalletPnlBreakdown> {
+  return request(`/api/wallets/${walletId}/pnl?period=${period}`);
+}
+
+/** Every walletId this trader is currently assigned to - for the per-trader "Add to Wallet" menu. */
+export function getWalletMembership(traderAddress: string): Promise<{ walletIds: string[] }> {
+  return request(`/api/wallets/membership?traderAddress=${traderAddress}`);
 }

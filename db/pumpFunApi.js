@@ -6,6 +6,22 @@ const execFileAsync = promisify(execFile);
 
 const CACHE_TTL_MS = 15_000;
 const cache = new Map(); // mint -> { data, expiresAt }
+// In-flight request coalescing: this module (and its cache above) is
+// already the single shared point every consumer in this process goes
+// through for a mint's price - every Profile's checkRiskExits, every
+// Wallet's checkWalletRiskExits, executeBuy/executeWalletBuy, the
+// dashboard's position marking, all of it, call the exact same
+// getCoinInfo() in the exact same process, so there's never one real
+// network call per Profile/Wallet for the same mint. The one gap the cache
+// alone doesn't close: two callers for the SAME mint arriving concurrently
+// before either has populated the cache (e.g. a Profile's and a Wallet's
+// risk-check tick landing on the same mint at once) would otherwise both
+// see a miss and both fire a real curl call. This map holds the in-flight
+// promise per mint so every concurrent caller awaits the SAME request
+// instead - a second/third caller within an already-running lookup counts
+// as a duplicate call. More Wallets/Profiles only ever gets you more
+// callers sharing that one in-flight promise, never more real requests.
+const inflight = new Map(); // mint -> Promise<data>
 const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
 
 const STATUS_MARKER = "\n__HTTP_STATUS__";
@@ -77,18 +93,30 @@ export async function getCoinInfo(mint) {
   const cached = cache.get(mint);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
 
-  const base = process.env.PUMP_FUN_API_BASE || "https://frontend-api-v3.pump.fun";
-  const { status, body } = await curlGetJson(`${base}/coins-v3/${mint}`);
+  const existingRequest = inflight.get(mint);
+  if (existingRequest) return existingRequest; // another caller already has this exact lookup in progress - share it, don't duplicate it
 
-  if (status === 404) {
-    cache.set(mint, { data: null, expiresAt: Date.now() + CACHE_TTL_MS });
-    return null;
+  const request = (async () => {
+    const base = process.env.PUMP_FUN_API_BASE || "https://frontend-api-v3.pump.fun";
+    const { status, body } = await curlGetJson(`${base}/coins-v3/${mint}`);
+
+    if (status === 404) {
+      cache.set(mint, { data: null, expiresAt: Date.now() + CACHE_TTL_MS });
+      return null;
+    }
+    if (status !== 200) throw new Error(`pump.fun API HTTP ${status} for ${mint}`);
+
+    const data = JSON.parse(body);
+    cache.set(mint, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+    return data;
+  })();
+
+  inflight.set(mint, request);
+  try {
+    return await request;
+  } finally {
+    inflight.delete(mint); // always clear it, success or failure, so a failed lookup doesn't wedge future calls for this mint
   }
-  if (status !== 200) throw new Error(`pump.fun API HTTP ${status} for ${mint}`);
-
-  const data = JSON.parse(body);
-  cache.set(mint, { data, expiresAt: Date.now() + CACHE_TTL_MS });
-  return data;
 }
 
 /** Derives a per-token price from a coin's reserves/market-cap, the same way the bonding curve prices trades. */

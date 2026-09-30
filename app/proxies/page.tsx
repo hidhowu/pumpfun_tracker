@@ -52,16 +52,52 @@ function StatusBadge({ status }: { status: ProxyView["status"] }) {
   );
 }
 
+type HostPortEntry = { host?: string; port?: number | string; username?: string; password?: string; scheme?: string };
+
+function hostPortToUrl(entry: HostPortEntry): string | null {
+  if (!entry || typeof entry !== "object" || !entry.host || !entry.port) return null;
+  const scheme = entry.scheme || "http"; // these host/port/username/password proxy lists are conventionally plain HTTP proxies unless stated otherwise
+  const auth = entry.username ? `${encodeURIComponent(entry.username)}:${encodeURIComponent(entry.password ?? "")}@` : "";
+  return `${scheme}://${auth}${entry.host}:${entry.port}`;
+}
+
+/**
+ * Accepts either the existing plain-URL format (one per line/comma, e.g.
+ * "http://user:pass@host:port") OR a pasted JSON {host,port,username,password}
+ * object/array - including the common copy-paste artifact of an object list
+ * with a trailing comma and no surrounding [] (exactly what a "copy" button
+ * on a proxy provider's dashboard tends to produce). JSON is tried first;
+ * only text that isn't valid JSON falls through to the line/comma splitter,
+ * so the two formats can't be accidentally cross-parsed.
+ */
+function parseProxyInput(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  for (const candidate of [trimmed, `[${trimmed.replace(/,\s*$/, "")}]`]) {
+    try {
+      const parsed = JSON.parse(candidate);
+      const entries = Array.isArray(parsed) ? parsed : [parsed];
+      const urls = entries.map(hostPortToUrl).filter((u): u is string => !!u);
+      if (urls.length > 0) return urls;
+    } catch {
+      // not valid JSON (or not this shape) - fall through to the next candidate / plain-text parsing
+    }
+  }
+
+  return trimmed
+    .split(/[\n,]/)
+    .map((u) => u.trim())
+    .filter(Boolean);
+}
+
 function AddProxiesDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit() {
-    const urls = text
-      .split(/[\n,]/)
-      .map((u) => u.trim())
-      .filter(Boolean);
+    const urls = parseProxyInput(text);
     if (urls.length === 0) {
       toast.error("Paste at least one proxy URL");
       return;
@@ -97,16 +133,18 @@ function AddProxiesDialog({ onAdded }: { onAdded: () => void }) {
         <DialogHeader>
           <DialogTitle>Add proxies</DialogTitle>
           <DialogDescription>
-            One proxy per line (or comma-separated) - e.g. http://user:pass@host:port or socks5://host:port. The
-            pump.fun API client round-robins through every enabled, healthy proxy here; with none configured, it
-            calls directly, exactly as before.
+            One proxy per line (or comma-separated) - e.g. http://user:pass@host:port or socks5://host:port. You
+            can also paste a JSON list of {"{host, port, username, password}"} objects (with or without the
+            surrounding brackets) - a common export format from proxy providers. The pump.fun API client
+            round-robins through every enabled, healthy proxy here; with none configured, it calls directly,
+            exactly as before.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-1.5">
           <Label htmlFor="proxy-list">Proxy URLs</Label>
           <Textarea
             id="proxy-list"
-            placeholder={"http://user:pass@host1:port\nsocks5://host2:port"}
+            placeholder={'http://user:pass@host1:port\nsocks5://host2:port\n\nor:\n{ "host": "1.2.3.4", "port": 8105, "username": "u", "password": "p" }'}
             value={text}
             onChange={(e) => setText(e.target.value)}
             className="min-h-32 font-mono text-sm"

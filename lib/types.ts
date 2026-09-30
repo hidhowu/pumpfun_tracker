@@ -91,6 +91,7 @@ export type Trader = {
   mutedOverride: boolean | null; // the trader's own explicit override, if any
   addedAt: string;
   blacklistedAt: string | null;
+  listIds: string[]; // TraderList ids this trader is tagged into
   stats: TraderStats; // the tracked wallet's own on-chain stats - not shown in the UI, kept for internal bookkeeping
   sim: SimStats;
   settings: TraderSimSettings;
@@ -159,6 +160,14 @@ export type ProxyView = {
 
 /** One open position from the cross-trader /api/positions/open endpoint - a SimPosition plus which trader it belongs to. */
 export type OpenPositionWithTrader = SimPosition & { traderLabel: string };
+
+/** A user-created trader group - see db/models/TraderList.js. */
+export type TraderListView = {
+  _id: string;
+  name: string;
+  createdAt: string;
+  memberCount: number;
+};
 
 export type TraderDetail = Trader & {
   openPositions: SimPosition[]; // live-priced
@@ -298,5 +307,78 @@ export type LeaderboardEntry = {
   combinedPercent: number;
   actualizedUsd: number | null;
   closedTradeCount: number;
+  streaks: Streaks;
+};
+
+// --- Wallets: a second, fully independent copy-trade simulation - see db/models/Wallet.js ---
+
+/** Flat, wallet-own settings - no per-trader-within-wallet override tier (unlike TraderSimSettings). No allowNegativeBalance: wallets can never go negative, not configurable. */
+export type WalletSettings = {
+  tradeSizeUsd: number;
+  dustBuyUsd: number;
+  dustSellFractionPercent: number;
+  stopLossPercent: number | null; // null = disabled
+  takeProfitPercent: number | null; // null = disabled
+  maxTradeTimeSeconds: number; // 0 = disabled/infinite
+  trailingStops: TrailingStop[];
+  executionDelaySeconds: number;
+  feeUsd: number;
+};
+
+export type WalletView = {
+  _id: string;
+  name: string;
+  startingBalanceUsd: number;
+  balanceUsd: number;
+  realizedPnlUsd: number;
+  openPositionCount: number;
+  closedPositionCount: number;
+  createdAt: string;
+  settings: WalletSettings;
+  traderCount?: number; // present on the /api/wallets list endpoint only
+};
+
+/** One position within a Wallet - field-for-field the same shape as SimPosition, just scoped to a Wallet instead of a (Profile, trader) pair. */
+export type WalletPositionView = SimPosition;
+
+/** One assigned trader's stats on the "Traders Performance" tab - scoped ONLY to trades made while on THIS wallet, never the trader's overall/lifetime performance. */
+export type WalletTraderPerformance = {
+  traderAddress: string;
+  label: string;
+  addedAt: string;
+  lifetimeTrades: number;
+  lifetimeRealizedPnlUsd: number;
+  openPositionCount: number;
+  closedPositionCount: number;
+  lastActionAt: string | null;
+  periodPnlUsd: number;
+  periodTradeCount: number;
+  periodWins: number;
+  periodLosses: number;
+};
+
+export type WalletDailyPnl = {
+  date: string;
+  valueUsd: number | null; // absolute wallet value that day (end-of-day, or start-of-day if end isn't snapshotted yet) - what the performance chart plots
+  actualizedUsd: number | null;
+  actualizedPercent: number | null;
+  combinedUsd: number;
+  combinedPercent: number;
+  closedTradeCount: number;
+  wins: number;
+  losses: number;
+};
+
+export type WalletPnlBreakdown = {
+  period: "day" | "week" | "month";
+  days: number;
+  actualizedUsd: number | null;
+  combinedUsd: number;
+  combinedPercent: number;
+  closedTradeCount: number;
+  wins: number;
+  losses: number;
+  winRatePercent: number | null;
+  dailyBreakdown: WalletDailyPnl[];
   streaks: Streaks;
 };
