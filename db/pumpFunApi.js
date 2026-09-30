@@ -4,15 +4,35 @@ import { getActiveProxyPool, recordProxyResult } from "./proxyService.js";
 
 const execFileAsync = promisify(execFile);
 
-// Matches SystemSettings.riskCheckIntervalSeconds' default (5s) - a longer
-// TTL than the check interval would mean most risk-check ticks just re-read
-// the same stale cached price instead of actually sampling a fresh one,
-// which is exactly how a real intra-trade peak/dip gets missed between
-// checks. Still valuable within that window: many open positions across
-// different traders/wallets holding the SAME hot mint in the same sweep
-// share one real call instead of one each.
-const CACHE_TTL_MS = 5_000;
+// A risk-check tick will re-sample a stale-but-not-yet-expired price rather
+// than fire a fresh call for it - intentional trade-off, since an outbound
+// curl call per distinct open mint every tick is what was overwhelming the
+// proxy pool/pump.fun's rate limiting in the first place. A successful
+// lookup always overwrites this entry immediately regardless of age (see
+// getCoinInfo below), so a mint never actually waits the full 60s once a
+// newer real price comes in - this TTL only bounds how long a price can go
+// un-refreshed if nothing else happens to re-fetch it sooner.
+const CACHE_TTL_MS = 60_000;
 const cache = new Map(); // mint -> { data, expiresAt }
+
+/**
+ * Drops every cache entry whose TTL has already passed. Without this, a
+ * mint that's only ever looked up while it has an open position (every
+ * caller in this module is scoped to open positions/holdings - see
+ * prefetchPrices below) would sit in this Map forever once that position
+ * closes and nothing ever reads it again - the expiresAt check on read only
+ * ignores stale data, it doesn't remove it, so the Map would otherwise grow
+ * for as long as the daemon process stays up. Safe to call anytime: a mint
+ * that's still actively needed gets re-fetched and re-added right after
+ * being pruned (see prefetchPrices, which calls this right before
+ * re-populating the mints it was just asked for).
+ */
+function pruneExpiredCache() {
+  const now = Date.now();
+  for (const [mint, entry] of cache) {
+    if (entry.expiresAt <= now) cache.delete(mint);
+  }
+}
 // In-flight request coalescing: this module (and its cache above) is
 // already the single shared point every consumer in this process goes
 // through for a mint's price - every Profile's checkRiskExits, every
@@ -67,12 +87,18 @@ async function runCurl(url, proxyUrl) {
  * curl-level failure (couldn't connect, timed out, etc - NOT a legitimate
  * HTTP error from pump.fun itself, which curl reports as a clean exit with
  * that status code, not a thrown error, so a real 404/500 is returned as-is
- * rather than treated as a proxy problem). Every attempt's outcome is
- * recorded (db/proxyService.js) so a proxy that keeps failing gets
- * auto-blacklisted out of future rotations. If every attempt in this call
- * fails, or no proxies are configured at all, falls through to a direct
- * request - the same thing this function has always done - so a proxy
- * outage degrades to "no proxy" rather than ever blocking a price lookup.
+ * rather than treated as a proxy problem) AND on an HTTP 429 specifically -
+ * that's a rate-limit tied to the proxy's own IP, and a different proxy has
+ * its own separate limit, which is the entire point of rotating through a
+ * pool rather than hammering pump.fun from one address. Every attempt's
+ * outcome is recorded (db/proxyService.js) so a proxy that keeps genuinely
+ * failing to connect gets auto-blacklisted out of future rotations - a 429
+ * is recorded as a success (the proxy itself connected fine) so rate-limit
+ * noise never counts toward that. If every attempt in this call fails or
+ * gets rate-limited, or no proxies are configured at all, falls through to
+ * a direct request - the same thing this function has always done - so a
+ * proxy outage degrades to "no proxy" rather than ever blocking a price
+ * lookup.
  */
 async function curlGetJson(url) {
   const pool = await getActiveProxyPool().catch(() => []);
@@ -85,13 +111,15 @@ async function curlGetJson(url) {
     try {
       const result = await runCurl(url, proxy.url);
       recordProxyResult(proxy._id, true).catch(() => {}); // fire-and-forget - never let bookkeeping slow down the actual response
+      if (result.status === 429) continue; // this proxy's IP is rate-limited right now - immediately try the next one instead of giving up
       return result;
     } catch (err) {
       recordProxyResult(proxy._id, false, err.message).catch(() => {});
     }
   }
-  // Every proxy tried for this call failed - this IS the request the caller
-  // is waiting on, so it's awaited normally, errors and all.
+  // Every proxy tried for this call either failed outright or came back
+  // 429 - this IS the request the caller is waiting on, so it's awaited
+  // normally, errors and all.
   return runCurl(url, null);
 }
 
@@ -124,6 +152,64 @@ export async function getCoinInfo(mint) {
   } finally {
     inflight.delete(mint); // always clear it, success or failure, so a failed lookup doesn't wedge future calls for this mint
   }
+}
+
+// How many distinct mints prefetchPrices fetches concurrently per batch -
+// firing one curl process per distinct open-position mint ALL at once (which
+// is what a risk-check sweep used to do) is exactly what floods a small
+// proxy pool/trips pump.fun's rate limiting. Keeping one batch's concurrency
+// modest, and giving the pool a chance to recover between batches, trades a
+// bit of sweep latency for a much lower failure rate.
+const PREFETCH_BATCH_SIZE = 30;
+
+/**
+ * Warms the price cache for many mints at once, in bounded batches rather
+ * than one unbounded Promise.all over every distinct mint. Each batch's
+ * mints are looked up concurrently (still round-robining across proxies -
+ * see curlGetJson); whichever ones in that batch still have no price get one
+ * more try afterwards, in the same batch size - by then the earlier batches
+ * have finished, so the proxy pool has far less concurrent pressure on it
+ * than the initial fan-out did, which is often enough on its own to turn a
+ * transient rate-limit/timeout into a success on retry.
+ *
+ * getCoinInfo only caches a *successful* 404 (genuinely no such coin) as a
+ * negative result - a 429/timeout/other error is never cached (it throws
+ * before reaching cache.set), so calling it again here for a mint that just
+ * failed is a real re-attempt, not a no-op cache hit.
+ *
+ * Callers (checkRiskExits/checkWalletRiskExits) call this once up front with
+ * every open position's mint, then proceed with their own normal per-position
+ * Promise.all exactly as before - those calls just hit an already-warm cache
+ * instead of each spawning their own concurrent curl process.
+ *
+ * Also doubles as this cache's only cleanup point (pruneExpiredCache) - both
+ * risk-check loops call this every ~7s regardless of whether anything
+ * changed, which is exactly the periodic heartbeat that cache eviction
+ * needs, without a dedicated timer for it.
+ */
+export async function prefetchPrices(mints) {
+  pruneExpiredCache();
+  const distinct = [...new Set(mints)];
+
+  async function runBatches(list) {
+    const failed = [];
+    for (let i = 0; i < list.length; i += PREFETCH_BATCH_SIZE) {
+      const batch = list.slice(i, i + PREFETCH_BATCH_SIZE);
+      const ok = await Promise.all(
+        batch.map(async (mint) => {
+          const coin = await getCoinInfo(mint).catch(() => null);
+          return priceFromCoinInfo(coin)?.priceUsd != null;
+        })
+      );
+      batch.forEach((mint, idx) => {
+        if (!ok[idx]) failed.push(mint);
+      });
+    }
+    return failed;
+  }
+
+  const stillFailing = await runBatches(distinct);
+  if (stillFailing.length > 0) await runBatches(stillFailing);
 }
 
 /** Derives a per-token price from a coin's reserves/market-cap, the same way the bonding curve prices trades. */

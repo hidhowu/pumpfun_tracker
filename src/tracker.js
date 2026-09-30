@@ -457,10 +457,10 @@ export class TrackerService extends EventEmitter {
     }
     if (!this._riskLoopActive) return;
 
-    let intervalSeconds = 20;
+    let intervalSeconds = 7;
     try {
       const settings = await getSystemSettings();
-      intervalSeconds = Math.max(5, settings.riskCheckIntervalSeconds || 5);
+      intervalSeconds = Math.max(5, settings.riskCheckIntervalSeconds || 7);
     } catch (err) {
       this.emit("error", err);
     }
@@ -512,10 +512,10 @@ export class TrackerService extends EventEmitter {
     }
     if (!this._walletRiskLoopActive) return;
 
-    let intervalSeconds = 20;
+    let intervalSeconds = 7;
     try {
       const settings = await getSystemSettings();
-      intervalSeconds = Math.max(5, settings.riskCheckIntervalSeconds || 5);
+      intervalSeconds = Math.max(5, settings.riskCheckIntervalSeconds || 7);
     } catch (err) {
       this.emit("error", err);
     }

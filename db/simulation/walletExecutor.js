@@ -3,7 +3,7 @@ import { Wallet } from "../models/Wallet.js";
 import { WalletTrader } from "../models/WalletTrader.js";
 import { WalletPosition } from "../models/WalletPosition.js";
 import { WalletPendingExecution } from "../models/WalletPendingExecution.js";
-import { getCoinInfo, priceFromCoinInfo } from "../pumpFunApi.js";
+import { getCoinInfo, priceFromCoinInfo, prefetchPrices } from "../pumpFunApi.js";
 import { logEvent } from "../systemLog.js";
 
 async function markSkipped(pending, reason) {
@@ -238,6 +238,12 @@ export async function processDueWalletExecutions() {
  */
 export async function checkWalletRiskExits() {
   const openPositions = await WalletPosition.find({ status: "open" });
+
+  // Same reasoning as checkRiskExits: warm the cache for every distinct
+  // mint in bounded batches before the per-position fan-out below, instead
+  // of that Promise.all firing one curl process per distinct mint at once.
+  await prefetchPrices(openPositions.map((p) => p.mint));
+
   const walletCache = new Map();
 
   const results = await Promise.all(

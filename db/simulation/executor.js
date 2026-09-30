@@ -4,7 +4,7 @@ import { SimPosition } from "../models/SimPosition.js";
 import { PendingExecution } from "../models/PendingExecution.js";
 import { NegativeBalanceEvent } from "../models/NegativeBalanceEvent.js";
 import { resolveTraderSettings } from "../settings.js";
-import { getCoinInfo, priceFromCoinInfo } from "../pumpFunApi.js";
+import { getCoinInfo, priceFromCoinInfo, prefetchPrices } from "../pumpFunApi.js";
 import { logEvent } from "../systemLog.js";
 
 async function markSkipped(pending, reason) {
@@ -301,6 +301,13 @@ export async function processDuePendingExecutions() {
  */
 export async function checkRiskExits() {
   const openPositions = await SimPosition.find({ status: "open" });
+
+  // Warms the price cache for every distinct mint in bounded batches (see
+  // prefetchPrices) BEFORE the per-position fan-out below - without this,
+  // that Promise.all would fire one curl process per distinct mint all at
+  // once, which is what was overloading the proxy pool/triggering pump.fun
+  // rate limits in the first place.
+  await prefetchPrices(openPositions.map((p) => p.mint));
 
   const traderCache = new Map();
   const settingsCache = new Map(); // `${profileId}:${traderAddress}` -> resolved settings
