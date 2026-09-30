@@ -5,7 +5,22 @@ import { RpcPool } from "./rpcPool.js";
 import { LogSubscriber } from "./logSubscriber.js";
 import { parseTransaction } from "./parseTransaction.js";
 import { extractPumpTrades } from "./extractPumpTrades.js";
+import { hasMatchingInstruction } from "./logStack.js";
+import { programs as pumpPrograms } from "./idlRegistry.js";
 import { config } from "./env.js";
+
+// Program IDs we actually decode trades from (pump.fun, pump.fun-amm) - used
+// to pre-filter logsSubscribe notifications before ever calling
+// getTransaction. mentions:[address] fires on ANY transaction that mentions
+// the tracked wallet, not just pump.fun activity, so without this filter
+// every single one (token transfers, unrelated program calls, ...) pays for
+// a getTransaction round-trip even though only a small fraction are
+// actually trades - see hasMatchingInstruction's doc comment in
+// src/logStack.js for exactly what this checks and why it's safe for
+// bundled transactions (transfer+buy, create+buy, etc.) and precise enough
+// to skip non-trade pump.fun activity (fee distribution, migrations,
+// admin actions, ...) that still invokes the same program ID.
+const PUMP_PROGRAM_IDS = new Set(pumpPrograms.keys());
 import { connectDb } from "../db/connect.js";
 import { Trader } from "../db/models/Trader.js";
 import { RpcEndpoint } from "../db/models/RpcEndpoint.js";
@@ -518,7 +533,7 @@ export class TrackerService extends EventEmitter {
     this._walletSnapshotTimer = null;
   }
 
-  async _handleSignature({ address, signature, err }) {
+  async _handleSignature({ address, signature, err, logs }) {
     if (err) {
       // NOT persisted to SystemLog: on a wallet list this size, on-chain tx
       // failures (bad slippage, front-run, etc.) happen at a volume that
@@ -534,6 +549,19 @@ export class TrackerService extends EventEmitter {
     this.seenSignatures.add(signature);
     if (this.seenSignatures.size > this.maxSeen) {
       this.seenSignatures.delete(this.seenSignatures.values().next().value);
+    }
+
+    // Pre-filter using the logs logsSubscribe already gave us for free - if
+    // none of them show a Buy/Sell instruction on a pump.fun program, this
+    // definitely isn't a trade, so skip the getTransaction call entirely.
+    // `logs` should always be a non-empty array for any real transaction
+    // (even a plain transfer logs the System Program's own invoke/success),
+    // so an empty/missing array here is itself anomalous - fall through to
+    // the normal fetch path rather than risk a false negative on a
+    // malformed notification.
+    if (Array.isArray(logs) && logs.length > 0 && !hasMatchingInstruction(logs, PUMP_PROGRAM_IDS)) {
+      this.emit("notPumpTrade", { address, signature });
+      return;
     }
 
     try {
