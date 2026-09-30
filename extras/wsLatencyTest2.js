@@ -82,7 +82,7 @@ async function main() {
     `WS: ${WS_URL}  commitment: ${COMMITMENT}  target: ${TARGET_COUNT} successful pump trades`,
   );
 
-  const csvPath = path.join(__dirname, "wsLatencyTest-results.csv");
+  const csvPath = path.join(__dirname, "wsLatencyTest-results2.csv");
   fs.writeFileSync(
     csvPath,
     "signature,address,program,eventName,eventTimestamp,receivedAtMs,latencySeconds,latencyMs\n",
