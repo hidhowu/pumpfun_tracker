@@ -141,12 +141,16 @@ function TrailingStopsOverride({
 }) {
   const isOverridden = override !== null;
   const [draft, setDraft] = useState<TrailingStop[]>(override ?? effective);
+  const dirty = isOverridden && JSON.stringify(draft) !== JSON.stringify(override);
 
   useEffect(() => {
-    setDraft(override ?? effective);
-  }, [override, effective]);
-
-  const dirty = isOverridden && JSON.stringify(draft) !== JSON.stringify(override);
+    // Only pull in the server's value while there's nothing unsaved locally -
+    // the trader detail page polls every 10s, and without this guard that
+    // poll's fresh (but otherwise unchanged) array reference would wipe out
+    // an in-progress edit, e.g. a newly-added rule, before Save rules is
+    // ever clicked.
+    if (!dirty) setDraft(override ?? effective);
+  }, [override, effective, dirty]);
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">

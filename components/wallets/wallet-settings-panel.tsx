@@ -41,10 +41,14 @@ function NumberField({
   min?: number;
 }) {
   const [draft, setDraft] = useState(String(value));
+  const dirty = draft !== String(value);
 
   useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
+    // Same guard as TrailingStopsSection below - without it, the wallet
+    // detail page's 10s poll would reset whatever's being typed here before
+    // it's ever blurred/committed.
+    if (!dirty) setDraft(String(value));
+  }, [value, dirty]);
 
   function commit() {
     const num = Number(draft);
@@ -85,12 +89,17 @@ function NumberField({
 /** Stages trailing-stop edits locally and only saves (one API call) when "Save rules" is clicked - TrailingStopsEditor's onChange fires on every keystroke, so wiring it straight to a network save would fire one request per character typed. */
 function TrailingStopsSection({ trailingStops, onSave }: { trailingStops: TrailingStop[]; onSave: (rules: TrailingStop[]) => void }) {
   const [draft, setDraft] = useState<TrailingStop[]>(trailingStops);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(trailingStops);
 
   useEffect(() => {
-    setDraft(trailingStops);
-  }, [trailingStops]);
-
-  const dirty = JSON.stringify(draft) !== JSON.stringify(trailingStops);
+    // Only pull in the server's list while there's nothing unsaved locally -
+    // the wallet detail page polls every 10s, and without this guard that
+    // poll's fresh (but otherwise unchanged) array reference would wipe out
+    // an in-progress edit, e.g. a newly-added rule, before Save is ever
+    // clicked. Once dirty, this intentionally stops syncing until a save (or
+    // a page reload) makes draft match the server again.
+    if (!dirty) setDraft(trailingStops);
+  }, [trailingStops, dirty]);
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
