@@ -207,8 +207,8 @@ export function WalletSettingsPanel({ walletId, settings, onUpdated }: Props) {
             <ShieldAlert className="size-3.5" /> RISK
           </div>
           <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-              <div className="flex flex-col">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+              <div className="flex min-w-0 flex-col">
                 <span className="text-sm font-medium">Stop-loss</span>
                 <span className="text-xs text-muted-foreground">
                   {hasStopLoss ? `${settings.stopLossPercent}%` : "Disabled"}
@@ -232,8 +232,8 @@ export function WalletSettingsPanel({ walletId, settings, onUpdated }: Props) {
               </div>
             </div>
 
-            <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-              <div className="flex flex-col">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+              <div className="flex min-w-0 flex-col">
                 <span className="text-sm font-medium">Take-profit</span>
                 <span className="text-xs text-muted-foreground">
                   {hasTakeProfit ? `${settings.takeProfitPercent}%` : "Disabled"}

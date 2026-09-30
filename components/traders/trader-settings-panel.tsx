@@ -77,7 +77,7 @@ function OverrideField({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <Label htmlFor={id}>{label}</Label>
         {isOverridden ? (
           <Tooltip>
@@ -150,8 +150,8 @@ function TrailingStopsOverride({
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-      <div className="flex items-center justify-between">
-        <div className="flex flex-col">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col">
           <span className="text-sm font-medium">Trailing stops</span>
           <span className="text-xs text-muted-foreground">
             {isOverridden
@@ -298,8 +298,8 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
             <ShieldAlert className="size-3.5" /> RISK
           </div>
           <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-              <div className="flex flex-col">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+              <div className="flex min-w-0 flex-col">
                 <span className="text-sm font-medium">Stop-loss</span>
                 <span className="text-xs text-muted-foreground">
                   {stopLossOverridden
@@ -330,8 +330,8 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
               </div>
             </div>
 
-            <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-              <div className="flex flex-col">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+              <div className="flex min-w-0 flex-col">
                 <span className="text-sm font-medium">Take-profit</span>
                 <span className="text-xs text-muted-foreground">
                   {takeProfitOverridden
@@ -382,8 +382,8 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
               onClear={() => save({ trailingStops: null })}
             />
 
-            <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-              <div className="flex flex-col">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+              <div className="flex min-w-0 flex-col">
                 <span className="text-sm font-medium">Allow negative balance</span>
                 <span className="text-xs text-muted-foreground">
                   {negBalanceOverridden ? "Overridden for this trader" : "Inherited from global default"} —{" "}
@@ -450,8 +450,8 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
 
         <Separator />
 
-        <div className="flex items-center justify-between rounded-lg border border-negative/30 bg-negative/10 px-4 py-3">
-          <div className="flex flex-col">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-negative/30 bg-negative/10 px-4 py-3">
+          <div className="flex min-w-0 flex-col">
             <span className="text-sm font-medium">Reset simulation</span>
             <span className="text-xs text-muted-foreground">
               Wipes this trader&apos;s positions and trade history, and resets balance back to their starting allocation.

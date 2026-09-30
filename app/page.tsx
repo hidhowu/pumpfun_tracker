@@ -101,8 +101,11 @@ export default function DashboardPage() {
         />
       </div>
 
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+      {/* flex-wrap: the count text + list-filter Select + Add Trader button
+          comfortably exceed a phone viewport's width combined - this lets
+          them stack onto a second line instead of overflowing horizontally. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <span className="text-sm text-muted-foreground">
             {traders.length} trader{traders.length === 1 ? "" : "s"} tracked
           </span>

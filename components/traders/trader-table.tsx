@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Copy,
@@ -17,6 +17,7 @@ import {
   ArrowDown,
   ArrowUpDown,
   History,
+  Columns3,
 } from "lucide-react";
 import {
   Table,
@@ -34,6 +35,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -90,6 +99,58 @@ const SORT_ACCESSORS: Record<SortKey, (t: Trader) => number | string> = {
   lifetimePnl: (t) => t.sim.realizedPnlUsd,
 };
 
+// Every column except Trader (always frozen/first) and Action (always last)
+// can be hidden via the Columns toggle - see visibleColumns state below.
+// "Trader" and "Action" are deliberately excluded from this list: hiding
+// trader identity or the row actions would make the table useless, so
+// they're never optional.
+type ColumnKey =
+  | "lifetimeTrades"
+  | "lifetimePnl"
+  | "activeTrades"
+  | "dailyPnl"
+  | "winRate"
+  | "balance"
+  | "value"
+  | "combinedPnl"
+  | "lastActive"
+  | "notify";
+
+const COLUMN_DEFS: { key: ColumnKey; label: string }[] = [
+  { key: "lifetimeTrades", label: "Lifetime Trades" },
+  { key: "lifetimePnl", label: "Lifetime PnL" },
+  { key: "activeTrades", label: "Active Trades" },
+  { key: "dailyPnl", label: "Daily PnL" },
+  { key: "winRate", label: "Daily Win Rate" },
+  { key: "balance", label: "Balance" },
+  { key: "value", label: "Value" },
+  { key: "combinedPnl", label: "Daily Combined PnL" },
+  { key: "lastActive", label: "Last Active" },
+  { key: "notify", label: "Notify" },
+];
+
+const VISIBLE_COLUMNS_STORAGE_KEY = "trader-table-hidden-columns";
+
+function loadHiddenColumns(): Set<ColumnKey> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(VISIBLE_COLUMNS_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((k): k is ColumnKey => COLUMN_DEFS.some((c) => c.key === k)));
+  } catch {
+    return new Set(); // private-mode/blocked storage etc. - just fall back to "show everything"
+  }
+}
+
+// Sticky cells need an explicit opaque background so rows scrolling
+// underneath (both vertically under the header, and horizontally under the
+// frozen first column) don't show through.
+const STICKY_HEAD = "sticky top-0 z-10 bg-card";
+const STICKY_FIRST_HEAD = "sticky top-0 left-0 z-20 bg-card";
+const STICKY_FIRST_CELL = "sticky left-0 z-10 bg-card";
+
 function SortableHead({
   label,
   sortKey,
@@ -108,7 +169,7 @@ function SortableHead({
   const isActive = activeKey === sortKey;
   const Icon = isActive ? (dir === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
   return (
-    <TableHead className={align === "right" ? "text-right" : undefined}>
+    <TableHead className={cn(STICKY_HEAD, align === "right" && "text-right")}>
       <button
         type="button"
         onClick={() => onSort(sortKey)}
@@ -149,6 +210,45 @@ function PnlValue({ value }: { value: number | null }) {
   );
 }
 
+function ColumnsToggle({
+  hidden,
+  onToggle,
+}: {
+  hidden: Set<ColumnKey>;
+  onToggle: (key: ColumnKey, visible: boolean) => void;
+}) {
+  const hiddenCount = hidden.size;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-1.5">
+          <Columns3 className="size-3.5" />
+          Columns
+          {hiddenCount > 0 && (
+            <Badge variant="secondary" className="ml-0.5 text-[10px] font-normal">
+              {hiddenCount} hidden
+            </Badge>
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuLabel>Show columns</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {COLUMN_DEFS.map((col) => (
+          <DropdownMenuCheckboxItem
+            key={col.key}
+            checked={!hidden.has(col.key)}
+            onSelect={(e) => e.preventDefault()}
+            onCheckedChange={(checked) => onToggle(col.key, checked)}
+          >
+            {col.label}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function TraderTable({
   traders,
   mode,
@@ -161,6 +261,27 @@ export function TraderTable({
   const [pendingAddress, setPendingAddress] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  // Lazy-initialized from localStorage so a column choice persists across
+  // visits - a per-viewer convenience, never anything read back by the
+  // server or relied on for correctness.
+  const [hiddenColumns, setHiddenColumns] = useState<Set<ColumnKey>>(() => loadHiddenColumns());
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(VISIBLE_COLUMNS_STORAGE_KEY, JSON.stringify([...hiddenColumns]));
+    } catch {
+      // private-mode/blocked storage - the toggle still works for this session, just doesn't persist
+    }
+  }, [hiddenColumns]);
+
+  function toggleColumn(key: ColumnKey, visible: boolean) {
+    setHiddenColumns((prev) => {
+      const next = new Set(prev);
+      if (visible) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   function handleSort(key: SortKey) {
     if (key === sortKey) {
@@ -215,6 +336,9 @@ export function TraderTable({
       .catch(() => toast.error("Could not copy address"));
   }
 
+  const show = (key: ColumnKey) => !hiddenColumns.has(key);
+  const visibleColumnCount = 2 + COLUMN_DEFS.filter((c) => show(c.key)).length; // +2 = Trader + Action, always shown
+
   if (!loading && traders.length === 0) {
     return (
       <div className="flex min-h-[240px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-card/40 text-center">
@@ -226,266 +350,322 @@ export function TraderTable({
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-card">
-      <Table>
-        <TableHeader>
-          <TableRow className="border-border/60 hover:bg-transparent">
-            <TableHead className="pl-4">
-              <button
-                type="button"
-                onClick={() => handleSort("address")}
-                className={cn(
-                  "inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wide transition-colors hover:text-foreground",
-                  sortKey === "address" ? "text-foreground" : "text-muted-foreground"
-                )}
-              >
-                Trader
-                {sortKey === "address" ? (
-                  sortDir === "asc" ? (
-                    <ArrowUp className="size-3" />
+    <div className="flex flex-col gap-2">
+      <div className="flex justify-end">
+        <ColumnsToggle hidden={hiddenColumns} onToggle={toggleColumn} />
+      </div>
+
+      {/*
+        Bounded height + overflow-auto on BOTH axes, instead of the table's
+        own unbounded-height overflow-x-auto wrapper: with 100+ rows, a
+        horizontally-scrollable div that's also as tall as all its content
+        puts its horizontal scrollbar at the very bottom of that (very tall)
+        block - reachable only after scrolling all the way down. Bounding
+        the height turns this into a self-contained scroll box (like a
+        spreadsheet pane) whose scrollbars sit at a fixed position on screen
+        regardless of how far down the rows you've scrolled. Sticky header +
+        sticky first column below resolve against THIS div (the nearest
+        scrolling ancestor), not the page.
+      */}
+      <div className="max-h-[65vh] overflow-auto rounded-xl border border-border bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow className="border-border/60 hover:bg-transparent">
+              <TableHead className={cn(STICKY_FIRST_HEAD, "pl-4")}>
+                <button
+                  type="button"
+                  onClick={() => handleSort("address")}
+                  className={cn(
+                    "inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wide transition-colors hover:text-foreground",
+                    sortKey === "address" ? "text-foreground" : "text-muted-foreground"
+                  )}
+                >
+                  Trader
+                  {sortKey === "address" ? (
+                    sortDir === "asc" ? (
+                      <ArrowUp className="size-3" />
+                    ) : (
+                      <ArrowDown className="size-3" />
+                    )
                   ) : (
-                    <ArrowDown className="size-3" />
-                  )
-                ) : (
-                  <ArrowUpDown className="size-3 opacity-40" />
-                )}
-              </button>
-            </TableHead>
-            <SortableHead label="Lifetime Trades" sortKey="lifetimeTrades" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-            <SortableHead label="Lifetime PnL" sortKey="lifetimePnl" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-            <SortableHead label="Active Trades" sortKey="activeTrades" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-            <SortableHead label="Daily PnL (Actualized)" sortKey="dailyPnl" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-            <SortableHead label="Daily Win Rate" sortKey="winRate" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-            <SortableHead label="Balance" sortKey="balance" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-            <SortableHead label="Value" sortKey="value" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-            <SortableHead label="Daily Combined PnL" sortKey="combinedPnl" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-            <SortableHead label="Last Active" sortKey="lastActive" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-            <TableHead className="text-center">Notify</TableHead>
-            <TableHead className="pr-4 text-right">Action</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {loading &&
-            traders.length === 0 &&
-            Array.from({ length: 4 }).map((_, i) => (
-              <TableRow key={`skeleton-${i}`} className="border-border/60">
-                <TableCell colSpan={12} className="h-14">
-                  <div className="h-4 w-full animate-pulse rounded bg-muted" />
-                </TableCell>
-              </TableRow>
-            ))}
+                    <ArrowUpDown className="size-3 opacity-40" />
+                  )}
+                </button>
+              </TableHead>
+              {show("lifetimeTrades") && (
+                <SortableHead label="Lifetime Trades" sortKey="lifetimeTrades" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              )}
+              {show("lifetimePnl") && (
+                <SortableHead label="Lifetime PnL" sortKey="lifetimePnl" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              )}
+              {show("activeTrades") && (
+                <SortableHead label="Active Trades" sortKey="activeTrades" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              )}
+              {show("dailyPnl") && (
+                <SortableHead label="Daily PnL (Actualized)" sortKey="dailyPnl" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              )}
+              {show("winRate") && (
+                <SortableHead label="Daily Win Rate" sortKey="winRate" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              )}
+              {show("balance") && (
+                <SortableHead label="Balance" sortKey="balance" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              )}
+              {show("value") && (
+                <SortableHead label="Value" sortKey="value" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              )}
+              {show("combinedPnl") && (
+                <SortableHead label="Daily Combined PnL" sortKey="combinedPnl" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              )}
+              {show("lastActive") && (
+                <SortableHead label="Last Active" sortKey="lastActive" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              )}
+              {show("notify") && <TableHead className={cn(STICKY_HEAD, "text-center")}>Notify</TableHead>}
+              <TableHead className={cn(STICKY_HEAD, "pr-4 text-right")}>Action</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading &&
+              traders.length === 0 &&
+              Array.from({ length: 4 }).map((_, i) => (
+                <TableRow key={`skeleton-${i}`} className="border-border/60">
+                  <TableCell colSpan={visibleColumnCount} className="h-14">
+                    <div className="h-4 w-full animate-pulse rounded bg-muted" />
+                  </TableCell>
+                </TableRow>
+              ))}
 
-          {sortedTraders.map((trader) => {
-            const isPending = pendingAddress === trader.address;
-            const today = trader.today;
-            const hasClosedToday = today.closedTradeCount > 0;
-            const combinedPositive = hasClosedToday && today.combinedPercent > 0;
-            const combinedNegative = hasClosedToday && today.combinedPercent < 0;
+            {sortedTraders.map((trader) => {
+              const isPending = pendingAddress === trader.address;
+              const today = trader.today;
+              const hasClosedToday = today.closedTradeCount > 0;
+              const combinedPositive = hasClosedToday && today.combinedPercent > 0;
+              const combinedNegative = hasClosedToday && today.combinedPercent < 0;
 
-            return (
-              <TableRow key={trader._id} className="border-border/60">
-                <TableCell className="pl-4">
-                  <div className="flex flex-col gap-0.5">
-                    <div className="flex items-center gap-1.5">
-                      <Link
-                        href={`/traders/${trader.address}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="group flex items-center gap-1 font-mono text-sm text-foreground hover:text-primary"
+              return (
+                <TableRow key={trader._id} className="border-border/60">
+                  <TableCell className={cn(STICKY_FIRST_CELL, "max-w-3xs pl-4 sm:max-w-xs")}>
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <Link
+                          href={`/traders/${trader.address}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="group flex shrink-0 items-center gap-1 font-mono text-sm text-foreground hover:text-primary"
+                        >
+                          {formatAddress(trader.address, 5)}
+                          <ArrowUpRight className="size-3.5 text-muted-foreground transition-colors group-hover:text-primary" />
+                        </Link>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={() => copyAddress(trader.address)}
+                              className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                            >
+                              <Copy className="size-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>Copy address</TooltipContent>
+                        </Tooltip>
+                      </div>
+                      {trader.label ? (
+                        <span className="truncate text-xs text-muted-foreground">{trader.label}</span>
+                      ) : null}
+                    </div>
+                  </TableCell>
+
+                  {show("lifetimeTrades") && (
+                    <TableCell className="text-right font-mono text-sm">
+                      <span className="inline-flex items-center justify-end gap-1 text-muted-foreground">
+                        <History className="size-3.5" />
+                        {trader.sim.closedPositionCount + trader.sim.openPositionCount}
+                      </span>
+                    </TableCell>
+                  )}
+
+                  {show("lifetimePnl") && (
+                    <TableCell className="text-right font-mono text-sm">
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1",
+                          trader.sim.realizedPnlUsd > 0 && "text-positive",
+                          trader.sim.realizedPnlUsd < 0 && "text-negative"
+                        )}
                       >
-                        {formatAddress(trader.address, 5)}
-                        <ArrowUpRight className="size-3.5 text-muted-foreground transition-colors group-hover:text-primary" />
-                      </Link>
+                        {trader.sim.realizedPnlUsd > 0 ? (
+                          <TrendingUp className="size-3.5" />
+                        ) : trader.sim.realizedPnlUsd < 0 ? (
+                          <TrendingDown className="size-3.5" />
+                        ) : (
+                          <Minus className="size-3.5 text-muted-foreground" />
+                        )}
+                        {formatUsd(trader.sim.realizedPnlUsd)}
+                      </span>
+                    </TableCell>
+                  )}
+
+                  {show("activeTrades") && (
+                    <TableCell className="text-right font-mono text-sm">
+                      <span className="inline-flex items-center justify-end gap-1">
+                        <Layers className="size-3.5 text-muted-foreground" />
+                        {trader.sim.openPositionCount}
+                      </span>
+                    </TableCell>
+                  )}
+
+                  {show("dailyPnl") && (
+                    <TableCell className="text-right font-mono text-sm">
+                      <PnlValue value={today.actualizedUsd} />
+                    </TableCell>
+                  )}
+
+                  {show("winRate") && (
+                    <TableCell className="text-right font-mono text-sm">
+                      {!hasClosedToday ? (
+                        <span className="text-muted-foreground">-</span>
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="inline-flex items-center gap-1">
+                              <Target className="size-3.5 text-muted-foreground" />
+                              {today.winRatePercent === null ? "-" : `${today.winRatePercent.toFixed(0)}%`}
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {today.wins}W / {today.losses}L today
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                    </TableCell>
+                  )}
+
+                  {show("balance") && (
+                    <TableCell className="text-right font-mono text-sm">{formatUsd(trader.sim.balanceUsd)}</TableCell>
+                  )}
+
+                  {show("value") && (
+                    <TableCell className="text-right font-mono text-sm">
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            onClick={() => copyAddress(trader.address)}
-                            className="text-muted-foreground transition-colors hover:text-foreground"
-                          >
-                            <Copy className="size-3.5" />
-                          </button>
+                          <span>{formatUsd(trader.walletValueUsd)}</span>
                         </TooltipTrigger>
-                        <TooltipContent>Copy address</TooltipContent>
+                        <TooltipContent>Balance + current value of open positions</TooltipContent>
                       </Tooltip>
-                    </div>
-                    {trader.label ? (
-                      <span className="text-xs text-muted-foreground">{trader.label}</span>
-                    ) : null}
-                  </div>
-                </TableCell>
-
-                <TableCell className="text-right font-mono text-sm">
-                  <span className="inline-flex items-center justify-end gap-1 text-muted-foreground">
-                    <History className="size-3.5" />
-                    {trader.sim.closedPositionCount + trader.sim.openPositionCount}
-                  </span>
-                </TableCell>
-
-                <TableCell className="text-right font-mono text-sm">
-                  <span
-                    className={cn(
-                      "inline-flex items-center gap-1",
-                      trader.sim.realizedPnlUsd > 0 && "text-positive",
-                      trader.sim.realizedPnlUsd < 0 && "text-negative"
-                    )}
-                  >
-                    {trader.sim.realizedPnlUsd > 0 ? (
-                      <TrendingUp className="size-3.5" />
-                    ) : trader.sim.realizedPnlUsd < 0 ? (
-                      <TrendingDown className="size-3.5" />
-                    ) : (
-                      <Minus className="size-3.5 text-muted-foreground" />
-                    )}
-                    {formatUsd(trader.sim.realizedPnlUsd)}
-                  </span>
-                </TableCell>
-
-                <TableCell className="text-right font-mono text-sm">
-                  <span className="inline-flex items-center justify-end gap-1">
-                    <Layers className="size-3.5 text-muted-foreground" />
-                    {trader.sim.openPositionCount}
-                  </span>
-                </TableCell>
-
-                <TableCell className="text-right font-mono text-sm">
-                  <PnlValue value={today.actualizedUsd} />
-                </TableCell>
-
-                <TableCell className="text-right font-mono text-sm">
-                  {!hasClosedToday ? (
-                    <span className="text-muted-foreground">-</span>
-                  ) : (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex items-center gap-1">
-                          <Target className="size-3.5 text-muted-foreground" />
-                          {today.winRatePercent === null ? "-" : `${today.winRatePercent.toFixed(0)}%`}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        {today.wins}W / {today.losses}L today
-                      </TooltipContent>
-                    </Tooltip>
+                    </TableCell>
                   )}
-                </TableCell>
 
-                <TableCell className="text-right font-mono text-sm">{formatUsd(trader.sim.balanceUsd)}</TableCell>
-
-                <TableCell className="text-right font-mono text-sm">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span>{formatUsd(trader.walletValueUsd)}</span>
-                    </TooltipTrigger>
-                    <TooltipContent>Balance + current value of open positions</TooltipContent>
-                  </Tooltip>
-                </TableCell>
-
-                <TableCell className="text-right font-mono text-sm">
-                  {!hasClosedToday ? (
-                    <span className="text-muted-foreground">-</span>
-                  ) : (
-                    <span
-                      className={cn(
-                        "inline-flex items-center gap-1",
-                        combinedPositive && "text-positive",
-                        combinedNegative && "text-negative"
-                      )}
-                    >
-                      {combinedPositive ? (
-                        <TrendingUp className="size-3.5" />
-                      ) : combinedNegative ? (
-                        <TrendingDown className="size-3.5" />
+                  {show("combinedPnl") && (
+                    <TableCell className="text-right font-mono text-sm">
+                      {!hasClosedToday ? (
+                        <span className="text-muted-foreground">-</span>
                       ) : (
-                        <Minus className="size-3.5 text-muted-foreground" />
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1",
+                            combinedPositive && "text-positive",
+                            combinedNegative && "text-negative"
+                          )}
+                        >
+                          {combinedPositive ? (
+                            <TrendingUp className="size-3.5" />
+                          ) : combinedNegative ? (
+                            <TrendingDown className="size-3.5" />
+                          ) : (
+                            <Minus className="size-3.5 text-muted-foreground" />
+                          )}
+                          {today.combinedPercent >= 0 ? "+" : ""}
+                          {today.combinedPercent.toFixed(1)}%
+                        </span>
                       )}
-                      {today.combinedPercent >= 0 ? "+" : ""}
-                      {today.combinedPercent.toFixed(1)}%
-                    </span>
+                    </TableCell>
                   )}
-                </TableCell>
 
-                <TableCell className="text-right text-sm text-muted-foreground">
-                  {formatRelativeTime(trader.sim.lastActionAt)}
-                </TableCell>
+                  {show("lastActive") && (
+                    <TableCell className="text-right text-sm text-muted-foreground">
+                      {formatRelativeTime(trader.sim.lastActionAt)}
+                    </TableCell>
+                  )}
 
-                <TableCell>
-                  <div className="flex items-center justify-center gap-1.5">
-                    <Switch
-                      checked={!trader.muted}
-                      disabled={isPending}
-                      onCheckedChange={(checked) => handleMuteToggle(trader.address, checked)}
-                      aria-label="Toggle notifications"
-                    />
-                    {trader.mutedOverride === null ? (
-                      <Badge variant="secondary" className="text-[10px] font-normal">
-                        default
-                      </Badge>
-                    ) : null}
-                  </div>
-                </TableCell>
+                  {show("notify") && (
+                    <TableCell>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <Switch
+                          checked={!trader.muted}
+                          disabled={isPending}
+                          onCheckedChange={(checked) => handleMuteToggle(trader.address, checked)}
+                          aria-label="Toggle notifications"
+                        />
+                        {trader.mutedOverride === null ? (
+                          <Badge variant="secondary" className="text-[10px] font-normal">
+                            default
+                          </Badge>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  )}
 
-                <TableCell className="pr-4 text-right">
-                  <div className="flex items-center justify-end gap-1">
-                  <ManageListsMenu
-                    traderAddress={trader.address}
-                    currentListIds={trader.listIds}
-                    onChanged={() => onListsChanged?.()}
-                  />
-                  <ManageWalletsMenu traderAddress={trader.address} />
-                  {mode === "active" ? (
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
+                  <TableCell className="pr-4 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <ManageListsMenu
+                        traderAddress={trader.address}
+                        currentListIds={trader.listIds}
+                        onChanged={() => onListsChanged?.()}
+                      />
+                      <ManageWalletsMenu traderAddress={trader.address} />
+                      {mode === "active" ? (
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={isPending}
+                              className="text-muted-foreground hover:text-negative"
+                            >
+                              <ShieldBan className="size-4" />
+                              Blacklist
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Blacklist this trader?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                {formatAddress(trader.address, 6)} will stop being tracked -
+                                no new trades will be recorded while blacklisted. All of
+                                their existing history stays visible under Blacklisted,
+                                and you can unblacklist them anytime to resume tracking.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                className="bg-negative text-negative-foreground hover:bg-negative/90"
+                                onClick={() => handleBlacklistToggle(trader.address, true)}
+                              >
+                                Blacklist
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      ) : (
                         <Button
                           variant="ghost"
                           size="sm"
                           disabled={isPending}
-                          className="text-muted-foreground hover:text-negative"
+                          className="text-muted-foreground hover:text-positive"
+                          onClick={() => handleBlacklistToggle(trader.address, false)}
                         >
-                          <ShieldBan className="size-4" />
-                          Blacklist
+                          <ShieldCheck className="size-4" />
+                          Unblacklist
                         </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Blacklist this trader?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            {formatAddress(trader.address, 6)} will stop being tracked -
-                            no new trades will be recorded while blacklisted. All of
-                            their existing history stays visible under Blacklisted,
-                            and you can unblacklist them anytime to resume tracking.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction
-                            className="bg-negative text-negative-foreground hover:bg-negative/90"
-                            onClick={() => handleBlacklistToggle(trader.address, true)}
-                          >
-                            Blacklist
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-                  ) : (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={isPending}
-                      className="text-muted-foreground hover:text-positive"
-                      onClick={() => handleBlacklistToggle(trader.address, false)}
-                    >
-                      <ShieldCheck className="size-4" />
-                      Unblacklist
-                    </Button>
-                  )}
-                  </div>
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }

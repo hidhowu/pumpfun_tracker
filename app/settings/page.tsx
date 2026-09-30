@@ -169,12 +169,12 @@ export default function SettingsPage() {
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 pb-16">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/15 text-primary">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
             <Settings2 className="size-4.5" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
             <p className="text-sm text-muted-foreground">
               Defaults for the currently-selected profile&apos;s strategy. Any trader can override these individually,
@@ -264,8 +264,8 @@ export default function SettingsPage() {
           <CardDescription>Our own protective exit, and what happens when capital runs out.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
-          <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-            <div className="flex flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+            <div className="flex min-w-0 flex-col">
               <span className="text-sm font-medium">Stop-loss</span>
               <span className="text-xs text-muted-foreground">
                 Force-close a position at this % unrealized loss, regardless of whether the trader has sold.
@@ -291,8 +291,8 @@ export default function SettingsPage() {
 
           <Separator />
 
-          <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-            <div className="flex flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+            <div className="flex min-w-0 flex-col">
               <span className="text-sm font-medium">Take-profit</span>
               <span className="text-xs text-muted-foreground">
                 Force-close a position once it reaches this % unrealized gain, regardless of whether the trader has sold.
@@ -361,8 +361,8 @@ export default function SettingsPage() {
 
           <Separator />
 
-          <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-            <div className="flex flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+            <div className="flex min-w-0 flex-col">
               <span className="text-sm font-medium">Allow negative balance</span>
               <span className="text-xs text-muted-foreground">
                 {draft.defaultAllowNegativeBalance
@@ -428,8 +428,8 @@ export default function SettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-            <div className="flex flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+            <div className="flex min-w-0 flex-col">
               <span className="text-sm font-medium">Notify on new trades by default</span>
               <span className="text-xs text-muted-foreground">
                 {draft.defaultMuted ? "Currently off — new traders start muted." : "Currently on — new traders start unmuted."}
@@ -449,8 +449,8 @@ export default function SettingsPage() {
           <CardDescription>Irreversible actions affecting every tracked trader, within this profile only.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-between rounded-lg border border-negative/30 bg-negative/5 px-4 py-3">
-            <div className="flex flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-negative/30 bg-negative/5 px-4 py-3">
+            <div className="flex min-w-0 flex-col">
               <span className="text-sm font-medium">Reset all traders&apos; simulations (this profile)</span>
               <span className="text-xs text-muted-foreground">
                 Wipes every active trader&apos;s positions, trade history, and P&amp;L back to a fresh starting balance

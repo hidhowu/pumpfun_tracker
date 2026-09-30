@@ -325,9 +325,9 @@ function HttpRpcSection() {
                   const isPending = pendingId === endpoint._id;
                   return (
                     <TableRow key={endpoint._id} className="border-border/60">
-                      <TableCell>
-                        <div className="flex flex-col gap-0.5">
-                          <span className="font-medium">{endpoint.label || "Unlabeled endpoint"}</span>
+                      <TableCell className="max-w-3xs sm:max-w-xs">
+                        <div className="flex min-w-0 flex-col gap-0.5">
+                          <span className="truncate font-medium">{endpoint.label || "Unlabeled endpoint"}</span>
                           <span className="truncate font-mono text-xs text-muted-foreground">{endpoint.url}</span>
                         </div>
                       </TableCell>
@@ -516,10 +516,10 @@ export default function RpcPage() {
             </p>
             <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
               {unresolvedAddresses.map((a) => (
-                <div key={a.address} className="flex items-center gap-1.5 text-xs">
+                <div key={a.address} className="flex min-w-0 items-center gap-1.5 text-xs">
                   <SubStatusDot status={a.subscriptionStatus} />
-                  <span className="truncate font-mono text-muted-foreground">{formatAddress(a.address, 5)}</span>
-                  {a.label ? <span className="truncate text-muted-foreground/70">({a.label})</span> : null}
+                  <span className="shrink-0 truncate font-mono text-muted-foreground">{formatAddress(a.address, 5)}</span>
+                  {a.label ? <span className="min-w-0 truncate text-muted-foreground/70">({a.label})</span> : null}
                   <span className="ml-auto shrink-0 truncate text-[11px] text-muted-foreground/70">
                     {a.assignedRpcUrl ? endpointLabelByUrl.get(a.assignedRpcUrl) ?? "unknown endpoint" : "unassigned"}
                   </span>
@@ -642,10 +642,10 @@ export default function RpcPage() {
                       ) : (
                         <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
                           {addresses.map((a) => (
-                            <div key={a.address} className="flex items-center gap-1.5 text-xs">
+                            <div key={a.address} className="flex min-w-0 items-center gap-1.5 text-xs">
                               <SubStatusDot status={a.subscriptionStatus} />
-                              <span className="truncate font-mono text-muted-foreground">{formatAddress(a.address, 5)}</span>
-                              {a.label ? <span className="truncate text-muted-foreground/70">({a.label})</span> : null}
+                              <span className="shrink-0 truncate font-mono text-muted-foreground">{formatAddress(a.address, 5)}</span>
+                              {a.label ? <span className="min-w-0 truncate text-muted-foreground/70">({a.label})</span> : null}
                             </div>
                           ))}
                         </div>

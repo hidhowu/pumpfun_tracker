@@ -233,8 +233,8 @@ export default function LeaderboardPage() {
                       <TableCell className="pl-4">
                         <RankBadge rank={i} />
                       </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-0.5">
+                      <TableCell className="max-w-3xs sm:max-w-xs">
+                        <div className="flex min-w-0 flex-col gap-0.5">
                           <Link
                             href={`/traders/${entry.address}`}
                             target="_blank"
@@ -242,9 +242,9 @@ export default function LeaderboardPage() {
                             className="group flex items-center gap-1 font-mono text-sm hover:text-primary"
                           >
                             {formatAddress(entry.address, 5)}
-                            <ArrowUpRight className="size-3.5 text-muted-foreground transition-colors group-hover:text-primary" />
+                            <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
                           </Link>
-                          {entry.label ? <span className="text-xs text-muted-foreground">{entry.label}</span> : null}
+                          {entry.label ? <span className="truncate text-xs text-muted-foreground">{entry.label}</span> : null}
                         </div>
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm">

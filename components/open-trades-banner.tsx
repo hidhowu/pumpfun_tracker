@@ -45,9 +45,17 @@ export function OpenTradesBanner() {
 
   return (
     <>
-      <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setOpen(true)}>
+      <Button variant="outline" size="sm" className="gap-1.5 px-2 sm:px-3" onClick={() => setOpen(true)}>
         <Layers className="size-3.5 text-primary" />
-        {loading && positions.length === 0 ? "…" : positions.length} open trade{positions.length === 1 ? "" : "s"}
+        {loading && positions.length === 0 ? "…" : positions.length}
+        {/* Full label only once there's room for it - this button sits in the
+            app-wide header alongside the profile switcher, and on a narrow
+            phone ("375px") the two together can exceed the viewport width
+            with the full label. */}
+        <span className="hidden sm:inline">
+          {" "}
+          open trade{positions.length === 1 ? "" : "s"}
+        </span>
       </Button>
 
       <Sheet open={open} onOpenChange={setOpen}>

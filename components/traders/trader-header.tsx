@@ -218,7 +218,10 @@ export function TraderHeader({ trader, onUpdated }: Props) {
               onChange={(e) => setNotesDraft(e.target.value)}
               onBlur={saveNotes}
               placeholder="Add notes about this trader…"
-              className="min-h-16"
+              // Same field-sizing:content issue as the bulk-paste dialogs -
+              // bounded here too so a large pasted block can't blow up this
+              // card's height; scrolls internally instead.
+              className="field-sizing-fixed max-h-40 min-h-16 resize-y overflow-y-auto"
             />
           ) : (
             <button

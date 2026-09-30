@@ -79,7 +79,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </SidebarFooter>
       </Sidebar>
       <SidebarInset>
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/60 px-4">
+        {/*
+          min-h + flex-wrap (instead of a fixed h-14, nowrap) is a safety
+          net: the right-side group (open-trades banner + profile switcher)
+          is sized to fit a ~375px phone already, but this lets the row grow
+          to two lines instead of overflowing horizontally in any case that
+          isn't accounted for (a very high open-trade count, a long profile
+          name despite the truncate cap, an even narrower device, ...).
+        */}
+        <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-border/60 px-4 py-2">
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-5" />
           <span className="hidden text-sm text-muted-foreground sm:inline">Real-time pump.fun trader activity</span>

@@ -177,10 +177,13 @@ export default function WalletsPage() {
                   const negative = wallet.realizedPnlUsd < 0;
                   return (
                     <TableRow key={wallet._id} className="border-border/60">
-                      <TableCell className="pl-4">
-                        <Link href={`/wallets/${wallet._id}`} className="group inline-flex items-center gap-1 font-medium hover:text-primary">
-                          {wallet.name}
-                          <ArrowUpRight className="size-3.5 text-muted-foreground transition-colors group-hover:text-primary" />
+                      <TableCell className="max-w-3xs pl-4 sm:max-w-xs">
+                        <Link
+                          href={`/wallets/${wallet._id}`}
+                          className="group flex min-w-0 items-center gap-1 font-medium hover:text-primary"
+                        >
+                          <span className="truncate">{wallet.name}</span>
+                          <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
                         </Link>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">

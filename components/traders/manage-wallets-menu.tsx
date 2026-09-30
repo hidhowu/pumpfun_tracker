@@ -88,11 +88,11 @@ export function ManageWalletsMenu({ traderAddress }: { traderAddress: string }) 
               onCheckedChange={(checked) => toggle(wallet, checked)}
               className="justify-between"
             >
-              <span className="flex flex-col truncate">
+              <span className="flex min-w-0 flex-col">
                 <span className="truncate">{wallet.name}</span>
-                <span className="text-[11px] text-muted-foreground">{formatUsd(wallet.balanceUsd)} available</span>
+                <span className="truncate text-[11px] text-muted-foreground">{formatUsd(wallet.balanceUsd)} available</span>
               </span>
-              {pendingId === wallet._id && <Loader2 className="size-3 animate-spin" />}
+              {pendingId === wallet._id && <Loader2 className="size-3 shrink-0 animate-spin" />}
             </DropdownMenuCheckboxItem>
           ))
         )}

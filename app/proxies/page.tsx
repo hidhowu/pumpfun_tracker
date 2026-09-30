@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { addProxiesBulk, deleteProxiesBulk, deleteProxy, listProxies, testProxy, updateProxy } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/format";
 import type { ProxyView } from "@/lib/types";
@@ -129,7 +130,7 @@ function AddProxiesDialog({ onAdded }: { onAdded: () => void }) {
           Add proxies
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add proxies</DialogTitle>
           <DialogDescription>
@@ -147,7 +148,13 @@ function AddProxiesDialog({ onAdded }: { onAdded: () => void }) {
             placeholder={'http://user:pass@host1:port\nsocks5://host2:port\n\nor:\n{ "host": "1.2.3.4", "port": 8105, "username": "u", "password": "p" }'}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            className="min-h-32 font-mono text-sm"
+            // The base Textarea uses field-sizing:content (grows to fit
+            // whatever's pasted, in both directions, unbounded) - fine for a
+            // short chat-style input, broken for pasting a big bulk list:
+            // it pushes the dialog's own Cancel/Add buttons off-screen with
+            // no way to reach them. Same fix as add-trader-dialog.tsx's bulk
+            // tab: a fixed box that scrolls internally instead.
+            className="field-sizing-fixed h-40 max-h-40 resize-none overflow-x-hidden overflow-y-auto font-mono text-sm break-all whitespace-pre-wrap"
           />
         </div>
         <DialogFooter>
@@ -363,12 +370,31 @@ export default function ProxiesPage() {
                           aria-label={`Select ${proxy.url}`}
                         />
                       </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-0.5">
+                      <TableCell className="max-w-3xs sm:max-w-xs">
+                        {/*
+                          TableCell defaults to whitespace-nowrap with no
+                          width cap (components/ui/table.tsx) - a long
+                          single-line string here (like a raw curl error)
+                          otherwise has nothing to clip against, so the
+                          browser's table-layout:auto sizes the WHOLE COLUMN
+                          (and therefore the table) to fit it, which is what
+                          forced the outer horizontal scroll in the
+                          reported bug instead of the text truncating in
+                          its own cell. max-w on the cell + min-w-0 on the
+                          flex child are both required - the cap alone
+                          isn't enough, a flex item's default min-width:auto
+                          still lets it overflow its capped parent.
+                        */}
+                        <div className="flex min-w-0 flex-col gap-0.5">
                           <span className="truncate font-mono text-xs">{proxy.url}</span>
-                          {proxy.label ? <span className="text-xs text-muted-foreground">{proxy.label}</span> : null}
+                          {proxy.label ? <span className="truncate text-xs text-muted-foreground">{proxy.label}</span> : null}
                           {proxy.lastError ? (
-                            <span className="truncate text-[11px] text-negative/80">{proxy.lastError}</span>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="block truncate text-[11px] text-negative/80">{proxy.lastError}</span>
+                              </TooltipTrigger>
+                              <TooltipContent className="break-words">{proxy.lastError}</TooltipContent>
+                            </Tooltip>
                           ) : null}
                         </div>
                       </TableCell>

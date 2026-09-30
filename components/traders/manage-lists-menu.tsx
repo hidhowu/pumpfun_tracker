@@ -79,8 +79,8 @@ function ManageListsDialog({
             <p className="py-4 text-center text-sm text-muted-foreground">No lists yet.</p>
           ) : (
             lists.map((list) => (
-              <div key={list._id} className="flex items-center justify-between rounded-md px-2 py-1.5 hover:bg-muted/40">
-                <span className="truncate text-sm">
+              <div key={list._id} className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40">
+                <span className="min-w-0 truncate text-sm">
                   {list.name} <span className="text-xs text-muted-foreground">({list.memberCount})</span>
                 </span>
                 <AlertDialog>
@@ -206,8 +206,8 @@ export function ManageListsMenu({
                 onCheckedChange={(checked) => toggle(list, checked)}
                 className="justify-between"
               >
-                <span className="truncate">{list.name}</span>
-                {pendingListId === list._id && <Loader2 className="size-3 animate-spin" />}
+                <span className="min-w-0 truncate">{list.name}</span>
+                {pendingListId === list._id && <Loader2 className="size-3 shrink-0 animate-spin" />}
               </DropdownMenuCheckboxItem>
             ))
           )}

@@ -211,7 +211,7 @@ export function ProfileSwitcher() {
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm" className="gap-1.5">
-            <span className="max-w-[10rem] truncate">{currentProfile?.name ?? "Select profile"}</span>
+            <span className="max-w-[5rem] truncate sm:max-w-[10rem]">{currentProfile?.name ?? "Select profile"}</span>
             <ChevronsUpDown className="size-3.5 text-muted-foreground" />
           </Button>
         </DropdownMenuTrigger>

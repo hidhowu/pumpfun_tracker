@@ -126,15 +126,15 @@ export function WalletTradersTab({ walletId }: Props) {
                   const periodNegative = periodHasTrades && t.periodPnlUsd < 0;
                   return (
                     <TableRow key={t.traderAddress}>
-                      <TableCell>
+                      <TableCell className="max-w-3xs sm:max-w-xs">
                         <a
                           href={`/traders/${t.traderAddress}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 font-mono text-xs hover:text-primary"
+                          className="inline-flex min-w-0 items-center gap-1 font-mono text-xs hover:text-primary"
                         >
-                          {t.label || formatAddress(t.traderAddress, 6)}
-                          <ExternalLink className="size-3" />
+                          <span className="truncate">{t.label || formatAddress(t.traderAddress, 6)}</span>
+                          <ExternalLink className="size-3 shrink-0" />
                         </a>
                       </TableCell>
                       <TableCell className="text-right text-xs text-muted-foreground">{formatRelativeTime(t.addedAt)}</TableCell>

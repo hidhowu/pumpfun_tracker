@@ -37,8 +37,8 @@ export function PnlBreakdown({ address }: Props) {
 
   return (
     <Card className="border-border/60">
-      <CardHeader className="flex flex-row items-center justify-between">
-        <div>
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
           <CardTitle className="flex items-center gap-2 text-base">
             <LineChart className="size-4 text-primary" /> P&amp;L breakdown
           </CardTitle>
