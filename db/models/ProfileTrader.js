@@ -2,8 +2,10 @@ import mongoose from "mongoose";
 
 const { Schema, model, models } = mongoose;
 
-// See db/models/GlobalSettings.js for the field this mirrors.
+// See db/models/GlobalSettings.js for the field this mirrors, including why
+// _id is an explicit String rather than Mongoose's default ObjectId.
 const TrailingStopSchema = new Schema({
+  _id: { type: String, default: () => new mongoose.Types.ObjectId().toString() },
   armPercent: { type: Number, required: true },
   exitPercent: { type: Number, required: true },
 });

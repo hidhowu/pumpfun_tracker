@@ -10,6 +10,15 @@ const { Schema, model, models } = mongoose;
 // assigned _id so a position can track exactly which rules have armed for
 // it (db/simulation/executor.js), even if the rule list is edited later.
 const TrailingStopSchema = new Schema({
+  // Explicit String, not Mongoose's default auto-ObjectId _id: the editor
+  // (components/trailing-stops-editor.tsx) assigns a brand-new rule a
+  // client-side temp id like "new-<timestamp>-<n>" before it's ever saved,
+  // and that whole-list gets sent back on save. With the default ObjectId
+  // type, Mongoose tries to cast that string to a real ObjectId and throws
+  // (surfacing as a 500) - a plain String field accepts it as-is. Only ever
+  // compared as opaque text (SimPosition.armedTrailingStopIds), never needs
+  // to be a real ObjectId.
+  _id: { type: String, default: () => new mongoose.Types.ObjectId().toString() },
   armPercent: { type: Number, required: true },
   exitPercent: { type: Number, required: true },
 });

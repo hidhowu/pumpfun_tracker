@@ -2,14 +2,13 @@ import mongoose from "mongoose";
 
 const { Schema, model, models } = mongoose;
 
-// Same shape as db/models/GlobalSettings.js's TrailingStopSchema.
-const TrailingStopSchema = new Schema(
-  {
-    armPercent: { type: Number, required: true },
-    exitPercent: { type: Number, required: true },
-  },
-  { _id: true }
-);
+// Same shape as db/models/GlobalSettings.js's TrailingStopSchema, including
+// why _id is an explicit String rather than Mongoose's default ObjectId.
+const TrailingStopSchema = new Schema({
+  _id: { type: String, default: () => new mongoose.Types.ObjectId().toString() },
+  armPercent: { type: Number, required: true },
+  exitPercent: { type: Number, required: true },
+});
 
 /**
  * A Wallet is a SECOND, fully independent copy-trade simulation - not

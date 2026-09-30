@@ -350,13 +350,13 @@ export default function SettingsPage() {
 
           <NumberField
             id="riskCheckInterval"
-            label="Risk check interval"
+            label="Price check interval"
             suffix="sec"
             step={5}
             min={5}
             value={draft.riskCheckIntervalSeconds}
             onChange={(v) => set("riskCheckIntervalSeconds", v)}
-            description="How often the daemon re-checks every open position against stop-loss/take-profit/bench (minimum 5s). This is a system-wide cadence, not a per-trader setting - takes effect immediately, no restart needed."
+            description="How often the daemon fetches a fresh price for every open position and checks it against stop-loss/take-profit/bench (minimum 5s). This is the same call that hits pump.fun's API - a system-wide cadence, not a per-trader setting - takes effect immediately, no restart needed."
           />
 
           <Separator />
