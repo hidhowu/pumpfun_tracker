@@ -26,6 +26,12 @@ function deriveWsFromHttp(rpcUrls) {
   return rpcUrls.map((u) => u.replace(/^http/, "ws"));
 }
 
+// Gap between each address subscription, and how to back off when the
+// provider starts rejecting them (RPS limit) - see _doSyncWatchedFromDb.
+const WATCH_STAGGER_MS = 500;
+const WATCH_FAILURE_BACKOFF_MS = 2000;
+const WATCH_FAILURES_BEFORE_ABORT = 3;
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -235,30 +241,51 @@ export class TrackerService extends EventEmitter {
     const traders = await Trader.find({ status: "active" }, { address: 1, assignedRpcUrl: 1 }).lean();
     const desiredAddresses = new Set(traders.map((t) => t.address));
 
+    // One address at a time, strictly make-before-break: the address is
+    // subscribed on its new endpoint FIRST, and only once that has
+    // succeeded is it unsubscribed from the old one - so it is never
+    // unwatched anywhere while a trade could be landing on it. A failed
+    // watch (typically an RPS rate limit) leaves it exactly where it was
+    // and it is retried on the next sync pass; it's never dropped.
+    let consecutiveFailures = 0;
+    // Random order each pass, so a few persistently-failing addresses at
+    // the front can't use up every pass's failure budget and starve the rest.
+    for (let i = traders.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [traders[i], traders[j]] = [traders[j], traders[i]];
+    }
     for (const trader of traders) {
       const targetUrl = trader.assignedRpcUrl;
       if (!targetUrl || !this.subscribers.has(targetUrl)) continue; // unresolved - no active endpoint to place it on
       const targetSub = this.subscribers.get(targetUrl);
       if (targetSub.watchedAddresses().includes(trader.address)) continue; // already correctly placed
+      // Don't queue behind a dead connection (it would block this whole
+      // pass until the socket comes back) - it's retried next pass.
+      if (!targetSub.ws || targetSub.ws.readyState !== WebSocket.OPEN) continue;
 
-      await this.watch(trader.address, targetUrl).catch((err) => this.emit("error", err));
-      await sleep(200); // stagger so a burst of new/moved addresses doesn't spike RPS
+      try {
+        await this.watch(trader.address, targetUrl);
+        consecutiveFailures = 0;
+      } catch (err) {
+        this.emit("error", err);
+        consecutiveFailures += 1;
+        // Rate-limited: stop hammering the provider this pass. Everything
+        // not yet placed is retried on the next sync, still on its old endpoint.
+        if (consecutiveFailures >= WATCH_FAILURES_BEFORE_ABORT) break;
+        await sleep(WATCH_FAILURE_BACKOFF_MS);
+        continue;
+      }
+      await sleep(WATCH_STAGGER_MS);
 
-      // If it's still live on a different endpoint (a move, or a leftover
-      // inconsistency from a crash mid-move), clean that up too.
+      // Now safely live on the new endpoint - drop it from any other one.
       for (const [url, sub] of this.subscribers) {
         if (url === targetUrl || !sub.watchedAddresses().includes(trader.address)) continue;
         if (sub.ws && sub.ws.readyState === WebSocket.OPEN) {
           await this.unwatch(trader.address, url).catch((err) => this.emit("error", err));
         } else {
-          // That endpoint is currently disconnected (most likely why this
-          // address got moved off it in the first place - see
-          // db/rpcAssignment.js's stuck-endpoint exclusion). Sending
-          // logsUnsubscribe would just queue behind its reconnect, and if
-          // left tracked there it would get resubscribed to on the SAME
-          // endpoint it just moved away from once that finally reconnects -
-          // double-subscribed, once on each. Nothing to actually unsubscribe
-          // server-side anyway (the old socket already died) - just forget it locally.
+          // That endpoint is disconnected - nothing to unsubscribe
+          // server-side (the old socket already died); just forget it
+          // locally so it isn't resubscribed there on reconnect.
           sub.forget(trader.address);
         }
       }

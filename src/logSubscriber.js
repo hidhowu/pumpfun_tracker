@@ -16,7 +16,10 @@ const ERROR_WITHOUT_CLOSE_GRACE_MS = 2000;
 // is exactly what trips a provider's requests-per-second limit right when
 // the connection has just come back, matching the stagger already used for
 // the same reason in TrackerService's rebalance-apply loop.
-const RESUBSCRIBE_STAGGER_MS = 200;
+const RESUBSCRIBE_STAGGER_MS = 500;
+// A request that gets no answer (or waits on a connection that never comes
+// back) must fail rather than hang forever and block callers like the sync loop.
+const REQUEST_TIMEOUT_MS = 20000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -167,6 +170,18 @@ export class LogSubscriber extends EventEmitter {
   }
 
   async _send(method, params) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${method} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`)), REQUEST_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([this._sendOnce(method, params), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async _sendOnce(method, params) {
     await this._ensureOpen();
     return new Promise((resolve, reject) => {
       const id = this.nextRequestId++;
