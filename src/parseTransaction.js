@@ -11,6 +11,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 export const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
 export const WSOL_MINT = "So11111111111111111111111111111111111111112";
+export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+export const USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+// Every mint that represents "currency" rather than a real pump.fun token -
+// a pump.fun-amm pool can be quoted in any of these (not just SOL), and
+// occasionally a pool's base/quote sides are BOTH one of these (e.g. a
+// USDC<->USDT or SOL<->USDC swap that happens to route through a pump.fun-amm
+// pool) - see isKnownCurrencyMint below for how this is used.
+const KNOWN_CURRENCY_MINTS = new Set([SYSTEM_PROGRAM_ID, WSOL_MINT, USDC_MINT, USDT_MINT]);
+
+function isKnownCurrencyMint(mint) {
+  return !!mint && KNOWN_CURRENCY_MINTS.has(mint);
+}
 
 function usage() {
   console.log(
@@ -285,28 +297,58 @@ function buildSummaryEvents(tx, flatInstructions, programEvents, decodedInstruct
       });
     } else if (ev.name === "BuyEvent" || ev.name === "SellEvent") {
       const d = ev.data;
+      const isBuy = ev.name === "BuyEvent";
       // Prefer resolving via the event's own token accounts + this tx's
       // balance changes (robust to the triggering instruction failing to
       // decode); fall back to the decoded instruction's accounts if that
       // somehow comes up empty.
       const matchIx = findMatchingInstruction(decodedInstructions, ev.topLevelIndex, "pump.fun-amm", ["buy", "buy_exact_quote_in", "sell"]);
-      const mint =
+      const baseMint =
         resolveMintFromTokenAccount(tokenChanges, d.user_base_token_account) || matchIx?.accounts?.base_mint || null;
-      const quoteMint =
+      const resolvedQuoteMint =
         resolveMintFromTokenAccount(tokenChanges, d.user_quote_token_account) || matchIx?.accounts?.quote_mint || null;
+      const baseAmountRaw = isBuy ? (d.base_amount_out ?? null) : (d.base_amount_in ?? null);
+      // Bug fix: a SellEvent has no *_in field for the quote side (only
+      // quote_amount_out/user_quote_amount_out) - this used to always read
+      // quote_amount_in, which doesn't exist on a sell, so solAmount was
+      // silently null for every pump.fun-amm sell.
+      const quoteAmountRaw = isBuy
+        ? (d.quote_amount_in ?? d.user_quote_amount_in ?? null)
+        : (d.quote_amount_out ?? d.user_quote_amount_out ?? null);
+
+      // A pump.fun-amm pool isn't necessarily quoted in SOL - it can be
+      // quoted in USDC/USDT too, AND the "base"/"quote" labeling isn't
+      // guaranteed to put the real token on the base side. Two things to
+      // handle, per pool composition:
+      //  1. Both sides are known currencies (SOL/USDC/USDT, in any
+      //     combination) - this isn't a real pump.fun token trade at all,
+      //     just a currency swap that happened to route through a
+      //     pump.fun-amm pool. Skip it entirely - we don't copy-trade SOL/
+      //     USDC/USDT against each other.
+      //  2. The base side is a known currency but the quote side isn't -
+      //     labeling is inverted for our purposes; the REAL token is on the
+      //     quote side, and the currency actually spent/received is the
+      //     base side. Swap which side we treat as "the mint".
+      const baseIsCurrency = isKnownCurrencyMint(baseMint);
+      const quoteIsCurrency = isKnownCurrencyMint(resolvedQuoteMint);
+      if (baseIsCurrency && quoteIsCurrency) continue; // pure currency-to-currency swap - not a token trade, ignore
+
+      const mint = baseIsCurrency ? resolvedQuoteMint : baseMint;
+      const quoteMint = baseIsCurrency ? baseMint : resolvedQuoteMint;
+      const tokenAmountRaw = baseIsCurrency ? quoteAmountRaw : baseAmountRaw;
+      const currencyAmountRaw = baseIsCurrency ? baseAmountRaw : quoteAmountRaw;
+
       const decimals = findMintDecimals(tx, mint, 6);
       const isNativeSolQuote = quoteMint === WSOL_MINT;
-      const quoteAmountRaw = d.quote_amount_in ?? d.user_quote_amount_in ?? null;
-      const tokenAmountRaw = d.base_amount_out ?? d.base_amount_in ?? null;
       events.push({
         order: ev.topLevelIndex,
-        type: ev.name === "BuyEvent" ? "buy" : "sell",
+        type: isBuy ? "buy" : "sell",
         program: ev.program,
         wallet: d.user,
         mint,
         quoteMint,
         isNativeSolQuote,
-        solAmount: isNativeSolQuote && quoteAmountRaw !== null ? Number(quoteAmountRaw) / LAMPORTS_PER_SOL : null,
+        solAmount: isNativeSolQuote && currencyAmountRaw !== null ? Number(currencyAmountRaw) / LAMPORTS_PER_SOL : null,
         tokenAmount: tokenAmountRaw !== null ? Number(tokenAmountRaw) / 10 ** decimals : null,
         pool: d.pool || null,
         source: `event:${ev.name}`,
