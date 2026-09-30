@@ -17,7 +17,7 @@ const { Schema, model, models } = mongoose;
 const SystemSettingsSchema = new Schema({
   key: { type: String, default: "system", unique: true },
   defaultMuted: { type: Boolean, default: false },
-  riskCheckIntervalSeconds: { type: Number, default: 20 },
+  riskCheckIntervalSeconds: { type: Number, default: 5 },
 });
 
 export const SystemSettings = models.SystemSettings || model("SystemSettings", SystemSettingsSchema);

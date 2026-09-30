@@ -225,104 +225,106 @@ export async function processDueWalletExecutions() {
   return processed;
 }
 
-/** Wallet-scoped mirror of checkRiskExits - same peak/lowest tracking + stop-loss/take-profit/max-hold/trailing-stops logic, driven by each position's OWN wallet's flat settings (no per-profile settings resolution needed). */
+/**
+ * Wallet-scoped mirror of checkRiskExits - same peak/lowest tracking +
+ * stop-loss/take-profit/max-hold/trailing-stops logic, driven by each
+ * position's OWN wallet's flat settings (no per-profile settings resolution
+ * needed). Every position is checked concurrently, same reasoning as
+ * checkRiskExits: a sequential sweep over many open positions can take far
+ * longer than the configured check interval, and since this loop
+ * self-reschedules only after the full sweep finishes, that silently
+ * balloons the real gap between price samples - exactly how a genuine
+ * intra-trade peak/dip gets missed between checks.
+ */
 export async function checkWalletRiskExits() {
   const openPositions = await WalletPosition.find({ status: "open" });
-  let closedCount = 0;
-
   const walletCache = new Map();
-  for (const position of openPositions) {
-    const walletKey = String(position.walletId);
-    let wallet = walletCache.get(walletKey);
-    if (wallet === undefined) {
-      wallet = await Wallet.findById(position.walletId);
-      walletCache.set(walletKey, wallet ?? null);
-    }
-    if (!wallet) continue;
 
-    const coin = await getCoinInfo(position.mint).catch(() => null);
-    const price = priceFromCoinInfo(coin);
-    if (!price?.priceUsd) continue;
-
-    const currentValue = position.tokenAmount * price.priceUsd;
-    const totalCost = position.costBasisUsd + position.buyFeeUsd;
-    const { unrealizedUsd, unrealizedPercent } = computeUnrealized(currentValue, totalCost);
-
-    if (currentValue > position.maxValueUsd) {
-      await WalletPosition.updateOne(
-        { _id: position._id, status: "open" },
-        { $set: { maxValueUsd: currentValue, maxUnrealizedPnlUsd: unrealizedUsd, maxUnrealizedPnlPercent: unrealizedPercent } }
-      );
-      position.maxValueUsd = currentValue;
-    }
-    if (position.minValueUsd === null || currentValue < position.minValueUsd) {
-      await WalletPosition.updateOne(
-        { _id: position._id, status: "open" },
-        { $set: { minValueUsd: currentValue, minUnrealizedPnlUsd: unrealizedUsd, minUnrealizedPnlPercent: unrealizedPercent } }
-      );
-      position.minValueUsd = currentValue;
-    }
-
-    const settings = wallet.settings;
-    const hasStopLoss = settings.stopLossPercent !== null && settings.stopLossPercent !== undefined;
-    const hasTakeProfit = settings.takeProfitPercent !== null && settings.takeProfitPercent !== undefined;
-    const hasMaxHoldTime = !!settings.maxTradeTimeSeconds && settings.maxTradeTimeSeconds > 0;
-    const trailingStops = settings.trailingStops || [];
-    if (!hasStopLoss && !hasTakeProfit && !hasMaxHoldTime && trailingStops.length === 0) continue;
-
-    if (hasStopLoss && unrealizedPercent <= -Math.abs(settings.stopLossPercent)) {
-      const closed = await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "stop_loss", closeSignature: null });
-      if (closed) closedCount += 1;
-      continue;
-    }
-
-    if (hasTakeProfit && unrealizedPercent >= Math.abs(settings.takeProfitPercent)) {
-      const closed = await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "take_profit", closeSignature: null });
-      if (closed) closedCount += 1;
-      continue;
-    }
-
-    if (hasMaxHoldTime) {
-      const elapsedSeconds = (Date.now() - position.openedAt.getTime()) / 1000;
-      if (elapsedSeconds >= settings.maxTradeTimeSeconds) {
-        const closed = await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "max_hold_time", closeSignature: null });
-        if (closed) closedCount += 1;
-        continue;
+  const results = await Promise.all(
+    openPositions.map(async (position) => {
+      const walletKey = String(position.walletId);
+      let wallet = walletCache.get(walletKey);
+      if (wallet === undefined) {
+        wallet = await Wallet.findById(position.walletId);
+        walletCache.set(walletKey, wallet ?? null);
       }
-    }
+      if (!wallet) return false;
 
-    if (trailingStops.length > 0) {
-      const armedIds = new Set(position.armedTrailingStopIds.map(String));
-      let closedByTrailingStop = false;
-      for (const rule of trailingStops) {
-        const ruleId = String(rule._id);
-        if (!armedIds.has(ruleId)) {
-          if (unrealizedPercent >= rule.armPercent) {
-            await WalletPosition.updateOne({ _id: position._id, status: "open" }, { $addToSet: { armedTrailingStopIds: ruleId } });
-            logEvent(
-              "trade",
-              `[wallet] Trailing-stop armed on ${position.mint} for ${position.traderAddress} at +${unrealizedPercent.toFixed(1)}% (exits at ${rule.exitPercent}%)`,
-              {
-                meta: {
-                  walletId: String(position.walletId),
-                  traderAddress: position.traderAddress,
-                  mint: position.mint,
-                  unrealizedPercent,
-                  armPercent: rule.armPercent,
-                  exitPercent: rule.exitPercent,
-                },
-              }
-            );
-          }
-        } else if (unrealizedPercent <= rule.exitPercent) {
-          const closed = await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "trailing_stop", closeSignature: null });
-          if (closed) closedCount += 1;
-          closedByTrailingStop = true;
-          break;
+      const coin = await getCoinInfo(position.mint).catch(() => null);
+      const price = priceFromCoinInfo(coin);
+      if (!price?.priceUsd) return false;
+
+      const currentValue = position.tokenAmount * price.priceUsd;
+      const totalCost = position.costBasisUsd + position.buyFeeUsd;
+      const { unrealizedUsd, unrealizedPercent } = computeUnrealized(currentValue, totalCost);
+
+      if (currentValue > position.maxValueUsd) {
+        await WalletPosition.updateOne(
+          { _id: position._id, status: "open" },
+          { $set: { maxValueUsd: currentValue, maxUnrealizedPnlUsd: unrealizedUsd, maxUnrealizedPnlPercent: unrealizedPercent } }
+        );
+        position.maxValueUsd = currentValue;
+      }
+      if (position.minValueUsd === null || currentValue < position.minValueUsd) {
+        await WalletPosition.updateOne(
+          { _id: position._id, status: "open" },
+          { $set: { minValueUsd: currentValue, minUnrealizedPnlUsd: unrealizedUsd, minUnrealizedPnlPercent: unrealizedPercent } }
+        );
+        position.minValueUsd = currentValue;
+      }
+
+      const settings = wallet.settings;
+      const hasStopLoss = settings.stopLossPercent !== null && settings.stopLossPercent !== undefined;
+      const hasTakeProfit = settings.takeProfitPercent !== null && settings.takeProfitPercent !== undefined;
+      const hasMaxHoldTime = !!settings.maxTradeTimeSeconds && settings.maxTradeTimeSeconds > 0;
+      const trailingStops = settings.trailingStops || [];
+      if (!hasStopLoss && !hasTakeProfit && !hasMaxHoldTime && trailingStops.length === 0) return false;
+
+      if (hasStopLoss && unrealizedPercent <= -Math.abs(settings.stopLossPercent)) {
+        return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "stop_loss", closeSignature: null }));
+      }
+
+      if (hasTakeProfit && unrealizedPercent >= Math.abs(settings.takeProfitPercent)) {
+        return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "take_profit", closeSignature: null }));
+      }
+
+      if (hasMaxHoldTime) {
+        const elapsedSeconds = (Date.now() - position.openedAt.getTime()) / 1000;
+        if (elapsedSeconds >= settings.maxTradeTimeSeconds) {
+          return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "max_hold_time", closeSignature: null }));
         }
       }
-      if (closedByTrailingStop) continue;
-    }
-  }
-  return closedCount;
+
+      if (trailingStops.length > 0) {
+        const armedIds = new Set(position.armedTrailingStopIds.map(String));
+        for (const rule of trailingStops) {
+          const ruleId = String(rule._id);
+          if (!armedIds.has(ruleId)) {
+            if (unrealizedPercent >= rule.armPercent) {
+              await WalletPosition.updateOne({ _id: position._id, status: "open" }, { $addToSet: { armedTrailingStopIds: ruleId } });
+              logEvent(
+                "trade",
+                `[wallet] Trailing-stop armed on ${position.mint} for ${position.traderAddress} at +${unrealizedPercent.toFixed(1)}% (exits at ${rule.exitPercent}%)`,
+                {
+                  meta: {
+                    walletId: String(position.walletId),
+                    traderAddress: position.traderAddress,
+                    mint: position.mint,
+                    unrealizedPercent,
+                    armPercent: rule.armPercent,
+                    exitPercent: rule.exitPercent,
+                  },
+                }
+              );
+            }
+          } else if (unrealizedPercent <= rule.exitPercent) {
+            return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "trailing_stop", closeSignature: null }));
+          }
+        }
+      }
+      return false;
+    })
+  );
+
+  return results.filter(Boolean).length;
 }

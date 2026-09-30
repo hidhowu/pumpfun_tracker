@@ -460,7 +460,7 @@ export class TrackerService extends EventEmitter {
     let intervalSeconds = 20;
     try {
       const settings = await getSystemSettings();
-      intervalSeconds = Math.max(5, settings.riskCheckIntervalSeconds || 20);
+      intervalSeconds = Math.max(5, settings.riskCheckIntervalSeconds || 5);
     } catch (err) {
       this.emit("error", err);
     }
@@ -515,7 +515,7 @@ export class TrackerService extends EventEmitter {
     let intervalSeconds = 20;
     try {
       const settings = await getSystemSettings();
-      intervalSeconds = Math.max(5, settings.riskCheckIntervalSeconds || 20);
+      intervalSeconds = Math.max(5, settings.riskCheckIntervalSeconds || 5);
     } catch (err) {
       this.emit("error", err);
     }

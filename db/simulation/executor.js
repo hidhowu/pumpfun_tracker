@@ -301,109 +301,114 @@ export async function processDuePendingExecutions() {
  */
 export async function checkRiskExits() {
   const openPositions = await SimPosition.find({ status: "open" });
-  let closedCount = 0;
 
   const traderCache = new Map();
-  const settingsCache = new Map(); // `${profileId}:${traderAddress}` -> {profileTrader, settings}
-  for (const position of openPositions) {
-    let trader = traderCache.get(position.traderAddress);
-    if (trader === undefined) {
-      trader = await Trader.findOne({ address: position.traderAddress });
-      traderCache.set(position.traderAddress, trader ?? null);
-    }
-    if (!trader) continue;
+  const settingsCache = new Map(); // `${profileId}:${traderAddress}` -> resolved settings
 
-    const coin = await getCoinInfo(position.mint).catch(() => null);
-    const price = priceFromCoinInfo(coin);
-    if (!price?.priceUsd) continue;
-
-    const currentValue = position.tokenAmount * price.priceUsd;
-    const totalCost = position.costBasisUsd + position.buyFeeUsd;
-    const { unrealizedUsd, unrealizedPercent } = computeUnrealized(currentValue, totalCost);
-
-    if (currentValue > position.maxValueUsd) {
-      await SimPosition.updateOne(
-        { _id: position._id, status: "open" },
-        { $set: { maxValueUsd: currentValue, maxUnrealizedPnlUsd: unrealizedUsd, maxUnrealizedPnlPercent: unrealizedPercent } }
-      );
-      position.maxValueUsd = currentValue; // keep the in-memory copy consistent for the arm check below
-    }
-
-    if (position.minValueUsd === null || currentValue < position.minValueUsd) {
-      await SimPosition.updateOne(
-        { _id: position._id, status: "open" },
-        { $set: { minValueUsd: currentValue, minUnrealizedPnlUsd: unrealizedUsd, minUnrealizedPnlPercent: unrealizedPercent } }
-      );
-      position.minValueUsd = currentValue;
-    }
-
-    const cacheKey = `${position.profileId}:${position.traderAddress}`;
-    let settings = settingsCache.get(cacheKey);
-    if (!settings) {
-      const profileTrader = await ProfileTrader.findOne({ profileId: position.profileId, traderAddress: position.traderAddress });
-      settings = await resolveTraderSettings(position.profileId, position.traderAddress, { profileTrader });
-      settingsCache.set(cacheKey, settings);
-    }
-
-    const hasStopLoss = settings.stopLossPercent !== null && settings.stopLossPercent !== undefined;
-    const hasTakeProfit = settings.takeProfitPercent !== null && settings.takeProfitPercent !== undefined;
-    const hasMaxHoldTime = !!settings.maxTradeTimeSeconds && settings.maxTradeTimeSeconds > 0;
-    const trailingStops = settings.trailingStops || [];
-    if (!hasStopLoss && !hasTakeProfit && !hasMaxHoldTime && trailingStops.length === 0) continue;
-
-    if (hasStopLoss && unrealizedPercent <= -Math.abs(settings.stopLossPercent)) {
-      const closed = await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "stop_loss", closeSignature: null });
-      if (closed) closedCount += 1;
-      continue;
-    }
-
-    if (hasTakeProfit && unrealizedPercent >= Math.abs(settings.takeProfitPercent)) {
-      const closed = await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "take_profit", closeSignature: null });
-      if (closed) closedCount += 1;
-      continue;
-    }
-
-    if (hasMaxHoldTime) {
-      const elapsedSeconds = (Date.now() - position.openedAt.getTime()) / 1000;
-      if (elapsedSeconds >= settings.maxTradeTimeSeconds) {
-        const closed = await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "max_hold_time", closeSignature: null });
-        if (closed) closedCount += 1;
-        continue;
+  // Every position is checked concurrently (price lookup, peak/lowest
+  // update, and any resulting close) rather than one at a time - with many
+  // open positions across different mints, a sequential sweep can take far
+  // longer than the configured check interval, and since this loop
+  // self-reschedules only after the FULL sweep finishes, a slow sweep
+  // silently balloons the real gap between samples for every position in
+  // it, which is exactly how a genuine intra-trade peak/dip gets missed
+  // between checks. Running them concurrently bounds one sweep's wall-clock
+  // time to roughly the single slowest lookup instead of the sum of all of
+  // them. traderCache/settingsCache are best-effort under this concurrency -
+  // two positions for the same trader racing a cache miss just means one
+  // redundant lookup, never incorrect data.
+  const results = await Promise.all(
+    openPositions.map(async (position) => {
+      let trader = traderCache.get(position.traderAddress);
+      if (trader === undefined) {
+        trader = await Trader.findOne({ address: position.traderAddress });
+        traderCache.set(position.traderAddress, trader ?? null);
       }
-    }
+      if (!trader) return false;
 
-    if (trailingStops.length > 0) {
-      const armedIds = new Set(position.armedTrailingStopIds.map(String));
-      let closedByTrailingStop = false;
-      for (const rule of trailingStops) {
-        const ruleId = String(rule._id);
-        if (!armedIds.has(ruleId)) {
-          if (unrealizedPercent >= rule.armPercent) {
-            await SimPosition.updateOne({ _id: position._id, status: "open" }, { $addToSet: { armedTrailingStopIds: ruleId } });
-            logEvent(
-              "trade",
-              `Trailing-stop armed on ${position.mint} for ${position.traderAddress} at +${unrealizedPercent.toFixed(1)}% (exits at ${rule.exitPercent}%)`,
-              {
-                meta: {
-                  profileId: String(position.profileId),
-                  traderAddress: position.traderAddress,
-                  mint: position.mint,
-                  unrealizedPercent,
-                  armPercent: rule.armPercent,
-                  exitPercent: rule.exitPercent,
-                },
-              }
-            );
-          }
-        } else if (unrealizedPercent <= rule.exitPercent) {
-          const closed = await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "trailing_stop", closeSignature: null });
-          if (closed) closedCount += 1;
-          closedByTrailingStop = true;
-          break; // one close is enough - stop evaluating this position's other rules
+      const coin = await getCoinInfo(position.mint).catch(() => null);
+      const price = priceFromCoinInfo(coin);
+      if (!price?.priceUsd) return false;
+
+      const currentValue = position.tokenAmount * price.priceUsd;
+      const totalCost = position.costBasisUsd + position.buyFeeUsd;
+      const { unrealizedUsd, unrealizedPercent } = computeUnrealized(currentValue, totalCost);
+
+      if (currentValue > position.maxValueUsd) {
+        await SimPosition.updateOne(
+          { _id: position._id, status: "open" },
+          { $set: { maxValueUsd: currentValue, maxUnrealizedPnlUsd: unrealizedUsd, maxUnrealizedPnlPercent: unrealizedPercent } }
+        );
+        position.maxValueUsd = currentValue; // keep the in-memory copy consistent for the arm check below
+      }
+
+      if (position.minValueUsd === null || currentValue < position.minValueUsd) {
+        await SimPosition.updateOne(
+          { _id: position._id, status: "open" },
+          { $set: { minValueUsd: currentValue, minUnrealizedPnlUsd: unrealizedUsd, minUnrealizedPnlPercent: unrealizedPercent } }
+        );
+        position.minValueUsd = currentValue;
+      }
+
+      const cacheKey = `${position.profileId}:${position.traderAddress}`;
+      let settings = settingsCache.get(cacheKey);
+      if (!settings) {
+        const profileTrader = await ProfileTrader.findOne({ profileId: position.profileId, traderAddress: position.traderAddress });
+        settings = await resolveTraderSettings(position.profileId, position.traderAddress, { profileTrader });
+        settingsCache.set(cacheKey, settings);
+      }
+
+      const hasStopLoss = settings.stopLossPercent !== null && settings.stopLossPercent !== undefined;
+      const hasTakeProfit = settings.takeProfitPercent !== null && settings.takeProfitPercent !== undefined;
+      const hasMaxHoldTime = !!settings.maxTradeTimeSeconds && settings.maxTradeTimeSeconds > 0;
+      const trailingStops = settings.trailingStops || [];
+      if (!hasStopLoss && !hasTakeProfit && !hasMaxHoldTime && trailingStops.length === 0) return false;
+
+      if (hasStopLoss && unrealizedPercent <= -Math.abs(settings.stopLossPercent)) {
+        return !!(await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "stop_loss", closeSignature: null }));
+      }
+
+      if (hasTakeProfit && unrealizedPercent >= Math.abs(settings.takeProfitPercent)) {
+        return !!(await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "take_profit", closeSignature: null }));
+      }
+
+      if (hasMaxHoldTime) {
+        const elapsedSeconds = (Date.now() - position.openedAt.getTime()) / 1000;
+        if (elapsedSeconds >= settings.maxTradeTimeSeconds) {
+          return !!(await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "max_hold_time", closeSignature: null }));
         }
       }
-      if (closedByTrailingStop) continue;
-    }
-  }
-  return closedCount;
+
+      if (trailingStops.length > 0) {
+        const armedIds = new Set(position.armedTrailingStopIds.map(String));
+        for (const rule of trailingStops) {
+          const ruleId = String(rule._id);
+          if (!armedIds.has(ruleId)) {
+            if (unrealizedPercent >= rule.armPercent) {
+              await SimPosition.updateOne({ _id: position._id, status: "open" }, { $addToSet: { armedTrailingStopIds: ruleId } });
+              logEvent(
+                "trade",
+                `Trailing-stop armed on ${position.mint} for ${position.traderAddress} at +${unrealizedPercent.toFixed(1)}% (exits at ${rule.exitPercent}%)`,
+                {
+                  meta: {
+                    profileId: String(position.profileId),
+                    traderAddress: position.traderAddress,
+                    mint: position.mint,
+                    unrealizedPercent,
+                    armPercent: rule.armPercent,
+                    exitPercent: rule.exitPercent,
+                  },
+                }
+              );
+            }
+          } else if (unrealizedPercent <= rule.exitPercent) {
+            return !!(await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "trailing_stop", closeSignature: null }));
+          }
+        }
+      }
+      return false;
+    })
+  );
+
+  return results.filter(Boolean).length;
 }

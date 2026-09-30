@@ -4,7 +4,14 @@ import { getActiveProxyPool, recordProxyResult } from "./proxyService.js";
 
 const execFileAsync = promisify(execFile);
 
-const CACHE_TTL_MS = 15_000;
+// Matches SystemSettings.riskCheckIntervalSeconds' default (5s) - a longer
+// TTL than the check interval would mean most risk-check ticks just re-read
+// the same stale cached price instead of actually sampling a fresh one,
+// which is exactly how a real intra-trade peak/dip gets missed between
+// checks. Still valuable within that window: many open positions across
+// different traders/wallets holding the SAME hot mint in the same sweep
+// share one real call instead of one each.
+const CACHE_TTL_MS = 5_000;
 const cache = new Map(); // mint -> { data, expiresAt }
 // In-flight request coalescing: this module (and its cache above) is
 // already the single shared point every consumer in this process goes
