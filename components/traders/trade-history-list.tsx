@@ -100,6 +100,13 @@ function TradeDetailDialog({ position, onClose }: { position: SimPosition | null
   // - e.g. peaked at +100%, closed at +40% => "gave back 60 pts from peak".
   const givenBackPts =
     peakPercent != null && position.realizedPnlPercent !== null ? peakPercent - position.realizedPnlPercent : null;
+  const lowestPercent = position.minUnrealizedPnlPercent;
+  const lowestPositive = lowestPercent != null && lowestPercent > 0;
+  const lowestNegative = lowestPercent != null && lowestPercent < 0;
+  // How much it recovered from its lowest point by the time it actually
+  // closed - e.g. dipped to -50%, closed at +10% => "recovered 60 pts from the low".
+  const recoveredPts =
+    lowestPercent != null && position.realizedPnlPercent !== null ? position.realizedPnlPercent - lowestPercent : null;
 
   return (
     <Dialog open={!!position} onOpenChange={(open) => !open && onClose()}>
@@ -171,6 +178,30 @@ function TradeDetailDialog({ position, onClose }: { position: SimPosition | null
           {givenBackPts !== null && givenBackPts > 0.5 && (
             <p className="text-right text-[11px] text-muted-foreground">
               Gave back {givenBackPts.toFixed(1)} pts from peak before closing
+            </p>
+          )}
+
+          <DetailRow
+            label={
+              <span className="inline-flex items-center gap-1.5">
+                <Gauge className="size-3.5 text-muted-foreground" /> Lowest (before close)
+              </span>
+            }
+            value={
+              lowestPercent != null ? (
+                <span className="inline-flex flex-col items-end">
+                  <span>{formatUsd(position.minUnrealizedPnlUsd)}</span>
+                  <span className="text-[11px] opacity-80">{lowestPercent.toFixed(1)}%</span>
+                </span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )
+            }
+            className={lowestPositive ? "text-positive" : lowestNegative ? "text-negative" : undefined}
+          />
+          {recoveredPts !== null && recoveredPts > 0.5 && (
+            <p className="text-right text-[11px] text-muted-foreground">
+              Recovered {recoveredPts.toFixed(1)} pts from its low before closing
             </p>
           )}
 
@@ -268,6 +299,7 @@ export function TradeHistoryList({ address }: Props) {
                   <TableHead>Mint</TableHead>
                   <TableHead className="text-right">Realized P&amp;L</TableHead>
                   <TableHead className="text-right">Peak</TableHead>
+                  <TableHead className="text-right">Lowest</TableHead>
                   <TableHead>Closed by</TableHead>
                   <TableHead className="text-right">Closed</TableHead>
                 </TableRow>
@@ -279,6 +311,9 @@ export function TradeHistoryList({ address }: Props) {
                   const peakPercent = position.maxUnrealizedPnlPercent;
                   const peakPositive = peakPercent != null && peakPercent > 0;
                   const peakNegative = peakPercent != null && peakPercent < 0;
+                  const lowestPercent = position.minUnrealizedPnlPercent;
+                  const lowestPositive = lowestPercent != null && lowestPercent > 0;
+                  const lowestNegative = lowestPercent != null && lowestPercent < 0;
                   return (
                     <TableRow
                       key={position._id}
@@ -319,6 +354,21 @@ export function TradeHistoryList({ address }: Props) {
                         >
                           <Gauge className="size-3 opacity-70" />
                           {peakPercent != null ? `${peakPercent.toFixed(1)}%` : "—"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <span
+                          className={[
+                            "inline-flex items-center justify-end gap-1",
+                            lowestPositive && "text-positive",
+                            lowestNegative && "text-negative",
+                            lowestPercent == null && "text-muted-foreground",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                        >
+                          <Gauge className="size-3 opacity-70" />
+                          {lowestPercent != null ? `${lowestPercent.toFixed(1)}%` : "—"}
                         </span>
                       </TableCell>
                       <TableCell>

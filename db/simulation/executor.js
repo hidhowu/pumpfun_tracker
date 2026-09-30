@@ -104,6 +104,9 @@ async function executeBuy(pending) {
       maxValueUsd: spendUsd,
       maxUnrealizedPnlUsd: initialUnrealized.unrealizedUsd,
       maxUnrealizedPnlPercent: initialUnrealized.unrealizedPercent,
+      minValueUsd: spendUsd,
+      minUnrealizedPnlUsd: initialUnrealized.unrealizedUsd,
+      minUnrealizedPnlPercent: initialUnrealized.unrealizedPercent,
     });
   } catch (err) {
     // Unique index on (profileId, traderAddress, mint) where status="open" -
@@ -161,6 +164,7 @@ async function closePosition(positionId, { priceUsd, feeUsd, closeReason, closeS
   // between two risk-check ticks).
   const closeUnrealized = computeUnrealized(proceedsUsd, totalCost);
   const peakIsNow = proceedsUsd > position.maxValueUsd;
+  const troughIsNow = position.minValueUsd === null || proceedsUsd < position.minValueUsd;
 
   const updated = await SimPosition.findOneAndUpdate(
     { _id: positionId, status: "open" }, // the actual race guard - see comment above
@@ -180,6 +184,13 @@ async function closePosition(positionId, { priceUsd, feeUsd, closeReason, closeS
               maxValueUsd: proceedsUsd,
               maxUnrealizedPnlUsd: closeUnrealized.unrealizedUsd,
               maxUnrealizedPnlPercent: closeUnrealized.unrealizedPercent,
+            }
+          : {}),
+        ...(troughIsNow
+          ? {
+              minValueUsd: proceedsUsd,
+              minUnrealizedPnlUsd: closeUnrealized.unrealizedUsd,
+              minUnrealizedPnlPercent: closeUnrealized.unrealizedPercent,
             }
           : {}),
       },
@@ -316,6 +327,14 @@ export async function checkRiskExits() {
         { $set: { maxValueUsd: currentValue, maxUnrealizedPnlUsd: unrealizedUsd, maxUnrealizedPnlPercent: unrealizedPercent } }
       );
       position.maxValueUsd = currentValue; // keep the in-memory copy consistent for the arm check below
+    }
+
+    if (position.minValueUsd === null || currentValue < position.minValueUsd) {
+      await SimPosition.updateOne(
+        { _id: position._id, status: "open" },
+        { $set: { minValueUsd: currentValue, minUnrealizedPnlUsd: unrealizedUsd, minUnrealizedPnlPercent: unrealizedPercent } }
+      );
+      position.minValueUsd = currentValue;
     }
 
     const cacheKey = `${position.profileId}:${position.traderAddress}`;

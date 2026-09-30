@@ -16,6 +16,7 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
+  History,
 } from "lucide-react";
 import {
   Table,
@@ -45,7 +46,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import type { Trader } from "@/lib/types";
-import { formatAddress, formatRelativeTime, formatUsd } from "@/lib/format";
+import { formatAddress, formatRelativeTime, formatSol, formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type TraderTableProps = {
@@ -65,7 +66,9 @@ type SortKey =
   | "balance"
   | "value"
   | "combinedPnl"
-  | "lastActive";
+  | "lastActive"
+  | "lifetimeTrades"
+  | "lifetimePnl";
 type SortDir = "asc" | "desc";
 
 const SORT_ACCESSORS: Record<SortKey, (t: Trader) => number | string> = {
@@ -77,6 +80,9 @@ const SORT_ACCESSORS: Record<SortKey, (t: Trader) => number | string> = {
   value: (t) => t.walletValueUsd,
   combinedPnl: (t) => (t.today.closedTradeCount > 0 ? t.today.combinedPercent : -Infinity),
   lastActive: (t) => (t.sim.lastActionAt ? new Date(t.sim.lastActionAt).getTime() : -Infinity),
+  // The tracked wallet's own lifetime on-chain stats - not our simulation.
+  lifetimeTrades: (t) => t.stats.tradeCount,
+  lifetimePnl: (t) => t.stats.realizedPnlSol,
 };
 
 function SortableHead({
@@ -239,6 +245,8 @@ export function TraderTable({
                 )}
               </button>
             </TableHead>
+            <SortableHead label="Lifetime Trades" sortKey="lifetimeTrades" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+            <SortableHead label="Lifetime PnL" sortKey="lifetimePnl" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
             <SortableHead label="Active Trades" sortKey="activeTrades" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
             <SortableHead label="Daily PnL (Actualized)" sortKey="dailyPnl" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
             <SortableHead label="Daily Win Rate" sortKey="winRate" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
@@ -255,7 +263,7 @@ export function TraderTable({
             traders.length === 0 &&
             Array.from({ length: 4 }).map((_, i) => (
               <TableRow key={`skeleton-${i}`} className="border-border/60">
-                <TableCell colSpan={10} className="h-14">
+                <TableCell colSpan={12} className="h-14">
                   <div className="h-4 w-full animate-pulse rounded bg-muted" />
                 </TableCell>
               </TableRow>
@@ -275,6 +283,8 @@ export function TraderTable({
                     <div className="flex items-center gap-1.5">
                       <Link
                         href={`/traders/${trader.address}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className="group flex items-center gap-1 font-mono text-sm text-foreground hover:text-primary"
                       >
                         {formatAddress(trader.address, 5)}
@@ -297,6 +307,32 @@ export function TraderTable({
                       <span className="text-xs text-muted-foreground">{trader.label}</span>
                     ) : null}
                   </div>
+                </TableCell>
+
+                <TableCell className="text-right font-mono text-sm">
+                  <span className="inline-flex items-center justify-end gap-1 text-muted-foreground">
+                    <History className="size-3.5" />
+                    {trader.stats.tradeCount}
+                  </span>
+                </TableCell>
+
+                <TableCell className="text-right font-mono text-sm">
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1",
+                      trader.stats.realizedPnlSol > 0 && "text-positive",
+                      trader.stats.realizedPnlSol < 0 && "text-negative"
+                    )}
+                  >
+                    {trader.stats.realizedPnlSol > 0 ? (
+                      <TrendingUp className="size-3.5" />
+                    ) : trader.stats.realizedPnlSol < 0 ? (
+                      <TrendingDown className="size-3.5" />
+                    ) : (
+                      <Minus className="size-3.5 text-muted-foreground" />
+                    )}
+                    {formatSol(trader.stats.realizedPnlSol)}
+                  </span>
                 </TableCell>
 
                 <TableCell className="text-right font-mono text-sm">

@@ -1,20 +1,84 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowUpRight, Flame, Minus, Snowflake, Trophy, TrendingDown, TrendingUp } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  ArrowUpRight,
+  Flame,
+  Minus,
+  ShieldBan,
+  Snowflake,
+  Trophy,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getLeaderboard } from "@/lib/api";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { getLeaderboard, updateTrader } from "@/lib/api";
 import { useProfile } from "@/lib/profile-context";
 import { formatAddress, formatUsd } from "@/lib/format";
 import type { LeaderboardEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Period = "day" | "week" | "month";
+type SortKey = "combinedPercent" | "actualizedUsd" | "closedTradeCount";
+type SortDir = "asc" | "desc";
+
+const SORT_ACCESSORS: Record<SortKey, (e: LeaderboardEntry) => number> = {
+  combinedPercent: (e) => e.combinedPercent,
+  actualizedUsd: (e) => e.actualizedUsd ?? -Infinity,
+  closedTradeCount: (e) => e.closedTradeCount,
+};
+
+function SortableHead({
+  label,
+  sortKey,
+  activeKey,
+  dir,
+  onSort,
+}: {
+  label: string;
+  sortKey: SortKey;
+  activeKey: SortKey | null;
+  dir: SortDir;
+  onSort: (key: SortKey) => void;
+}) {
+  const isActive = activeKey === sortKey;
+  const Icon = isActive ? (dir === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
+  return (
+    <TableHead className="text-right">
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={cn(
+          "inline-flex flex-row-reverse items-center gap-1 text-xs font-medium uppercase tracking-wide transition-colors hover:text-foreground",
+          isActive ? "text-foreground" : "text-muted-foreground"
+        )}
+      >
+        {label}
+        <Icon className={cn("size-3", !isActive && "opacity-40")} />
+      </button>
+    </TableHead>
+  );
+}
 
 const RANK_STYLES: Record<number, string> = {
   0: "bg-amber-400/15 text-amber-400 border-amber-400/30",
@@ -57,6 +121,9 @@ export default function LeaderboardPage() {
   const [period, setPeriod] = useState<Period>("week");
   const [entries, setEntries] = useState<LeaderboardEntry[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [pendingAddress, setPendingAddress] = useState<string | null>(null);
 
   const refresh = useCallback(
     async (p: Period) => {
@@ -77,6 +144,37 @@ export default function LeaderboardPage() {
   useEffect(() => {
     refresh(period);
   }, [period, refresh]);
+
+  function handleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc"); // every leaderboard column reads naturally highest-first
+    }
+  }
+
+  const sortedEntries = useMemo(() => {
+    if (!entries || !sortKey) return entries;
+    const accessor = SORT_ACCESSORS[sortKey];
+    const sorted = [...entries].sort((a, b) => accessor(a) - accessor(b));
+    if (sortDir === "desc") sorted.reverse();
+    return sorted;
+  }, [entries, sortKey, sortDir]);
+
+  async function handleBlacklist(address: string) {
+    if (!currentProfileId) return;
+    setPendingAddress(address);
+    try {
+      await updateTrader(currentProfileId, address, { status: "blacklisted" });
+      toast.success("Trader blacklisted");
+      await refresh(period);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to blacklist trader");
+    } finally {
+      setPendingAddress(null);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -119,14 +217,15 @@ export default function LeaderboardPage() {
                 <TableRow className="border-border/60 hover:bg-transparent">
                   <TableHead className="w-12 pl-4">Rank</TableHead>
                   <TableHead>Trader</TableHead>
-                  <TableHead className="text-right">Combined P&amp;L</TableHead>
-                  <TableHead className="text-right">Actualized P&amp;L</TableHead>
-                  <TableHead className="text-right">Closed trades</TableHead>
-                  <TableHead className="pr-4">Streak</TableHead>
+                  <SortableHead label="Combined P&L" sortKey="combinedPercent" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+                  <SortableHead label="Actualized P&L" sortKey="actualizedUsd" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+                  <SortableHead label="Closed trades" sortKey="closedTradeCount" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+                  <TableHead>Streak</TableHead>
+                  <TableHead className="pr-4 text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {entries.map((entry, i) => {
+                {(sortedEntries ?? []).map((entry, i) => {
                   const positive = entry.combinedPercent > 0;
                   const negative = entry.combinedPercent < 0;
                   return (
@@ -138,6 +237,8 @@ export default function LeaderboardPage() {
                         <div className="flex flex-col gap-0.5">
                           <Link
                             href={`/traders/${entry.address}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="group flex items-center gap-1 font-mono text-sm hover:text-primary"
                           >
                             {formatAddress(entry.address, 5)}
@@ -175,8 +276,42 @@ export default function LeaderboardPage() {
                         </span>
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm">{entry.closedTradeCount}</TableCell>
-                      <TableCell className="pr-4">
+                      <TableCell>
                         <StreakBadge streak={entry.streaks.currentStreak} />
+                      </TableCell>
+                      <TableCell className="pr-4 text-right">
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={pendingAddress === entry.address}
+                              className="text-muted-foreground hover:text-negative"
+                            >
+                              <ShieldBan className="size-4" />
+                              Blacklist
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Blacklist this trader?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                {formatAddress(entry.address, 6)} will stop being tracked - no new trades will be
+                                recorded while blacklisted. All of their existing history stays visible under
+                                Blacklisted, and you can unblacklist them anytime to resume tracking.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                className="bg-negative text-negative-foreground hover:bg-negative/90"
+                                onClick={() => handleBlacklist(entry.address)}
+                              >
+                                Blacklist
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
                       </TableCell>
                     </TableRow>
                   );

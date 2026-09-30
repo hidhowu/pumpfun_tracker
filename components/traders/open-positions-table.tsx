@@ -61,6 +61,7 @@ export function OpenPositionsTable({ address, refreshKey }: Props) {
                   <TableHead className="text-right">Current value</TableHead>
                   <TableHead className="text-right">Unrealized P&amp;L</TableHead>
                   <TableHead className="text-right">Peak</TableHead>
+                  <TableHead className="text-right">Lowest</TableHead>
                   <TableHead className="text-right">Opened</TableHead>
                 </TableRow>
               </TableHeader>
@@ -126,6 +127,24 @@ export function OpenPositionsTable({ address, refreshKey }: Props) {
                           >
                             <Gauge className="size-3.5 opacity-70" />
                             {position.maxUnrealizedPnlPercent.toFixed(1)}%
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {position.minUnrealizedPnlPercent == null ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <span
+                            className={[
+                              "inline-flex items-center justify-end gap-1",
+                              position.minUnrealizedPnlPercent > 0 && "text-positive",
+                              position.minUnrealizedPnlPercent < 0 && "text-negative",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                          >
+                            <Gauge className="size-3.5 opacity-70" />
+                            {position.minUnrealizedPnlPercent.toFixed(1)}%
                           </span>
                         )}
                       </TableCell>

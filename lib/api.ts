@@ -3,7 +3,10 @@ import type {
   GlobalSettings,
   LeaderboardEntry,
   PnlBreakdown,
+  HttpRpcEndpointView,
+  OpenPositionWithTrader,
   Profile,
+  ProxyView,
   RpcEndpointAddress,
   RpcEndpointView,
   SimPosition,
@@ -85,6 +88,11 @@ export function getPositions(
 
 export function getPnl(profileId: string, address: string, period: "day" | "week" | "month" = "week"): Promise<PnlBreakdown> {
   return request(`/api/traders/${address}/pnl?profileId=${profileId}&period=${period}`);
+}
+
+/** Every open position across every tracked trader, within one profile - not scoped to a single trader like getPositions. */
+export function getAllOpenPositions(profileId: string): Promise<{ positions: OpenPositionWithTrader[]; total: number }> {
+  return request(`/api/positions/open?profileId=${profileId}`);
 }
 
 export function adjustBalance(
@@ -181,4 +189,49 @@ export function reconnectRpcEndpoint(id: string): Promise<{ command: { status: s
 
 export function getRpcEndpointAddresses(id: string): Promise<{ addresses: RpcEndpointAddress[] }> {
   return request(`/api/rpc/${id}/addresses`);
+}
+
+export function listHttpRpcEndpoints(): Promise<{ endpoints: HttpRpcEndpointView[] }> {
+  return request(`/api/http-rpc`);
+}
+
+export function addHttpRpcEndpoint(url: string, label?: string): Promise<{ endpoint: HttpRpcEndpointView }> {
+  return request(`/api/http-rpc`, { method: "POST", body: JSON.stringify({ url, label }) });
+}
+
+export function updateHttpRpcEndpoint(
+  id: string,
+  patch: Partial<{ label: string; enabled: boolean }>
+): Promise<{ endpoint: HttpRpcEndpointView }> {
+  return request(`/api/http-rpc/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+}
+
+export function deleteHttpRpcEndpoint(id: string): Promise<{ deleted: true }> {
+  return request(`/api/http-rpc/${id}`, { method: "DELETE" });
+}
+
+export function listProxies(): Promise<{ proxies: ProxyView[] }> {
+  return request(`/api/proxies`);
+}
+
+/** Bulk add - one proxy URL per entry. Duplicates/invalid entries are reported back, never an error. */
+export function addProxiesBulk(urls: string[]): Promise<{ added: string[]; skipped: string[]; invalid: string[] }> {
+  return request(`/api/proxies`, { method: "POST", body: JSON.stringify({ urls }) });
+}
+
+export function updateProxy(id: string, patch: Partial<{ label: string; enabled: boolean }>): Promise<{ proxy: ProxyView }> {
+  return request(`/api/proxies/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+}
+
+export function deleteProxy(id: string): Promise<{ deleted: true }> {
+  return request(`/api/proxies/${id}`, { method: "DELETE" });
+}
+
+export function deleteProxiesBulk(ids: string[]): Promise<{ deletedCount: number }> {
+  return request(`/api/proxies/bulk-delete`, { method: "POST", body: JSON.stringify({ ids }) });
+}
+
+/** Live connectivity check through this one proxy - a pass also un-blacklists it. */
+export function testProxy(id: string): Promise<{ ok: boolean; error: string | null; proxy: ProxyView }> {
+  return request(`/api/proxies/${id}/test`, { method: "POST" });
 }

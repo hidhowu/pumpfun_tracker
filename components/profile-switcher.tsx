@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Check, ChevronsUpDown, Loader2, Plus } from "lucide-react";
+import { Check, ChevronsUpDown, Loader2, Plus, Trash2 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,8 +17,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useProfile } from "@/lib/profile-context";
-import { createProfile } from "@/lib/api";
+import { createProfile, deleteProfile } from "@/lib/api";
+import type { Profile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function CreateProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -132,9 +143,64 @@ function CreateProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   );
 }
 
+function DeleteProfileDialog({ profile, onOpenChange }: { profile: Profile | null; onOpenChange: (open: boolean) => void }) {
+  const { profiles, currentProfileId, refresh, setCurrentProfileId } = useProfile();
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleDelete() {
+    if (!profile) return;
+    setSubmitting(true);
+    try {
+      await deleteProfile(profile._id);
+      toast.success(`Profile "${profile.name}" deleted`);
+      // Default can never be the one just deleted (the backend rejects
+      // that) - always exists as a safe fallback if we were looking at the
+      // now-deleted profile.
+      if (currentProfileId === profile._id) {
+        const defaultProfile = profiles.find((p) => p.isDefault);
+        if (defaultProfile) setCurrentProfileId(defaultProfile._id);
+      }
+      await refresh();
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete profile");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <AlertDialog open={!!profile} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete &quot;{profile?.name}&quot;?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This permanently deletes this profile&apos;s settings and every simulated trade/position under it. The
+            tracked wallets themselves and their real on-chain history are untouched - this only removes this
+            profile&apos;s own simulated strategy state.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-negative text-negative-foreground hover:bg-negative/90"
+            disabled={submitting}
+            onClick={handleDelete}
+          >
+            {submitting && <Loader2 className="size-4 animate-spin" />}
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 export function ProfileSwitcher() {
   const { profiles, currentProfile, currentProfileId, setCurrentProfileId, loading } = useProfile();
+  const [menuOpen, setMenuOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Profile | null>(null);
 
   if (loading) {
     return <div className="h-8 w-36 animate-pulse rounded-md bg-muted" />;
@@ -142,7 +208,7 @@ export function ProfileSwitcher() {
 
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm" className="gap-1.5">
             <span className="max-w-[10rem] truncate">{currentProfile?.name ?? "Select profile"}</span>
@@ -152,12 +218,49 @@ export function ProfileSwitcher() {
         <DropdownMenuContent align="start" className="w-56">
           <DropdownMenuLabel>Profiles</DropdownMenuLabel>
           <DropdownMenuSeparator />
-          {profiles.map((profile) => (
-            <DropdownMenuItem key={profile._id} onClick={() => setCurrentProfileId(profile._id)} className="justify-between">
-              <span className="truncate">{profile.name}</span>
-              {profile._id === currentProfileId && <Check className="size-3.5 text-primary" />}
-            </DropdownMenuItem>
-          ))}
+          {profiles.map((profile) => {
+            // Deleting is only offered when it's actually possible (the
+            // backend also enforces both of these - this just avoids
+            // showing an action that's guaranteed to fail).
+            const canDelete = !profile.isDefault && profiles.length > 1;
+            return (
+              <DropdownMenuItem
+                key={profile._id}
+                // Prevents Radix's default "select and close" for this item
+                // - required so the nested delete button's own click can be
+                // handled separately without the menu closing first. The
+                // "switch profile" action below closes the menu itself.
+                onSelect={(e) => e.preventDefault()}
+                className="justify-between gap-2"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCurrentProfileId(profile._id);
+                    setMenuOpen(false);
+                  }}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                >
+                  <span className="truncate">{profile.name}</span>
+                  {profile._id === currentProfileId && <Check className="size-3.5 shrink-0 text-primary" />}
+                </button>
+                {canDelete && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMenuOpen(false);
+                      setDeleteTarget(profile);
+                    }}
+                    className="shrink-0 text-muted-foreground transition-colors hover:text-negative"
+                    aria-label={`Delete ${profile.name}`}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </DropdownMenuItem>
+            );
+          })}
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => setCreateOpen(true)} className="gap-1.5">
             <Plus className="size-3.5" /> Create new profile
@@ -165,6 +268,7 @@ export function ProfileSwitcher() {
         </DropdownMenuContent>
       </DropdownMenu>
       <CreateProfileDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <DeleteProfileDialog profile={deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)} />
     </>
   );
 }

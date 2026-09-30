@@ -39,6 +39,19 @@ const SimPositionSchema = new Schema({
   maxUnrealizedPnlUsd: { type: Number, required: true },
   maxUnrealizedPnlPercent: { type: Number, required: true },
 
+  // Trough (max adverse excursion) reached at any point while open, same
+  // sampling as the peak tracker above (risk-check interval + the closing
+  // price as one final sample) - answers "it eventually recovered to +10%,
+  // but how far underwater did it go first?" Defaulted to null (not
+  // required) rather than mirroring the max fields' `required: true`,
+  // specifically so existing SimPosition documents that predate this field
+  // don't need a backfill migration - same nullable-end-to-end convention
+  // already documented on the max fields in lib/types.ts for exactly this
+  // .lean()-reads-skip-defaults reason.
+  minValueUsd: { type: Number, default: null },
+  minUnrealizedPnlUsd: { type: Number, default: null },
+  minUnrealizedPnlPercent: { type: Number, default: null },
+
   // Sell side (set when closed)
   closedAt: { type: Date, default: null },
   // "bench" is kept only so pre-existing closed positions (from before the

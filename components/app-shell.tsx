@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Radar, ShieldBan, Settings, Activity, Trophy, ScrollText, Router } from "lucide-react";
+import { Radar, ShieldBan, Settings, Activity, Trophy, ScrollText, Router, Shuffle } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -20,12 +20,14 @@ import {
 } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { ProfileSwitcher } from "@/components/profile-switcher";
+import { OpenTradesBanner } from "@/components/open-trades-banner";
 
 const NAV_ITEMS = [
   { href: "/", label: "Traders", icon: Radar },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
   { href: "/blacklisted", label: "Blacklisted", icon: ShieldBan },
   { href: "/rpc", label: "RPC", icon: Router },
+  { href: "/proxies", label: "Proxies", icon: Shuffle },
   { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
@@ -80,7 +82,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-5" />
           <span className="hidden text-sm text-muted-foreground sm:inline">Real-time pump.fun trader activity</span>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <OpenTradesBanner />
             <ProfileSwitcher />
           </div>
         </header>

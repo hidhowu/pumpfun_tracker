@@ -13,8 +13,10 @@ import {
   Trash2,
   Wifi,
   WifiOff,
+  Zap,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -42,16 +44,21 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
+  addHttpRpcEndpoint,
   addRpcEndpoint,
+  deleteHttpRpcEndpoint,
   deleteRpcEndpoint,
   getRpcEndpointAddresses,
+  listHttpRpcEndpoints,
   listRpcEndpoints,
   reconnectRpcEndpoint,
+  updateHttpRpcEndpoint,
   updateRpcEndpoint,
 } from "@/lib/api";
 import { formatAddress, formatRelativeTime } from "@/lib/format";
-import type { RpcEndpointAddress, RpcEndpointView } from "@/lib/types";
+import type { HttpRpcEndpointView, RpcEndpointAddress, RpcEndpointView } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function StatusBadge({ status }: { status: RpcEndpointView["status"] }) {
@@ -150,6 +157,223 @@ function AddRpcDialog({ onAdded }: { onAdded: () => void }) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function AddHttpRpcDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState("");
+  const [label, setLabel] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit() {
+    if (!url.trim()) {
+      toast.error("Enter an HTTP RPC URL");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await addHttpRpcEndpoint(url.trim(), label.trim() || undefined);
+      toast.success("HTTP RPC endpoint added");
+      setUrl("");
+      setLabel("");
+      setOpen(false);
+      onAdded();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to add HTTP RPC endpoint");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" className="gap-1.5">
+          <Plus className="size-4" />
+          Add HTTP RPC
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add an HTTP RPC endpoint</DialogTitle>
+          <DialogDescription>
+            Round-robinned for every non-websocket Solana RPC call (getTransaction, etc) - separate from the
+            WebSocket endpoints above, which are only used for live log subscriptions.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="http-rpc-url">HTTP URL</Label>
+            <Input
+              id="http-rpc-url"
+              placeholder="https://your-provider.example.com/v2/..."
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              className="font-mono text-sm"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="http-rpc-label">Label (optional)</Label>
+            <Input id="http-rpc-label" placeholder="e.g. Alchemy #2" value={label} onChange={(e) => setLabel(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost">Cancel</Button>
+          </DialogClose>
+          <Button onClick={handleSubmit} disabled={submitting}>
+            {submitting && <Loader2 className="size-4 animate-spin" />}
+            Add endpoint
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function HttpRpcSection() {
+  const [endpoints, setEndpoints] = useState<HttpRpcEndpointView[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+
+  const refresh = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
+    try {
+      const { endpoints } = await listHttpRpcEndpoints();
+      setEndpoints(endpoints);
+    } catch (e) {
+      if (!silent) toast.error(e instanceof Error ? e.message : "Failed to load HTTP RPC endpoints");
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const interval = setInterval(() => refresh({ silent: true }), 15000);
+    return () => clearInterval(interval);
+  }, [refresh]);
+
+  async function handleToggleEnabled(endpoint: HttpRpcEndpointView, enabled: boolean) {
+    setPendingId(endpoint._id);
+    try {
+      await updateHttpRpcEndpoint(endpoint._id, { enabled });
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update endpoint");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  async function handleDelete(endpoint: HttpRpcEndpointView) {
+    setPendingId(endpoint._id);
+    try {
+      await deleteHttpRpcEndpoint(endpoint._id);
+      toast.success("HTTP RPC endpoint deleted");
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete endpoint");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <div className="flex size-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
+            <Zap className="size-4" />
+          </div>
+          <div>
+            <h2 className="text-base font-semibold tracking-tight">HTTP RPC endpoints (round-robin)</h2>
+            <p className="text-sm text-muted-foreground">
+              Used for every non-websocket call - falls back to .env&apos;s SOLANA_RPC_URLS automatically when empty.
+            </p>
+          </div>
+        </div>
+        <AddHttpRpcDialog onAdded={refresh} />
+      </div>
+
+      {loading && !endpoints ? (
+        <div className="flex flex-col gap-2">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full rounded-lg" />
+          ))}
+        </div>
+      ) : !endpoints || endpoints.length === 0 ? (
+        <div className="flex min-h-[120px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-card/40 text-center">
+          <p className="text-sm text-muted-foreground">
+            None configured - calls use .env&apos;s SOLANA_RPC_URLS only.
+          </p>
+        </div>
+      ) : (
+        <Card className="overflow-hidden border-border/60">
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-border/60 hover:bg-transparent">
+                  <TableHead>Endpoint</TableHead>
+                  <TableHead className="text-center">Enabled</TableHead>
+                  <TableHead className="pr-4 text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {endpoints.map((endpoint) => {
+                  const isPending = pendingId === endpoint._id;
+                  return (
+                    <TableRow key={endpoint._id} className="border-border/60">
+                      <TableCell>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-medium">{endpoint.label || "Unlabeled endpoint"}</span>
+                          <span className="truncate font-mono text-xs text-muted-foreground">{endpoint.url}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex justify-center">
+                          <Switch
+                            checked={endpoint.enabled}
+                            disabled={isPending}
+                            onCheckedChange={(checked) => handleToggleEnabled(endpoint, checked)}
+                            aria-label="Enable endpoint"
+                          />
+                        </div>
+                      </TableCell>
+                      <TableCell className="pr-4 text-right">
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="ghost" size="sm" disabled={isPending} className="text-muted-foreground hover:text-negative">
+                              <Trash2 className="size-4" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Delete this HTTP RPC endpoint?</AlertDialogTitle>
+                              <AlertDialogDescription>This can&apos;t be undone.</AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                className="bg-negative text-negative-foreground hover:bg-negative/90"
+                                onClick={() => handleDelete(endpoint)}
+                              >
+                                Delete
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }
 
@@ -434,6 +658,9 @@ export default function RpcPage() {
           })}
         </div>
       )}
+
+      <Separator />
+      <HttpRpcSection />
     </div>
   );
 }

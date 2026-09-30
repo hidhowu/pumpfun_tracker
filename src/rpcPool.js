@@ -1,16 +1,21 @@
 /**
- * Round-robins JSON-RPC HTTP calls randomly across multiple endpoints so no
- * single provider's requests-per-second limit gets hit as hard. Falls over
- * to another endpoint on rate-limit / transient errors.
+ * Round-robins JSON-RPC HTTP calls across multiple endpoints so no single
+ * provider's requests-per-second limit gets hit as hard. Falls over to
+ * another endpoint on rate-limit / transient errors. `urls` can be swapped
+ * out live (see src/tracker.js's startHttpRpcPoolSync) by reassigning
+ * `.urls` directly - pickUrl() always reads the current array.
  */
 export class RpcPool {
   constructor(urls) {
     if (!urls || urls.length === 0) throw new Error("RpcPool requires at least one RPC URL");
     this.urls = urls;
+    this._index = 0;
   }
 
   pickUrl() {
-    return this.urls[Math.floor(Math.random() * this.urls.length)];
+    const url = this.urls[this._index % this.urls.length];
+    this._index += 1;
+    return url;
   }
 
   async call(method, params, { maxAttempts } = {}) {

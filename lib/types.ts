@@ -121,6 +121,12 @@ export type SimPosition = {
   maxValueUsd: number | null;
   maxUnrealizedPnlUsd: number | null;
   maxUnrealizedPnlPercent: number | null;
+  // Trough reached at any point while open (same sampling as the peak above).
+  // Always nullable end-to-end (schema default null, not required) since it
+  // was added after maxValueUsd/etc - no backfill migration was run for it.
+  minValueUsd: number | null;
+  minUnrealizedPnlUsd: number | null;
+  minUnrealizedPnlPercent: number | null;
   closedAt: string | null;
   // "bench" only appears on positions closed before the trailingStops rule list replaced the single bench-cap.
   closeReason: "trader_sell" | "stop_loss" | "take_profit" | "bench" | "trailing_stop" | "max_hold_time" | null;
@@ -136,6 +142,23 @@ export type SimPosition = {
   unrealizedPnlUsd?: number | null;
   unrealizedPnlPercent?: number | null;
 };
+
+/** A proxy the pump.fun API client rotates through - see db/models/Proxy.js and db/proxyService.js. */
+export type ProxyView = {
+  _id: string;
+  url: string;
+  label: string;
+  enabled: boolean; // manual on/off
+  status: "active" | "blacklisted"; // auto-managed health
+  consecutiveFailures: number;
+  lastCheckedAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+};
+
+/** One open position from the cross-trader /api/positions/open endpoint - a SimPosition plus which trader it belongs to. */
+export type OpenPositionWithTrader = SimPosition & { traderLabel: string };
 
 export type TraderDetail = Trader & {
   openPositions: SimPosition[]; // live-priced
@@ -240,6 +263,15 @@ export type RpcEndpointView = {
   lastErrorAt: string | null;
   createdAt: string;
   addressCount: number;
+};
+
+/** A plain HTTP RPC endpoint round-robinned for non-websocket Solana calls - see /rpc's second section and src/rpcPool.js. */
+export type HttpRpcEndpointView = {
+  _id: string;
+  url: string;
+  label: string;
+  enabled: boolean;
+  createdAt: string;
 };
 
 export type RpcEndpointAddress = {

@@ -9,6 +9,7 @@ import { config } from "./env.js";
 import { connectDb } from "../db/connect.js";
 import { Trader } from "../db/models/Trader.js";
 import { RpcEndpoint } from "../db/models/RpcEndpoint.js";
+import { HttpRpcEndpoint } from "../db/models/HttpRpcEndpoint.js";
 import { recordTrade, markTradeActioned } from "../db/positionLedger.js";
 import { addTradersBulk } from "../db/traderService.js";
 import { evaluateRealTrade } from "../db/simulation/engine.js";
@@ -76,6 +77,7 @@ export class TrackerService extends EventEmitter {
     this.seenSignatures = new Set();
     this.maxSeen = 5000;
     this._dbSyncTimer = null;
+    this._httpRpcPoolSyncTimer = null;
     this._executionTimer = null;
     this._riskTimer = null;
     this._riskLoopActive = false;
@@ -323,6 +325,36 @@ export class TrackerService extends EventEmitter {
   }
 
   /**
+   * Keeps this.rpcPool.urls (used for every non-websocket RPC call -
+   * getTransaction, etc) in sync with the HttpRpcEndpoint collection
+   * (managed from the /rpc page's second section), merged with .env's
+   * SOLANA_RPC_URLS as a permanent floor - so with zero DB-managed
+   * endpoints, the pool is exactly config.rpcUrls, same as before this
+   * feature existed. Polled on an interval rather than driven by change
+   * streams for the same reason startDbSync is (a plain local MongoDB
+   * install has no replica set).
+   */
+  async syncHttpRpcPoolFromDb() {
+    const enabled = await HttpRpcEndpoint.find({ enabled: true }, { url: 1 }).lean();
+    const merged = [...new Set([...config.rpcUrls, ...enabled.map((e) => e.url)])];
+    this.rpcPool.urls = merged;
+  }
+
+  startHttpRpcPoolSync(intervalMs = 15000) {
+    this.syncHttpRpcPoolFromDb().catch((err) => this.emit("error", err));
+    this._httpRpcPoolSyncTimer = setInterval(() => {
+      this.syncHttpRpcPoolFromDb().catch((err) => this.emit("error", err));
+    }, intervalMs);
+  }
+
+  stopHttpRpcPoolSync() {
+    if (this._httpRpcPoolSyncTimer) {
+      clearInterval(this._httpRpcPoolSyncTimer);
+      this._httpRpcPoolSyncTimer = null;
+    }
+  }
+
+  /**
    * Polls SystemCommand for a manual "reconnect" request queued from the UI
    * (the web app and this daemon are separate Node processes with no direct
    * channel, so Mongo is the handoff). Claims each due command atomically
@@ -468,6 +500,7 @@ export class TrackerService extends EventEmitter {
 
   close() {
     this.stopDbSync();
+    this.stopHttpRpcPoolSync();
     this.stopSimulationLoops();
     this.stopCommandPolling();
     for (const sub of this.subscribers.values()) sub.close();
@@ -539,6 +572,7 @@ async function runCli() {
     "[tracker] watch list is driven by MongoDB (Trader + RpcEndpoint collections), polled every 15s.",
   );
   tracker.startDbSync(15000);
+  tracker.startHttpRpcPoolSync(15000);
   tracker.startSimulationLoops();
   tracker.startCommandPolling();
 }

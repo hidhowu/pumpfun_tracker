@@ -9,18 +9,30 @@ export function todayUtcString(date = new Date()) {
   return date.toISOString().slice(0, 10); // "YYYY-MM-DD"
 }
 
-/** balance + unrealized value of every currently-open position, within one profile, right now. */
+/**
+ * balance + unrealized value of every currently-open position, within one
+ * profile, right now. Price lookups run concurrently (Promise.all), not one
+ * position at a time - each is a curl subprocess call to pump.fun (see
+ * db/pumpFunApi.js), and a trader with several open positions was otherwise
+ * paying for every one of those sequentially. Same concurrency pattern
+ * already used for the identical per-position price lookup in
+ * db/simulation/positionsView.js's markOpenPositions.
+ */
 export async function currentPortfolioValueUsd(profileId, traderAddress) {
-  const profileTrader = await ProfileTrader.findOne({ profileId, traderAddress });
+  const [profileTrader, openPositions] = await Promise.all([
+    ProfileTrader.findOne({ profileId, traderAddress }),
+    SimPosition.find({ profileId, traderAddress, status: "open" }),
+  ]);
   if (!profileTrader) return 0;
 
-  const openPositions = await SimPosition.find({ profileId, traderAddress, status: "open" });
-  let unrealized = 0;
-  for (const position of openPositions) {
-    const coin = await getCoinInfo(position.mint).catch(() => null);
-    const price = priceFromCoinInfo(coin);
-    unrealized += price?.priceUsd ? position.tokenAmount * price.priceUsd : position.costBasisUsd; // fall back to cost basis if price is unavailable
-  }
+  const unrealizedPerPosition = await Promise.all(
+    openPositions.map(async (position) => {
+      const coin = await getCoinInfo(position.mint).catch(() => null);
+      const price = priceFromCoinInfo(coin);
+      return price?.priceUsd ? position.tokenAmount * price.priceUsd : position.costBasisUsd; // fall back to cost basis if price is unavailable
+    })
+  );
+  const unrealized = unrealizedPerPosition.reduce((sum, v) => sum + v, 0);
   return profileTrader.sim.balanceUsd + unrealized;
 }
 

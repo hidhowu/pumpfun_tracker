@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { getActiveProxyPool, recordProxyResult } from "./proxyService.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -8,6 +9,25 @@ const cache = new Map(); // mint -> { data, expiresAt }
 const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
 
 const STATUS_MARKER = "\n__HTTP_STATUS__";
+// How many different proxies to try (round-robin) before giving up on the
+// pool entirely for this one call and falling straight through to a direct
+// request - kept small so a call with several dead proxies in the pool
+// doesn't compound their timeouts into one very slow lookup; the failure
+// bookkeeping (db/proxyService.js) that decides blacklisting is cumulative
+// across calls over time, so it doesn't need every call to exhaust the pool.
+const MAX_PROXY_ATTEMPTS_PER_CALL = 2;
+let proxyRoundRobinIndex = 0;
+
+async function runCurl(url, proxyUrl) {
+  const args = ["-s", "-m", "10", "-w", `${STATUS_MARKER}%{http_code}`];
+  if (proxyUrl) args.push("--proxy", proxyUrl);
+  args.push(url);
+  const { stdout } = await execFileAsync("curl", args);
+  const markerIndex = stdout.lastIndexOf(STATUS_MARKER);
+  const body = markerIndex >= 0 ? stdout.slice(0, markerIndex) : stdout;
+  const status = markerIndex >= 0 ? Number(stdout.slice(markerIndex + STATUS_MARKER.length).trim()) : 0;
+  return { status, body };
+}
 
 /**
  * pump.fun's frontend API blocks Node's own `fetch` (undici) outright -
@@ -18,13 +38,38 @@ const STATUS_MARKER = "\n__HTTP_STATUS__";
  * rather than a header check, since headers alone didn't change Node's
  * result. Shelling out to curl (present by default on Windows 10+ and any
  * Unix box) is the pragmatic fix, since it demonstrably isn't blocked.
+ *
+ * Proxy-aware: with proxies configured (managed from the /proxies UI),
+ * round-robins through them via `curl --proxy`, retrying the next one on a
+ * curl-level failure (couldn't connect, timed out, etc - NOT a legitimate
+ * HTTP error from pump.fun itself, which curl reports as a clean exit with
+ * that status code, not a thrown error, so a real 404/500 is returned as-is
+ * rather than treated as a proxy problem). Every attempt's outcome is
+ * recorded (db/proxyService.js) so a proxy that keeps failing gets
+ * auto-blacklisted out of future rotations. If every attempt in this call
+ * fails, or no proxies are configured at all, falls through to a direct
+ * request - the same thing this function has always done - so a proxy
+ * outage degrades to "no proxy" rather than ever blocking a price lookup.
  */
 async function curlGetJson(url) {
-  const { stdout } = await execFileAsync("curl", ["-s", "-m", "10", "-w", `${STATUS_MARKER}%{http_code}`, url]);
-  const markerIndex = stdout.lastIndexOf(STATUS_MARKER);
-  const body = markerIndex >= 0 ? stdout.slice(0, markerIndex) : stdout;
-  const status = markerIndex >= 0 ? Number(stdout.slice(markerIndex + STATUS_MARKER.length).trim()) : 0;
-  return { status, body };
+  const pool = await getActiveProxyPool().catch(() => []);
+  if (pool.length === 0) return runCurl(url, null);
+
+  const attempts = Math.min(pool.length, MAX_PROXY_ATTEMPTS_PER_CALL);
+  for (let i = 0; i < attempts; i++) {
+    const proxy = pool[proxyRoundRobinIndex % pool.length];
+    proxyRoundRobinIndex++;
+    try {
+      const result = await runCurl(url, proxy.url);
+      recordProxyResult(proxy._id, true).catch(() => {}); // fire-and-forget - never let bookkeeping slow down the actual response
+      return result;
+    } catch (err) {
+      recordProxyResult(proxy._id, false, err.message).catch(() => {});
+    }
+  }
+  // Every proxy tried for this call failed - this IS the request the caller
+  // is waiting on, so it's awaited normally, errors and all.
+  return runCurl(url, null);
 }
 
 /** Raw coin info from pump.fun's own API (market cap, reserves, decimals, ...). */
