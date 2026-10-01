@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Coins, Loader2, RefreshCw, ShieldAlert, SlidersHorizontal, Timer, TriangleAlert, Wallet as WalletIcon } from "lucide-react";
+import { Coins, Loader2, RefreshCw, RotateCcw, ShieldAlert, SlidersHorizontal, Timer, TriangleAlert, Wallet as WalletIcon } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,7 +21,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { TrailingStopsEditor } from "@/components/trailing-stops-editor";
-import { resetWallet, updateWalletSettings } from "@/lib/api";
+import { resetWallet, resetWalletBalance, updateWalletSettings } from "@/lib/api";
 import type { TrailingStop, WalletSettings, WalletView } from "@/lib/types";
 
 type Props = {
@@ -138,7 +138,8 @@ function TrailingStopsSection({ trailingStops, onSave }: { trailingStops: Traili
  * a direct value that saves immediately.
  */
 export function WalletSettingsPanel({ walletId, settings, onUpdated, onReset }: Props) {
-  const [resetting, setResetting] = useState(false);
+  const [resettingFull, setResettingFull] = useState(false);
+  const [resettingBalance, setResettingBalance] = useState(false);
 
   async function save(patch: Partial<WalletSettings>) {
     try {
@@ -151,7 +152,7 @@ export function WalletSettingsPanel({ walletId, settings, onUpdated, onReset }: 
   }
 
   async function handleReset() {
-    setResetting(true);
+    setResettingFull(true);
     try {
       const { wallet } = await resetWallet(walletId);
       onReset?.(wallet);
@@ -159,7 +160,20 @@ export function WalletSettingsPanel({ walletId, settings, onUpdated, onReset }: 
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to reset wallet");
     } finally {
-      setResetting(false);
+      setResettingFull(false);
+    }
+  }
+
+  async function handleResetBalance() {
+    setResettingBalance(true);
+    try {
+      const { wallet } = await resetWalletBalance(walletId);
+      onReset?.(wallet);
+      toast.success("Balance reset - trade history and P&L untouched");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to reset balance");
+    } finally {
+      setResettingBalance(false);
     }
   }
 
@@ -179,6 +193,61 @@ export function WalletSettingsPanel({ walletId, settings, onUpdated, onReset }: 
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <RotateCcw className="size-3.5" /> BALANCE
+          </div>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+              <div className="flex min-w-0 flex-col">
+                <span className="text-sm font-medium">Reset balance every day</span>
+                <span className="text-xs text-muted-foreground">
+                  At the start of each UTC day, balance goes back to the starting balance - open positions, trade
+                  history, and P&amp;L tracking are completely untouched. Useful for testing this strategy with a
+                  fresh amount every day.
+                </span>
+              </div>
+              <Switch
+                checked={settings.autoResetBalanceDaily}
+                onCheckedChange={(checked) => save({ autoResetBalanceDaily: checked })}
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+              <div className="flex min-w-0 flex-col">
+                <span className="text-sm font-medium">Reset balance now</span>
+                <span className="text-xs text-muted-foreground">
+                  Sets balance back to the starting balance right away - positions, trade history, and P&amp;L are
+                  untouched.
+                </span>
+              </div>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" size="sm" disabled={resettingBalance} className="gap-1.5">
+                    {resettingBalance ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
+                    Reset balance
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Reset this wallet&apos;s balance?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Balance goes back to the starting balance right away. Every position, trade history, and
+                      realized P&amp;L is left exactly as it is - only the spendable balance changes.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleResetBalance}>Reset balance</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          </div>
+        </div>
+
+        <Separator />
+
         <div>
           <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <WalletIcon className="size-3.5" /> TRADE SIZE &amp; FEE
@@ -347,8 +416,8 @@ export function WalletSettingsPanel({ walletId, settings, onUpdated, onReset }: 
           </div>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm" disabled={resetting} className="gap-1.5">
-                {resetting ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+              <Button variant="destructive" size="sm" disabled={resettingFull} className="gap-1.5">
+                {resettingFull ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
                 Reset
               </Button>
             </AlertDialogTrigger>

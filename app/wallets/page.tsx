@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowUpRight, Coins, Loader2, Plus, Users, Wallet as WalletIcon } from "lucide-react";
+import { ArrowUpRight, Coins, Copy, Loader2, Plus, Users, Wallet as WalletIcon } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -20,7 +21,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { createWallet, listWallets } from "@/lib/api";
+import { createWallet, duplicateWallet, listWallets } from "@/lib/api";
 import { formatUsd } from "@/lib/format";
 import type { WalletView } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -102,6 +103,140 @@ function CreateWalletDialog({ onCreated }: { onCreated: () => void }) {
           <Button onClick={handleSubmit} disabled={submitting}>
             {submitting && <Loader2 className="size-4 animate-spin" />}
             Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DuplicateWalletDialog({ source, onDuplicated }: { source: WalletView; onDuplicated: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [startingBalanceUsd, setStartingBalanceUsd] = useState("");
+  const [copySettings, setCopySettings] = useState(true);
+  const [copyTraders, setCopyTraders] = useState(true);
+  const [copyTrades, setCopyTrades] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  function handleOpenChange(next: boolean) {
+    setOpen(next);
+    if (next) {
+      // Re-seed the draft from this specific source wallet every time the
+      // dialog opens, rather than once at mount - this dialog instance is
+      // reused across re-renders of the same table row.
+      setName(`${source.name} copy`);
+      setStartingBalanceUsd(String(source.startingBalanceUsd));
+      setCopySettings(true);
+      setCopyTraders(true);
+      setCopyTrades(false);
+    }
+  }
+
+  async function handleSubmit() {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      toast.error("Enter a wallet name");
+      return;
+    }
+    const balance = Number(startingBalanceUsd);
+    if (!copyTrades && (!Number.isFinite(balance) || balance <= 0)) {
+      toast.error("Enter a positive starting balance");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await duplicateWallet(source._id, { name: trimmed, startingBalanceUsd: balance, copySettings, copyTraders, copyTrades });
+      toast.success(`Wallet "${trimmed}" created from "${source.name}"`);
+      setOpen(false);
+      onDuplicated();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to duplicate wallet");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground">
+          <Copy className="size-3.5" /> Duplicate
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Duplicate &quot;{source.name}&quot;</DialogTitle>
+          <DialogDescription>
+            Creates a new, independent wallet - pick what to carry over so you don&apos;t have to set it all up again.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="dup-wallet-name">Name</Label>
+            <Input id="dup-wallet-name" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">Copy settings</span>
+                <span className="text-xs text-muted-foreground">Trade size, fee, stop-loss/take-profit, trailing stops, etc.</span>
+              </div>
+              <Switch checked={copySettings} onCheckedChange={setCopySettings} />
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">Copy traders</span>
+                <span className="text-xs text-muted-foreground">
+                  Assigns the same {source.traderCount ?? 0} trader{source.traderCount === 1 ? "" : "s"} - the new wallet starts
+                  watching them with a clean slate.
+                </span>
+              </div>
+              <Switch checked={copyTraders} onCheckedChange={setCopyTraders} />
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2">
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">Copy trade history</span>
+                <span className="text-xs text-muted-foreground">
+                  Forks every open/closed position exactly, along with this wallet&apos;s current balance - an exact
+                  snapshot of its state right now.
+                </span>
+              </div>
+              <Switch checked={copyTrades} onCheckedChange={setCopyTrades} />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="dup-wallet-balance">Starting balance</Label>
+            {copyTrades ? (
+              <p className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                Using &quot;{source.name}&quot;&apos;s exact current balance ({formatUsd(source.balanceUsd)} of{" "}
+                {formatUsd(source.startingBalanceUsd)}) instead, since trade history is being copied.
+              </p>
+            ) : (
+              <div className="relative">
+                <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">$</span>
+                <Input
+                  id="dup-wallet-balance"
+                  type="number"
+                  min={1}
+                  step={10}
+                  value={startingBalanceUsd}
+                  onChange={(e) => setStartingBalanceUsd(e.target.value)}
+                  className="pl-7"
+                />
+              </div>
+            )}
+          </div>
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost">Cancel</Button>
+          </DialogClose>
+          <Button onClick={handleSubmit} disabled={submitting}>
+            {submitting && <Loader2 className="size-4 animate-spin" />}
+            Duplicate
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -206,9 +341,12 @@ export default function WalletsPage() {
                         {wallet.openPositionCount + wallet.closedPositionCount}
                       </TableCell>
                       <TableCell className="pr-4 text-right">
-                        <Button variant="ghost" size="sm" asChild>
-                          <Link href={`/wallets/${wallet._id}`}>Open</Link>
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          <DuplicateWalletDialog source={wallet} onDuplicated={refresh} />
+                          <Button variant="ghost" size="sm" asChild>
+                            <Link href={`/wallets/${wallet._id}`}>Open</Link>
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );

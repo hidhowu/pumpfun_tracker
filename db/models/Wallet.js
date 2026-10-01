@@ -34,6 +34,13 @@ const WalletSchema = new Schema({
   closedPositionCount: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now },
 
+  // UTC date string ("YYYY-MM-DD", see db/simulation/snapshot.js's
+  // todayUtcString) of the last automatic daily balance reset applied to
+  // this wallet - null if never. Guards against re-applying the reset on
+  // every hourly check within the same day (see
+  // db/simulation/walletSnapshot.js's applyDailyBalanceResets).
+  lastAutoResetDate: { type: String, default: null },
+
   // Flat - one settings object for the whole wallet, no per-trader-within-
   // wallet override tier (unlike Profile/ProfileTrader's two-tier system).
   // Same field list/defaults as GlobalSettings' defaults, minus
@@ -49,6 +56,13 @@ const WalletSchema = new Schema({
     trailingStops: { type: [TrailingStopSchema], default: [] },
     executionDelaySeconds: { type: Number, default: 2 },
     feeUsd: { type: Number, default: 0.6 },
+    // When true, balanceUsd is force-reset to startingBalanceUsd once per
+    // UTC day (see applyDailyBalanceResets) - open positions, trade history,
+    // and realizedPnlUsd are completely untouched, so day-over-day
+    // performance tracking keeps working; this is deliberately for "test
+    // this strategy with a fresh $X every day" rather than strict capital
+    // accounting.
+    autoResetBalanceDaily: { type: Boolean, default: false },
   },
 });
 

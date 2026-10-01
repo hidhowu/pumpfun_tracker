@@ -96,6 +96,105 @@ export async function resetWallet(id) {
   );
 }
 
+/**
+ * Balance-only reset: sets balanceUsd back to startingBalanceUsd and nothing
+ * else - every position (open or closed), pending execution, daily snapshot,
+ * and every assigned trader's stats are left completely untouched, as is
+ * realizedPnlUsd (that's cumulative historical P&L, not "current spendable
+ * cash"). This is the non-destructive counterpart to resetWallet above: for
+ * "give me fresh capital to test with" without losing the trade-history
+ * record of what already happened. Same operation applyDailyBalanceResets
+ * runs automatically - see that function for the daily-cron version.
+ */
+export async function resetWalletBalance(id) {
+  const wallet = await Wallet.findById(id);
+  if (!wallet) return null;
+  return Wallet.findOneAndUpdate(
+    { _id: id },
+    { $set: { balanceUsd: wallet.startingBalanceUsd } },
+    { returnDocument: "after" }
+  );
+}
+
+/** Copies every field of a lean document except _id/__v/walletId, for re-inserting under a new walletId - mirrors db/profileService.js's identical helper for Profile cloning. */
+function stripDocMeta(doc) {
+  // eslint-disable-next-line no-unused-vars
+  const { _id, __v, walletId, ...rest } = doc;
+  return rest;
+}
+
+/**
+ * Duplicates a wallet into a brand-new one, with a new name and (normally)
+ * its own starting balance. Three fully independent options control what
+ * else gets copied from the source - pick any combination, or none:
+ *
+ *  - copySettings: copies the source's Wallet.settings as-is. Without it,
+ *    the new wallet starts with the schema's built-in defaults.
+ *  - copyTraders: re-creates a WalletTrader row for every trader currently
+ *    assigned to the source - membership only, with fresh (zeroed) stats and
+ *    a new addedAt, never the source's per-trader history (that describes
+ *    trades the NEW wallet never actually made).
+ *  - copyTrades: an exact fork of the source's current trade history AND
+ *    the balance/P&L state that produced it - every open/closed
+ *    WalletPosition, every still-pending WalletPendingExecution, every
+ *    WalletDailySnapshot, plus the source's exact startingBalanceUsd/
+ *    balanceUsd/realizedPnlUsd/position counts (this OVERRIDES whatever
+ *    startingBalanceUsd was passed in - a snapshot of real trade history
+ *    only makes sense paired with the exact balance it produced, same
+ *    reasoning as db/profileService.js's Profile "clone" mode).
+ */
+export async function duplicateWallet(sourceId, { name, startingBalanceUsd, copySettings, copyTraders, copyTrades }) {
+  const source = await Wallet.findById(sourceId).lean();
+  if (!source) throw new Error("Source wallet not found");
+
+  const wallet = await Wallet.create({
+    name,
+    startingBalanceUsd: copyTrades ? source.startingBalanceUsd : startingBalanceUsd,
+    balanceUsd: copyTrades ? source.balanceUsd : startingBalanceUsd,
+    realizedPnlUsd: copyTrades ? source.realizedPnlUsd : 0,
+    openPositionCount: copyTrades ? source.openPositionCount : 0,
+    closedPositionCount: copyTrades ? source.closedPositionCount : 0,
+    settings: copySettings ? source.settings : {},
+  });
+
+  const tasks = [];
+
+  if (copyTraders) {
+    tasks.push(
+      WalletTrader.find({ walletId: sourceId }, { traderAddress: 1 })
+        .lean()
+        .then((traders) =>
+          traders.length > 0
+            ? WalletTrader.insertMany(
+                traders.map((t) => ({ walletId: wallet._id, traderAddress: t.traderAddress })),
+                { ordered: false }
+              )
+            : null
+        )
+    );
+  }
+
+  if (copyTrades) {
+    const insertIfAny = (Model, docs) =>
+      docs.length > 0 ? Model.insertMany(docs.map((d) => ({ ...stripDocMeta(d), walletId: wallet._id }))) : null;
+
+    tasks.push(
+      WalletPosition.find({ walletId: sourceId })
+        .lean()
+        .then((docs) => insertIfAny(WalletPosition, docs)),
+      WalletPendingExecution.find({ walletId: sourceId, status: { $in: ["pending", "processing"] } })
+        .lean()
+        .then((docs) => insertIfAny(WalletPendingExecution, docs)),
+      WalletDailySnapshot.find({ walletId: sourceId })
+        .lean()
+        .then((docs) => insertIfAny(WalletDailySnapshot, docs))
+    );
+  }
+
+  await Promise.all(tasks);
+  return wallet;
+}
+
 /** Every wallet, lightweight summary for the /wallets list page. */
 export async function listWallets() {
   const [wallets, traderCounts] = await Promise.all([

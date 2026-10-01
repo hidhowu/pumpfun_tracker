@@ -302,6 +302,19 @@ export function resetWallet(id: string): Promise<{ wallet: WalletView }> {
   return request(`/api/wallets/${id}/reset`, { method: "POST" });
 }
 
+/** Resets balanceUsd back to startingBalanceUsd only - every position, trade history, and realizedPnlUsd is left untouched. */
+export function resetWalletBalance(id: string): Promise<{ wallet: WalletView }> {
+  return request(`/api/wallets/${id}/reset-balance`, { method: "POST" });
+}
+
+/** Creates a new wallet copied from an existing one. startingBalanceUsd is ignored when copyTrades is true (the new wallet exactly forks the source's current balance/portfolio instead). */
+export function duplicateWallet(
+  sourceId: string,
+  options: { name: string; startingBalanceUsd: number; copySettings: boolean; copyTraders: boolean; copyTrades: boolean }
+): Promise<{ wallet: WalletView }> {
+  return request(`/api/wallets/${sourceId}/duplicate`, { method: "POST", body: JSON.stringify(options) });
+}
+
 export function getWalletTraders(
   id: string,
   period: "day" | "week" | "month" = "day"

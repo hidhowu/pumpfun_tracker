@@ -35,7 +35,7 @@ import {
 import { ensureTodaySnapshotsForAllActiveTraders } from "../db/simulation/snapshot.js";
 import { evaluateWalletTrade } from "../db/simulation/walletEngine.js";
 import { processDueWalletExecutions, checkWalletRiskExits } from "../db/simulation/walletExecutor.js";
-import { ensureTodaySnapshotsForAllWallets } from "../db/simulation/walletSnapshot.js";
+import { ensureTodaySnapshotsForAllWallets, applyDailyBalanceResets } from "../db/simulation/walletSnapshot.js";
 import { getSystemSettings } from "../db/models/SystemSettings.js";
 import { logEvent } from "../db/systemLog.js";
 import { SystemCommand } from "../db/models/SystemCommand.js";
@@ -486,8 +486,19 @@ export class TrackerService extends EventEmitter {
    * collections. Starting/stopping this never touches the Profile-scoped
    * loops, and vice versa.
    */
+  /**
+   * applyDailyBalanceResets MUST run before ensureTodaySnapshotsForAllWallets
+   * - see that function's doc comment: the day's baseline snapshot needs to
+   * capture the balance AFTER a daily auto-reset, not before it, or "today's
+   * performance" would be measured against yesterday's leftover balance.
+   */
+  async _runWalletDailyMaintenance() {
+    await applyDailyBalanceResets();
+    await ensureTodaySnapshotsForAllWallets();
+  }
+
   startWalletSimulationLoops({ executionIntervalMs = 2000, snapshotIntervalMs = 3600000 } = {}) {
-    ensureTodaySnapshotsForAllWallets().catch((err) => this.emit("error", err));
+    this._runWalletDailyMaintenance().catch((err) => this.emit("error", err));
 
     this._walletExecutionTimer = setInterval(() => {
       processDueWalletExecutions().catch((err) => this.emit("error", err));
@@ -497,7 +508,7 @@ export class TrackerService extends EventEmitter {
     this._runWalletRiskCheckLoop();
 
     this._walletSnapshotTimer = setInterval(() => {
-      ensureTodaySnapshotsForAllWallets().catch((err) => this.emit("error", err));
+      this._runWalletDailyMaintenance().catch((err) => this.emit("error", err));
     }, snapshotIntervalMs);
   }
 

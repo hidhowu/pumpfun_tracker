@@ -323,6 +323,9 @@ export type WalletSettings = {
   trailingStops: TrailingStop[];
   executionDelaySeconds: number;
   feeUsd: number;
+  // When true, balanceUsd auto-resets to startingBalanceUsd once per UTC day
+  // - trade history/realizedPnlUsd are untouched. See db/simulation/walletSnapshot.js's applyDailyBalanceResets.
+  autoResetBalanceDaily: boolean;
 };
 
 export type WalletView = {
@@ -334,6 +337,7 @@ export type WalletView = {
   openPositionCount: number;
   closedPositionCount: number;
   createdAt: string;
+  lastAutoResetDate: string | null;
   settings: WalletSettings;
   traderCount?: number; // present on the /api/wallets list endpoint only
 };
