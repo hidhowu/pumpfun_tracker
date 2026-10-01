@@ -3,6 +3,7 @@ import { WalletTrader } from "./models/WalletTrader.js";
 import { WalletPosition } from "./models/WalletPosition.js";
 import { WalletPendingExecution } from "./models/WalletPendingExecution.js";
 import { WalletDailySnapshot } from "./models/WalletDailySnapshot.js";
+import { todayUtcString } from "./simulation/snapshot.js";
 
 /** Creates a Wallet with its starting balance as both startingBalanceUsd (reference) and balanceUsd (current, spendable). */
 export async function createWallet({ name, startingBalanceUsd, settings = {} }) {
@@ -195,12 +196,36 @@ export async function duplicateWallet(sourceId, { name, startingBalanceUsd, copy
   return wallet;
 }
 
-/** Every wallet, lightweight summary for the /wallets list page. */
+/**
+ * Every wallet, lightweight summary for the /wallets list page. Includes
+ * each wallet's today's realized P&L (sum of realizedPnlUsd across
+ * positions it closed today, UTC) alongside its lifetime realizedPnlUsd -
+ * one aggregate query across every wallet at once, not one query per wallet.
+ * This is a REALIZED number (same convention as realizedPnlUsd/"lifetime
+ * P&L"), not a live mark-to-market value, so it needs no price lookups and
+ * stays cheap regardless of how many wallets there are or how often this
+ * list page polls. Particularly useful for a wallet with "reset balance
+ * every day" on (db/simulation/walletSnapshot.js's applyDailyBalanceResets) -
+ * its balance resets, but this keeps showing what it actually made today.
+ */
 export async function listWallets() {
-  const [wallets, traderCounts] = await Promise.all([
+  const today = todayUtcString();
+  const todayStart = new Date(`${today}T00:00:00.000Z`);
+  const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+
+  const [wallets, traderCounts, todayPnl] = await Promise.all([
     Wallet.find({}).sort({ createdAt: -1 }).lean(),
     WalletTrader.aggregate([{ $group: { _id: "$walletId", count: { $sum: 1 } } }]),
+    WalletPosition.aggregate([
+      { $match: { status: "closed", closedAt: { $gte: todayStart, $lt: todayEnd } } },
+      { $group: { _id: "$walletId", combinedUsd: { $sum: "$realizedPnlUsd" } } },
+    ]),
   ]);
   const countByWallet = new Map(traderCounts.map((c) => [String(c._id), c.count]));
-  return wallets.map((w) => ({ ...w, traderCount: countByWallet.get(String(w._id)) || 0 }));
+  const todayPnlByWallet = new Map(todayPnl.map((p) => [String(p._id), p.combinedUsd]));
+  return wallets.map((w) => ({
+    ...w,
+    traderCount: countByWallet.get(String(w._id)) || 0,
+    todayRealizedPnlUsd: todayPnlByWallet.get(String(w._id)) || 0,
+  }));
 }

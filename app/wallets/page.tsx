@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowUpRight, Coins, Copy, Loader2, Plus, Users, Wallet as WalletIcon } from "lucide-react";
+import { ArrowUpRight, Calendar, Coins, Copy, Loader2, Plus, Users, Wallet as WalletIcon } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -300,6 +300,7 @@ export default function WalletsPage() {
                 <TableRow className="border-border/60 hover:bg-transparent">
                   <TableHead className="pl-4">Wallet</TableHead>
                   <TableHead className="text-right">Balance</TableHead>
+                  <TableHead className="text-right">Today&apos;s P&amp;L</TableHead>
                   <TableHead className="text-right">Lifetime P&amp;L</TableHead>
                   <TableHead className="text-right">Traders</TableHead>
                   <TableHead className="text-right">Trades</TableHead>
@@ -310,6 +311,9 @@ export default function WalletsPage() {
                 {wallets.map((wallet) => {
                   const positive = wallet.realizedPnlUsd > 0;
                   const negative = wallet.realizedPnlUsd < 0;
+                  const todayPnl = wallet.todayRealizedPnlUsd ?? 0;
+                  const todayPositive = todayPnl > 0;
+                  const todayNegative = todayPnl < 0;
                   return (
                     <TableRow key={wallet._id} className="border-border/60">
                       <TableCell className="max-w-3xs pl-4 sm:max-w-xs">
@@ -324,6 +328,12 @@ export default function WalletsPage() {
                       <TableCell className="text-right tabular-nums">
                         {formatUsd(wallet.balanceUsd)}
                         <span className="ml-1 text-xs text-muted-foreground">/ {formatUsd(wallet.startingBalanceUsd)}</span>
+                      </TableCell>
+                      <TableCell className={cn("text-right tabular-nums", todayPositive && "text-positive", todayNegative && "text-negative")}>
+                        <span className="inline-flex items-center justify-end gap-1">
+                          <Calendar className="size-3.5 opacity-70" />
+                          {formatUsd(todayPnl)}
+                        </span>
                       </TableCell>
                       <TableCell className={cn("text-right tabular-nums", positive && "text-positive", negative && "text-negative")}>
                         <span className="inline-flex items-center justify-end gap-1">

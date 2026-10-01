@@ -340,6 +340,7 @@ export type WalletView = {
   lastAutoResetDate: string | null;
   settings: WalletSettings;
   traderCount?: number; // present on the /api/wallets list endpoint only
+  todayRealizedPnlUsd?: number; // present on the /api/wallets list endpoint only - sum of realizedPnlUsd for positions closed today (UTC)
 };
 
 /** One position within a Wallet - field-for-field the same shape as SimPosition, just scoped to a Wallet instead of a (Profile, trader) pair. */
