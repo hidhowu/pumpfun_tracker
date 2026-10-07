@@ -20,6 +20,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { AddTradersToWalletDialog } from "./add-traders-to-wallet-dialog";
+import { WalletTradersDailyTable } from "./wallet-traders-daily-table";
 import { getWalletTraders, removeTradersFromWallet } from "@/lib/api";
 import { formatAddress, formatRelativeTime, formatUsd } from "@/lib/format";
 import type { WalletTraderPerformance } from "@/lib/types";
@@ -27,6 +28,7 @@ import { cn } from "@/lib/utils";
 
 type Props = { walletId: string };
 type Period = "day" | "week" | "month";
+type View = "overview" | "daily";
 
 /**
  * Assigned traders and how they've performed ON THIS WALLET specifically -
@@ -36,6 +38,8 @@ type Period = "day" | "week" | "month";
  */
 export function WalletTradersTab({ walletId }: Props) {
   const [period, setPeriod] = useState<Period>("day");
+  const [view, setView] = useState<View>("overview");
+  const [dailyRefreshKey, setDailyRefreshKey] = useState(0);
   const [traders, setTraders] = useState<WalletTraderPerformance[]>([]);
   const [loading, setLoading] = useState(true);
   const [pendingAddress, setPendingAddress] = useState<string | null>(null);
@@ -64,6 +68,7 @@ export function WalletTradersTab({ walletId }: Props) {
     try {
       await removeTradersFromWallet(walletId, [address]);
       toast.success("Trader removed from wallet");
+      setDailyRefreshKey((k) => k + 1);
       await refresh(period);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to remove trader");
@@ -78,23 +83,36 @@ export function WalletTradersTab({ walletId }: Props) {
         <CardTitle className="flex items-center gap-2 text-base">
           <Users className="size-4 text-primary" /> Traders performance
         </CardTitle>
-        <div className="flex items-center gap-3">
-          <Tabs value={period} onValueChange={(v) => setPeriod(v as Period)}>
+        <div className="flex flex-wrap items-center gap-3">
+          <Tabs value={view} onValueChange={(v) => setView(v as View)}>
             <TabsList>
-              <TabsTrigger value="day">Day</TabsTrigger>
-              <TabsTrigger value="week">Week</TabsTrigger>
-              <TabsTrigger value="month">Month</TabsTrigger>
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="daily">Last 7 days</TabsTrigger>
             </TabsList>
           </Tabs>
+          {view === "overview" && (
+            <Tabs value={period} onValueChange={(v) => setPeriod(v as Period)}>
+              <TabsList>
+                <TabsTrigger value="day">Day</TabsTrigger>
+                <TabsTrigger value="week">Week</TabsTrigger>
+                <TabsTrigger value="month">Month</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          )}
           <AddTradersToWalletDialog
             walletId={walletId}
             existingAddresses={traders.map((t) => t.traderAddress)}
-            onAdded={() => refresh(period)}
+            onAdded={() => {
+              setDailyRefreshKey((k) => k + 1);
+              refresh(period);
+            }}
           />
         </div>
       </CardHeader>
       <CardContent>
-        {loading && traders.length === 0 ? (
+        {view === "daily" ? (
+          <WalletTradersDailyTable walletId={walletId} refreshKey={dailyRefreshKey} />
+        ) : loading && traders.length === 0 ? (
           <div className="flex flex-col gap-2">
             {Array.from({ length: 3 }).map((_, i) => (
               <Skeleton key={i} className="h-10 w-full" />

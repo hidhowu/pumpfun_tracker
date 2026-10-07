@@ -374,8 +374,22 @@ export type WalletDailyPnl = {
   losses: number;
 };
 
+/** One UTC hour of a day, for the hourly "Day" chart. pnlUsd/tradeCount are realized (trades that closed that hour). */
+export type WalletHourlyPnl = {
+  hour: number; // 0-23, UTC
+  label: string; // "13:00"
+  pnlUsd: number;
+  cumulativePnlUsd: number | null; // null for hours still in the future
+  tradeCount: number;
+  wins: number;
+  losses: number;
+  valueUsd: number | null; // null for future hours / hours with no baseline to measure from
+  valueEstimated: boolean; // true when there was no hourly snapshot and the value is the day-open value + realized P&L
+};
+
 export type WalletPnlBreakdown = {
   period: "day" | "week" | "month";
+  date: string; // the last day covered (UTC) - today unless a past day was requested
   days: number;
   actualizedUsd: number | null;
   combinedUsd: number;
@@ -385,5 +399,20 @@ export type WalletPnlBreakdown = {
   losses: number;
   winRatePercent: number | null;
   dailyBreakdown: WalletDailyPnl[];
+  hourlyBreakdown?: WalletHourlyPnl[]; // period=day only
   streaks: Streaks;
+};
+
+/** One trader's realized P&L on one UTC day, on one wallet. */
+export type WalletTraderDay = { date: string; pnlUsd: number; tradeCount: number; wins: number; losses: number };
+
+/** One row of the detailed Traders Performance matrix: the last 7 days of a trader's results on this wallet. */
+export type WalletTraderDailyPerformance = {
+  traderAddress: string;
+  label: string;
+  daily: WalletTraderDay[];
+  totalPnlUsd: number;
+  totalTrades: number;
+  totalWins: number;
+  totalLosses: number;
 };

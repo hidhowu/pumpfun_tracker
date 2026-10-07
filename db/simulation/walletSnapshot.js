@@ -1,6 +1,7 @@
 import { Wallet } from "../models/Wallet.js";
 import { WalletPosition } from "../models/WalletPosition.js";
 import { WalletDailySnapshot } from "../models/WalletDailySnapshot.js";
+import { WalletHourlySnapshot } from "../models/WalletHourlySnapshot.js";
 import { getCoinInfo, priceFromCoinInfo } from "../pumpFunApi.js";
 import { todayUtcString } from "./snapshot.js"; // same UTC-date-string helper the trader side uses, no need to duplicate it
 
@@ -42,6 +43,33 @@ export async function ensureTodaySnapshotsForAllWallets() {
   const wallets = await Wallet.find({}, { _id: 1 }).lean();
   for (const wallet of wallets) {
     await ensureTodayWalletSnapshot(wallet._id);
+  }
+  return wallets.length;
+}
+
+/** "YYYY-MM-DDTHH" (UTC) - the key WalletHourlySnapshot rows are stored under. */
+export function utcHourString(date = new Date()) {
+  return date.toISOString().slice(0, 13);
+}
+
+/**
+ * Records (or refreshes) the current UTC hour's value reading for every
+ * wallet - this is what gives the hourly chart its real, mark-to-market value
+ * points. Runs on the same hourly maintenance tick as the daily snapshot (see
+ * src/tracker.js), so each tick lands in its own hour. Hours before this
+ * feature existed (or while the tracker was down) have no row; the chart falls
+ * back to an estimate for those - see computeWalletHourlyBreakdown.
+ */
+export async function recordHourlyWalletSnapshots() {
+  const hour = utcHourString();
+  const wallets = await Wallet.find({}, { _id: 1 }).lean();
+  for (const wallet of wallets) {
+    const valueUsd = await currentWalletValueUsd(wallet._id);
+    await WalletHourlySnapshot.updateOne(
+      { walletId: wallet._id, hour },
+      { $set: { valueUsd, recordedAt: new Date() } },
+      { upsert: true }
+    );
   }
   return wallets.length;
 }

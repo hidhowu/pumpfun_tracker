@@ -35,7 +35,7 @@ import {
 import { ensureTodaySnapshotsForAllActiveTraders } from "../db/simulation/snapshot.js";
 import { evaluateWalletTrade } from "../db/simulation/walletEngine.js";
 import { processDueWalletExecutions, checkWalletRiskExits } from "../db/simulation/walletExecutor.js";
-import { ensureTodaySnapshotsForAllWallets, applyDailyBalanceResets } from "../db/simulation/walletSnapshot.js";
+import { ensureTodaySnapshotsForAllWallets, applyDailyBalanceResets, recordHourlyWalletSnapshots } from "../db/simulation/walletSnapshot.js";
 import { getSystemSettings } from "../db/models/SystemSettings.js";
 import { logEvent } from "../db/systemLog.js";
 import { SystemCommand } from "../db/models/SystemCommand.js";
@@ -495,6 +495,7 @@ export class TrackerService extends EventEmitter {
   async _runWalletDailyMaintenance() {
     await applyDailyBalanceResets();
     await ensureTodaySnapshotsForAllWallets();
+    await recordHourlyWalletSnapshots();
   }
 
   startWalletSimulationLoops({ executionIntervalMs = 2000, snapshotIntervalMs = 3600000 } = {}) {

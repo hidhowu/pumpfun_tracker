@@ -17,6 +17,7 @@ import type {
   TraderDetail,
   TraderSimSettings,
   WalletPnlBreakdown,
+  WalletTraderDailyPerformance,
   WalletPositionView,
   WalletSettings,
   WalletTraderPerformance,
@@ -339,8 +340,20 @@ export function getWalletPositions(
   return request(`/api/wallets/${walletId}/positions?status=${status}&page=${page}&limit=${limit}`);
 }
 
-export function getWalletPnl(walletId: string, period: "day" | "week" | "month" = "week"): Promise<WalletPnlBreakdown> {
-  return request(`/api/wallets/${walletId}/pnl?period=${period}`);
+/** `date` (YYYY-MM-DD, UTC) picks which day to show for period=day; defaults to today. */
+export function getWalletPnl(
+  walletId: string,
+  period: "day" | "week" | "month" = "week",
+  date?: string
+): Promise<WalletPnlBreakdown> {
+  const qs = new URLSearchParams({ period });
+  if (date) qs.set("date", date);
+  return request(`/api/wallets/${walletId}/pnl?${qs.toString()}`);
+}
+
+/** Every assigned trader's realized P&L + trade count for each of the last 7 days, scoped to this wallet. */
+export function getWalletTradersDaily(walletId: string): Promise<{ dates: string[]; traders: WalletTraderDailyPerformance[] }> {
+  return request(`/api/wallets/${walletId}/traders/daily`);
 }
 
 /** Every walletId this trader is currently assigned to - for the per-trader "Add to Wallet" menu. */
