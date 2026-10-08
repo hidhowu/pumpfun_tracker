@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
 import { Trader } from "@/db/models/Trader";
-import { computeRangePnl } from "@/db/pnl";
-import { ensureTodaySnapshot } from "@/db/simulation/snapshot";
-import { ensureTraderInitialized } from "@/db/simulation/init";
+import { computeRangePnlBatch } from "@/db/pnl";
+import { resolveTraderViews } from "@/lib/traderView";
 
 const PERIOD_DAYS: Record<string, number> = { day: 1, week: 7, month: 30 };
 
@@ -22,23 +21,32 @@ export async function GET(request: NextRequest) {
 
   const traders = await Trader.find({ status: "active" }).lean();
 
-  const ranked = await Promise.all(
-    traders.map(async (trader) => {
-      const profileTrader = await ensureTraderInitialized(profileId, trader.address);
-      await ensureTodaySnapshot(profileId, trader.address);
-      const pnl = await computeRangePnl(profileId, trader.address, days);
-      return {
-        address: trader.address,
-        label: trader.label,
-        balanceUsd: profileTrader.sim.balanceUsd,
-        startingAllocationUsd: profileTrader.sim.startingAllocationUsd,
-        combinedPercent: pnl.combinedPercent,
-        actualizedUsd: pnl.actualizedUsd,
-        closedTradeCount: pnl.closedTradeCount,
-        streaks: pnl.streaks,
-      };
-    })
+  // resolveTraderViews (batched) initializes each trader in this profile,
+  // makes sure today's baseline snapshot exists, and gives the live value
+  // today's actualized P&L is measured to - then the whole range is computed
+  // in two queries for every trader at once.
+  const views = await resolveTraderViews(profileId, traders);
+  const currentValueByAddress = new Map(views.map((v) => [v.address as string, v.walletValueUsd as number]));
+  const pnlByAddress = await computeRangePnlBatch(
+    profileId,
+    traders.map((t) => t.address),
+    days,
+    { currentValueByAddress }
   );
+
+  const ranked = views.map((view) => {
+    const pnl = pnlByAddress.get(view.address)!;
+    return {
+      address: view.address,
+      label: view.label,
+      balanceUsd: view.sim.balanceUsd,
+      startingAllocationUsd: view.sim.startingAllocationUsd,
+      combinedPercent: pnl.combinedPercent,
+      actualizedUsd: pnl.actualizedUsd,
+      closedTradeCount: pnl.closedTradeCount,
+      streaks: pnl.streaks,
+    };
+  });
 
   ranked.sort((a, b) => b.combinedPercent - a.combinedPercent);
   return NextResponse.json({ period, leaderboard: ranked });

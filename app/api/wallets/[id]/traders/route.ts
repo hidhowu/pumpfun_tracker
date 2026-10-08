@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
 import { WalletTrader } from "@/db/models/WalletTrader";
 import { Trader } from "@/db/models/Trader";
+import { Wallet } from "@/db/models/Wallet";
 import { addTradersToWallet, removeTradersFromWallet } from "@/db/walletService";
 import { computeWalletTraderPnl } from "@/db/walletPnl";
 
@@ -52,16 +53,23 @@ export async function GET(request: NextRequest, { params }: Params) {
   return NextResponse.json({ period, traders });
 }
 
-/** Body: { addresses: string[] } - assigns every given address to this wallet (no-op for ones already assigned). */
+/**
+ * Body: { addresses: string[], trackNew?: boolean } - assigns every given
+ * ACTIVE tracked trader to this wallet (no-op for ones already assigned).
+ * Blacklisted addresses are always skipped. trackNew: true also starts
+ * tracking any address not on the platform yet, then assigns it. See
+ * db/walletService.js's addTradersToWallet for the response shape.
+ */
 export async function POST(request: NextRequest, { params }: Params) {
   await connectDb();
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
   const addresses: string[] = Array.isArray(body.addresses) ? body.addresses : [];
   if (addresses.length === 0) return NextResponse.json({ error: "Provide 'addresses' (a non-empty array)." }, { status: 400 });
+  if (!(await Wallet.exists({ _id: id }))) return NextResponse.json({ error: "Wallet not found" }, { status: 404 });
 
-  const added = await addTradersToWallet(id, addresses);
-  return NextResponse.json({ added });
+  const result = await addTradersToWallet(id, addresses, { trackNew: body.trackNew === true });
+  return NextResponse.json(result);
 }
 
 /** Body: { addresses: string[] } - unassigns every given address. Their existing WalletPositions are left as-is. */

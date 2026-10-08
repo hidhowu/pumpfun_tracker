@@ -397,16 +397,32 @@ export default function SettingsPage() {
             onChange={(v) => set("defaultExecutionDelaySeconds", v)}
             description="Simulated latency between detecting a trade and filling our own order."
           />
+          <div className="hidden sm:block" />
           <NumberField
-            id="fee"
-            label="Flat fee per trade"
-            prefix="$"
-            step={0.1}
+            id="pumpFee"
+            label="Pump fee"
+            suffix="%"
+            step={0.05}
             min={0}
-            value={draft.defaultFeeUsd}
-            onChange={(v) => set("defaultFeeUsd", v)}
-            description="Deducted on both the buy and the sell (creator fee + gas, modeled as one flat cost)."
+            value={draft.defaultPumpFeePercent}
+            onChange={(v) => set("defaultPumpFeePercent", v)}
+            description="pump.fun's on-chain fee (0.95% protocol + 0.30% creator = 1.25%), charged as a % of the trade's value on every buy AND every sell."
           />
+          <NumberField
+            id="jitoFee"
+            label="Jito fee per transaction"
+            prefix="$"
+            step={0.01}
+            min={0}
+            value={draft.defaultJitoFeeUsd}
+            onChange={(v) => set("defaultJitoFeeUsd", v)}
+            description="Flat USD cost to land each transaction (Jito tip + priority fee), charged on every buy AND every sell."
+          />
+          <p className="text-xs text-muted-foreground sm:col-span-2">
+            Buy fees are paid on top of the trade size and hit realized P&amp;L immediately; sell fees come out of the
+            sale proceeds when the position closes. e.g. a $20 buy at 1.25% + $0.10 Jito costs $20.35, and a $30 sale
+            nets $29.525.
+          </p>
         </CardContent>
       </Card>
 

@@ -8,6 +8,8 @@ import { DailySnapshot } from "./models/DailySnapshot.js";
 import { NegativeBalanceEvent } from "./models/NegativeBalanceEvent.js";
 import { resolveTraderSettings } from "./settings.js";
 import { ensureTraderInitialized } from "./simulation/init.js";
+import { closeAllPositionsForTrader } from "./simulation/executor.js";
+import { closeAllWalletPositionsForTrader } from "./simulation/walletExecutor.js";
 
 /**
  * A Solana address is a base58-encoded 32-byte public key. Rejecting
@@ -68,30 +70,63 @@ export async function addTradersBulk(entries) {
     deduped.push(entry);
   }
 
-  const existingDocs = await Trader.find({ address: { $in: deduped.map((e) => e.address) } }, { address: 1 }).lean();
-  const existingAddresses = new Set(existingDocs.map((d) => d.address));
+  const existingDocs = await Trader.find({ address: { $in: deduped.map((e) => e.address) } }, { address: 1, status: 1 }).lean();
+  const statusByAddress = new Map(existingDocs.map((d) => [d.address, d.status]));
 
-  const toInsert = deduped.filter((e) => !existingAddresses.has(e.address));
-  const skipped = deduped.filter((e) => existingAddresses.has(e.address)).map((e) => e.address);
+  // Anything already on the platform is skipped - and a blacklisted address
+  // in particular is never re-activated by being pasted in again (it stays
+  // blacklisted and untracked; un-blacklisting is an explicit action on the
+  // Blacklisted page). Reported separately so the UI can say why.
+  const toInsert = deduped.filter((e) => !statusByAddress.has(e.address));
+  const skipped = deduped.filter((e) => statusByAddress.get(e.address) === "active").map((e) => e.address);
+  const blacklisted = deduped.filter((e) => statusByAddress.get(e.address) === "blacklisted").map((e) => e.address);
 
   let added = [];
   if (toInsert.length > 0) {
-    const docs = await Trader.insertMany(
-      toInsert.map((e) => ({ address: e.address, label: e.label })),
-      { ordered: false }
-    );
-    added = docs.map((d) => d.address);
+    try {
+      const docs = await Trader.insertMany(
+        toInsert.map((e) => ({ address: e.address, label: e.label })),
+        { ordered: false }
+      );
+      added = docs.map((d) => d.address);
+    } catch (err) {
+      // A concurrent request inserted some of the same addresses first
+      // (unique index) - everything else in the batch still went in.
+      if (err?.code !== 11000 && !err?.writeErrors) throw err;
+      const inserted = new Set((err.insertedDocs || []).map((d) => d.address));
+      added = toInsert.filter((e) => inserted.has(e.address)).map((e) => e.address);
+      skipped.push(...toInsert.filter((e) => !inserted.has(e.address)).map((e) => e.address));
+    }
   }
 
-  return { added, skipped, invalid };
+  return { added, skipped, blacklisted, invalid };
 }
 
+/**
+ * Blacklisting also closes every open position this trader has - in every
+ * profile and every wallet - at the current price, and cancels anything
+ * queued for them (once blacklisted they're no longer watched, so their sell
+ * signal would never arrive). Returns { trader, closedPositions, pendingCloses },
+ * where pendingCloses are positions that couldn't be priced right now and
+ * will be closed by the next risk-check sweep.
+ */
 export async function setBlacklisted(address, blacklisted) {
-  return Trader.findOneAndUpdate(
+  const trader = await Trader.findOneAndUpdate(
     { address },
     { status: blacklisted ? "blacklisted" : "active", blacklistedAt: blacklisted ? new Date() : null },
     { returnDocument: "after" }
   );
+  if (!trader || !blacklisted) return { trader, closedPositions: 0, pendingCloses: 0 };
+
+  const [profileResult, walletResult] = await Promise.all([
+    closeAllPositionsForTrader(address, "blacklisted"),
+    closeAllWalletPositionsForTrader(address, "blacklisted"),
+  ]);
+  return {
+    trader,
+    closedPositions: profileResult.closed + walletResult.closed,
+    pendingCloses: profileResult.pending + walletResult.pending,
+  };
 }
 
 /** muted: true | false | null (null clears the override, falling back to the shared default) - shared across every profile, not per-profile (a wallet's notification preference isn't a strategy choice). */

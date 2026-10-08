@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { getActiveProxyPool, recordProxyResult } from "./proxyService.js";
+import { getActiveProxyPool, recordProxyResult, PROXY_BROKEN_HTTP_STATUSES } from "./proxyService.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -110,6 +110,12 @@ async function curlGetJson(url) {
     proxyRoundRobinIndex++;
     try {
       const result = await runCurl(url, proxy.url);
+      if (!result.status || PROXY_BROKEN_HTTP_STATUSES.has(result.status)) {
+        // Connected to the proxy, but it relayed no usable pump.fun answer
+        // (auth rejected / IP blocked) - that's this proxy failing, not pump.fun.
+        recordProxyResult(proxy._id, false, `HTTP ${result.status || "no response"} through proxy`).catch(() => {});
+        continue;
+      }
       recordProxyResult(proxy._id, true).catch(() => {}); // fire-and-forget - never let bookkeeping slow down the actual response
       if (result.status === 429) continue; // this proxy's IP is rate-limited right now - immediately try the next one instead of giving up
       return result;

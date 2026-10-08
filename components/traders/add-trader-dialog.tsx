@@ -28,10 +28,11 @@ function parseBulkInput(raw: string): string[] {
     .filter(Boolean);
 }
 
-function summarizeResult(added: string[], skipped: string[], invalid: string[]) {
+function summarizeResult(added: string[], skipped: string[], blacklisted: string[], invalid: string[]) {
   const parts: string[] = [];
   if (added.length) parts.push(`${added.length} added`);
   if (skipped.length) parts.push(`${skipped.length} already tracked`);
+  if (blacklisted.length) parts.push(`${blacklisted.length} blacklisted (skipped)`);
   if (invalid.length) parts.push(`${invalid.length} not a valid address`);
   if (parts.length === 0) return "Nothing to add.";
   return parts.join(", ");
@@ -61,9 +62,11 @@ export function AddTraderDialog({ onAdded }: { onAdded: () => void }) {
     }
     setSubmitting(true);
     try {
-      const { added, skipped, invalid } = await addTraderSingle(address, singleLabel.trim() || undefined);
+      const { added, skipped, blacklisted, invalid } = await addTraderSingle(address, singleLabel.trim() || undefined);
       if (added.length) {
         toast.success(`Now tracking ${formatAddress(address)}`);
+      } else if (blacklisted.length) {
+        toast.warning(`${formatAddress(address)} is blacklisted - not added. Un-blacklist it from the Blacklisted page to track it again.`);
       } else if (skipped.length) {
         toast.info(`${formatAddress(address)} is already tracked`);
       } else if (invalid.length) {
@@ -86,8 +89,15 @@ export function AddTraderDialog({ onAdded }: { onAdded: () => void }) {
     }
     setSubmitting(true);
     try {
-      const { added, skipped, invalid } = await addTradersBulk(bulkAddresses);
-      toast.success(summarizeResult(added, skipped, invalid));
+      const { added, skipped, blacklisted, invalid } = await addTradersBulk(bulkAddresses);
+      const summary = summarizeResult(added, skipped, blacklisted, invalid);
+      if (added.length) toast.success(summary);
+      else toast.info(summary);
+      if (blacklisted.length) {
+        toast.warning(`Skipped ${blacklisted.length} blacklisted address${blacklisted.length === 1 ? "" : "es"}`, {
+          description: blacklisted.map((a) => formatAddress(a)).join(", "),
+        });
+      }
       reset();
       setOpen(false);
       onAdded();
@@ -116,8 +126,8 @@ export function AddTraderDialog({ onAdded }: { onAdded: () => void }) {
         <DialogHeader>
           <DialogTitle>Add trader(s) to track</DialogTitle>
           <DialogDescription>
-            Duplicates are never an error - already-tracked addresses are silently
-            skipped, whether added one at a time or in bulk.
+            Only new addresses are added. Anything already on the platform is skipped - including
+            blacklisted addresses, which stay blacklisted and untracked.
           </DialogDescription>
         </DialogHeader>
 

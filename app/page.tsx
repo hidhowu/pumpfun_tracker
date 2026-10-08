@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Users, Layers, Wallet, Coins } from "lucide-react";
 import { TraderTable } from "@/components/traders/trader-table";
 import { AddTraderDialog } from "@/components/traders/add-trader-dialog";
+import { ExportCsvDialog } from "@/components/export-csv-dialog";
 import { StatTile } from "@/components/traders/stat-tile";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { listTraderLists, listTraders, updateTrader } from "@/lib/api";
@@ -15,8 +16,15 @@ import type { Trader, TraderListView } from "@/lib/types";
 const POLL_INTERVAL_MS = 8000;
 const ALL_TRADERS_VALUE = "__all__"; // Select can't use "" as an item value, so this stands in for "no list filter"
 
+function blacklistCloseSummary(closed: number, pending: number) {
+  if (closed + pending === 0) return "";
+  const parts = [`${closed} open position${closed === 1 ? "" : "s"} closed`];
+  if (pending) parts.push(`${pending} closing shortly (price unavailable)`);
+  return ` - ${parts.join(", ")}`;
+}
+
 export default function DashboardPage() {
-  const { currentProfileId } = useProfile();
+  const { currentProfileId, currentProfile } = useProfile();
   const [traders, setTraders] = useState<Trader[]>([]);
   const [loading, setLoading] = useState(true);
   const [lists, setLists] = useState<TraderListView[]>([]);
@@ -56,8 +64,8 @@ export default function DashboardPage() {
   async function handleBlacklistToggle(address: string, blacklist: boolean) {
     if (!currentProfileId) return;
     try {
-      await updateTrader(currentProfileId, address, { status: blacklist ? "blacklisted" : "active" });
-      toast.success(blacklist ? "Trader blacklisted" : "Trader unblacklisted");
+      const { closedPositions, pendingCloses } = await updateTrader(currentProfileId, address, { status: blacklist ? "blacklisted" : "active" });
+      toast.success(blacklist ? `Trader blacklisted${blacklistCloseSummary(closedPositions, pendingCloses)}` : "Trader unblacklisted");
       await refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update trader");
@@ -123,7 +131,16 @@ export default function DashboardPage() {
             </SelectContent>
           </Select>
         </div>
-        <AddTraderDialog onAdded={refresh} />
+        <div className="flex flex-wrap items-center gap-2">
+          {currentProfileId && (
+            <ExportCsvDialog
+              endpoint={`/api/profiles/${currentProfileId}/export`}
+              title={`Export profile${currentProfile ? ` "${currentProfile.name}"` : ""}`}
+              description="Every active (non-blacklisted) trader's simulated trades under this profile's settings - per hour, per day, or per trade, with a per-trader summary (win rate, P&L, win/loss days)."
+            />
+          )}
+          <AddTraderDialog onAdded={refresh} />
+        </div>
       </div>
 
       <TraderTable

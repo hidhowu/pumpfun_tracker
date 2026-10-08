@@ -34,7 +34,12 @@ const tabsListVariants = cva(
   // and widening the whole page. snap-x + each trigger's snap-start (see
   // TabsTrigger below) makes that swipe settle cleanly on a tab boundary
   // instead of stopping at an arbitrary half-scrolled position.
-  "group/tabs-list inline-flex w-fit max-w-full items-center justify-center gap-1 overflow-x-auto scroll-smooth rounded-lg p-1 text-muted-foreground [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden snap-x snap-proximity group-data-horizontal/tabs:h-10 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col data-[variant=line]:rounded-none",
+  // justify-start, NOT justify-center: centered flex content that overflows
+  // spills out of BOTH edges, and the part past the left edge sits at a
+  // negative scroll offset no scrollbar can ever reach - that's what clipped
+  // the first tab ("Performance") on the wallet/trader pages. When the tabs
+  // fit, w-fit makes the list exactly content-sized, so this changes nothing.
+  "group/tabs-list inline-flex w-fit max-w-full items-center justify-start gap-1 overflow-x-auto scroll-smooth rounded-lg p-1 text-muted-foreground [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden snap-x snap-proximity group-data-horizontal/tabs:h-10 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col data-[variant=line]:rounded-none",
   {
     variants: {
       variant: {

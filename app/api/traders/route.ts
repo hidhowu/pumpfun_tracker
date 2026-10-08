@@ -26,6 +26,8 @@ export async function GET(request: NextRequest) {
  *   { "addresses": ["...", "...", { "address": "...", "label": "..." }] }
  * Duplicates (already-tracked addresses, including repeats within the same
  * request) are silently skipped - never an error - and returned in `skipped`.
+ * Blacklisted addresses are skipped too (never re-activated) and returned in
+ * `blacklisted`.
  */
 export async function POST(request: NextRequest) {
   await connectDb();
@@ -41,6 +43,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Provide 'address' or 'addresses'." }, { status: 400 });
   }
 
-  const { added, skipped, invalid } = await addTradersBulk(entries);
-  return NextResponse.json({ added, skipped, invalid });
+  const { added, skipped, blacklisted, invalid } = await addTradersBulk(entries);
+  return NextResponse.json({ added, skipped, blacklisted, invalid });
 }

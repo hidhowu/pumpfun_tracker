@@ -5,6 +5,7 @@ import { WalletPosition } from "../models/WalletPosition.js";
 import { WalletPendingExecution } from "../models/WalletPendingExecution.js";
 import { getCoinInfo, priceFromCoinInfo, prefetchPrices } from "../pumpFunApi.js";
 import { logEvent } from "../systemLog.js";
+import { computeTradeFees, realizedCounterDeltaOnClose } from "../fees.js";
 
 async function markSkipped(pending, reason) {
   pending.status = "skipped";
@@ -61,12 +62,15 @@ async function executeWalletBuy(pending) {
   if (!price?.priceUsd) return markSkipped(pending, "no current price available for this mint");
 
   const spendUsd = walletDoc.settings.tradeSizeUsd;
-  const feeUsd = walletDoc.settings.feeUsd;
+  const buyFees = computeTradeFees(spendUsd, walletDoc.settings);
+  const feeUsd = buyFees.totalFeeUsd;
   const totalCost = spendUsd + feeUsd;
 
+  // The buy fee is booked into realized P&L right away, in the same atomic
+  // write as the debit (see db/fees.js) - it's money already gone.
   const debited = await Wallet.findOneAndUpdate(
     { _id: pending.walletId, balanceUsd: { $gte: totalCost } },
-    { $inc: { balanceUsd: -totalCost } },
+    { $inc: { balanceUsd: -totalCost, realizedPnlUsd: -feeUsd } },
     { returnDocument: "after" }
   );
   if (!debited) return markSkipped(pending, "insufficient wallet balance");
@@ -83,6 +87,9 @@ async function executeWalletBuy(pending) {
       tokenAmount,
       costBasisUsd: spendUsd,
       buyFeeUsd: feeUsd,
+      buyPumpFeeUsd: buyFees.pumpFeeUsd,
+      buyJitoFeeUsd: buyFees.jitoFeeUsd,
+      buyFeeRealizedAtOpen: true,
       buyPriceUsd: price.priceUsd,
       openTriggerSignature: pending.sourceSignature,
       maxValueUsd: spendUsd,
@@ -96,29 +103,35 @@ async function executeWalletBuy(pending) {
     // The balance was already debited above - if creating the position
     // failed (e.g. lost a race on the unique-open-position index), refund
     // it, since this buy never actually happened for the wallet.
-    await Wallet.updateOne({ _id: pending.walletId }, { $inc: { balanceUsd: totalCost } });
+    await Wallet.updateOne({ _id: pending.walletId }, { $inc: { balanceUsd: totalCost, realizedPnlUsd: feeUsd } });
     if (err?.code === 11000) return markSkipped(pending, "position already open on this wallet (lost the race)");
     throw err;
   }
 
   await WalletTrader.updateOne(
     { _id: walletTrader._id },
-    { $inc: { openPositionCount: 1 }, $addToSet: { everBoughtMints: pending.mint }, $set: { lastActionAt: new Date() } }
+    {
+      $inc: { openPositionCount: 1, realizedPnlUsd: -feeUsd },
+      $addToSet: { everBoughtMints: pending.mint },
+      $set: { lastActionAt: new Date() },
+    }
   );
   await Wallet.updateOne({ _id: pending.walletId }, { $inc: { openPositionCount: 1 } });
 
   await markDone(pending);
-  logEvent("trade", `[wallet] Bought ${pending.mint} for ${trader.address}: $${spendUsd.toFixed(2)} @ $${price.priceUsd}`, {
-    meta: { walletId: String(pending.walletId), traderAddress: trader.address, mint: pending.mint, spendUsd, priceUsd: price.priceUsd },
+  logEvent("trade", `[wallet] Bought ${pending.mint} for ${trader.address}: $${spendUsd.toFixed(2)} + $${feeUsd.toFixed(2)} fees @ $${price.priceUsd}`, {
+    meta: { walletId: String(pending.walletId), traderAddress: trader.address, mint: pending.mint, spendUsd, feeUsd, priceUsd: price.priceUsd },
   });
 }
 
 /** Wallet-scoped mirror of db/simulation/executor.js's closePosition - see that function's comment for why findOneAndUpdate with a status guard (not read-then-write) is the actual concurrency guarantee here too. */
-async function closeWalletPosition(positionId, { priceUsd, feeUsd, closeReason, closeSignature }) {
+async function closeWalletPosition(positionId, { priceUsd, fees, closeReason, closeSignature }) {
   const position = await WalletPosition.findOne({ _id: positionId, status: "open" });
   if (!position) return null;
 
   const proceedsUsd = position.tokenAmount * priceUsd;
+  const sellFees = computeTradeFees(proceedsUsd, fees);
+  const feeUsd = sellFees.totalFeeUsd;
   const totalCost = position.costBasisUsd + position.buyFeeUsd;
   const netProceeds = proceedsUsd - feeUsd;
   const realizedPnlUsd = netProceeds - totalCost;
@@ -139,6 +152,8 @@ async function closeWalletPosition(positionId, { priceUsd, feeUsd, closeReason, 
         sellPriceUsd: priceUsd,
         proceedsUsd,
         sellFeeUsd: feeUsd,
+        sellPumpFeeUsd: sellFees.pumpFeeUsd,
+        sellJitoFeeUsd: sellFees.jitoFeeUsd,
         realizedPnlUsd,
         realizedPnlPercent,
         ...(peakIsNow
@@ -156,13 +171,14 @@ async function closeWalletPosition(positionId, { priceUsd, feeUsd, closeReason, 
   // Sells only ever increase balance - a plain atomic $inc is sufficient
   // here (unlike the buy-side debit, there is no way this can push the
   // balance negative, so no conditional guard is needed).
+  const realizedDelta = realizedCounterDeltaOnClose(updated, realizedPnlUsd);
   await Wallet.updateOne(
     { _id: updated.walletId },
-    { $inc: { balanceUsd: netProceeds, realizedPnlUsd, closedPositionCount: 1, openPositionCount: -1 } }
+    { $inc: { balanceUsd: netProceeds, realizedPnlUsd: realizedDelta, closedPositionCount: 1, openPositionCount: -1 } }
   );
   await WalletTrader.updateOne(
     { walletId: updated.walletId, traderAddress: updated.traderAddress },
-    { $inc: { openPositionCount: -1, closedPositionCount: 1, realizedPnlUsd }, $set: { lastActionAt: new Date() } }
+    { $inc: { openPositionCount: -1, closedPositionCount: 1, realizedPnlUsd: realizedDelta }, $set: { lastActionAt: new Date() } }
   );
 
   logEvent(
@@ -195,12 +211,35 @@ async function executeWalletSell(pending) {
 
   await closeWalletPosition(position._id, {
     priceUsd: price.priceUsd,
-    feeUsd: walletDoc.settings.feeUsd,
+    fees: walletDoc.settings,
     closeReason: "trader_sell",
     closeSignature: pending.sourceSignature,
   });
 
   await markDone(pending);
+}
+
+/** Wallet-scoped mirror of db/simulation/executor.js's closeAllPositionsForTrader - every wallet this trader has open positions on. */
+export async function closeAllWalletPositionsForTrader(traderAddress, closeReason = "blacklisted") {
+  await WalletPendingExecution.updateMany(
+    { traderAddress, status: "pending" },
+    { $set: { status: "skipped", skipReason: "trader blacklisted", processedAt: new Date() } }
+  );
+
+  const open = await WalletPosition.find({ traderAddress, status: "open" });
+  await prefetchPrices(open.map((p) => p.mint));
+  const walletCache = new Map();
+  let closed = 0;
+  for (const position of open) {
+    const price = priceFromCoinInfo(await getCoinInfo(position.mint).catch(() => null));
+    if (!price?.priceUsd) continue;
+    const key = String(position.walletId);
+    if (!walletCache.has(key)) walletCache.set(key, await Wallet.findById(position.walletId));
+    const wallet = walletCache.get(key);
+    if (!wallet) continue;
+    if (await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: wallet.settings, closeReason, closeSignature: null })) closed += 1;
+  }
+  return { closed, pending: open.length - closed };
 }
 
 /** Wallet-scoped mirror of processDuePendingExecutions - same atomic-claim pattern, own collection. */
@@ -245,6 +284,12 @@ export async function checkWalletRiskExits() {
   await prefetchPrices(openPositions.map((p) => p.mint));
 
   const walletCache = new Map();
+  // Traders blacklisted while a position was open - closed below (backstop
+  // for closeAllWalletPositionsForTrader when no price was available then).
+  const traderAddresses = [...new Set(openPositions.map((p) => p.traderAddress))];
+  const blacklisted = new Set(
+    (await Trader.find({ address: { $in: traderAddresses }, status: "blacklisted" }, { address: 1 }).lean()).map((t) => t.address)
+  );
 
   const results = await Promise.all(
     openPositions.map(async (position) => {
@@ -280,6 +325,9 @@ export async function checkWalletRiskExits() {
       }
 
       const settings = wallet.settings;
+      if (blacklisted.has(position.traderAddress)) {
+        return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "blacklisted", closeSignature: null }));
+      }
       const hasStopLoss = settings.stopLossPercent !== null && settings.stopLossPercent !== undefined;
       const hasTakeProfit = settings.takeProfitPercent !== null && settings.takeProfitPercent !== undefined;
       const hasMaxHoldTime = !!settings.maxTradeTimeSeconds && settings.maxTradeTimeSeconds > 0;
@@ -287,17 +335,17 @@ export async function checkWalletRiskExits() {
       if (!hasStopLoss && !hasTakeProfit && !hasMaxHoldTime && trailingStops.length === 0) return false;
 
       if (hasStopLoss && unrealizedPercent <= -Math.abs(settings.stopLossPercent)) {
-        return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "stop_loss", closeSignature: null }));
+        return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "stop_loss", closeSignature: null }));
       }
 
       if (hasTakeProfit && unrealizedPercent >= Math.abs(settings.takeProfitPercent)) {
-        return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "take_profit", closeSignature: null }));
+        return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "take_profit", closeSignature: null }));
       }
 
       if (hasMaxHoldTime) {
         const elapsedSeconds = (Date.now() - position.openedAt.getTime()) / 1000;
         if (elapsedSeconds >= settings.maxTradeTimeSeconds) {
-          return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "max_hold_time", closeSignature: null }));
+          return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "max_hold_time", closeSignature: null }));
         }
       }
 
@@ -324,7 +372,7 @@ export async function checkWalletRiskExits() {
               );
             }
           } else if (unrealizedPercent <= rule.exitPercent) {
-            return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "trailing_stop", closeSignature: null }));
+            return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "trailing_stop", closeSignature: null }));
           }
         }
       }

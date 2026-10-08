@@ -83,6 +83,7 @@ export function WalletPerformanceTab({ wallet }: Props) {
           value={formatUsd(wallet.realizedPnlUsd)}
           icon={Coins}
           tone={wallet.realizedPnlUsd > 0 ? "positive" : wallet.realizedPnlUsd < 0 ? "negative" : "default"}
+          hint="after all fees - incl. buy fees of open positions"
         />
         <StatTile label="Open positions" value={String(wallet.openPositionCount)} icon={Layers} />
         <StatTile label="Total trades" value={String(totalTrades)} icon={LineChart} hint={`${wallet.closedPositionCount} closed`} />

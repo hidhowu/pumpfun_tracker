@@ -2,13 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
 import { Wallet } from "@/db/models/Wallet";
 import { deleteWallet, renameWallet, updateWalletSettings } from "@/db/walletService";
+import { applyDailyBalanceResets } from "@/db/simulation/walletSnapshot";
 
 type Params = { params: Promise<{ id: string }> };
 
 export async function GET(_request: NextRequest, { params }: Params) {
   await connectDb();
   const { id } = await params;
-  const wallet = await Wallet.findById(id).lean();
+  // Backstop for the daemon's minute-by-minute check - see applyDailyBalanceResets.
+  await applyDailyBalanceResets().catch(() => {});
+  // Hydrated (not .lean()) so schema defaults fill in settings added after
+  // this wallet was created (e.g. pumpFeePercent/jitoFeeUsd).
+  const wallet = await Wallet.findById(id);
   if (!wallet) return NextResponse.json({ error: "Wallet not found" }, { status: 404 });
   return NextResponse.json({ wallet: JSON.parse(JSON.stringify(wallet)) });
 }

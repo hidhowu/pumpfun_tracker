@@ -20,7 +20,8 @@ const NUMERIC_FIELDS = [
   "defaultDustBuyUsd",
   "defaultDustSellFractionPercent",
   "defaultExecutionDelaySeconds",
-  "defaultFeeUsd",
+  "defaultPumpFeePercent",
+  "defaultJitoFeeUsd",
   "defaultMaxTradeTimeSeconds", // 0 = disabled/infinite, not nullable
 ];
 const NULLABLE_NUMERIC_FIELDS = ["defaultStopLossPercent", "defaultTakeProfitPercent"]; // null = disabled
@@ -50,7 +51,7 @@ function isValidTrailingStops(value: unknown): value is { armPercent: number; ex
  * defaultTakeProfitPercent (number or null), defaultMaxTradeTimeSeconds
  * (number, 0 = disabled), defaultTrailingStops (array of {armPercent,
  * exitPercent} - whole-list replacement), defaultAllowNegativeBalance,
- * defaultExecutionDelaySeconds, defaultFeeUsd) plus the two system-wide
+ * defaultExecutionDelaySeconds, defaultPumpFeePercent, defaultJitoFeeUsd) plus the two system-wide
  * fields (defaultMuted, riskCheckIntervalSeconds), which apply regardless
  * of which profile is selected.
  */
@@ -67,8 +68,9 @@ export async function PATCH(request: NextRequest) {
   for (const field of NUMERIC_FIELDS) {
     if (typeof body[field] === "number" && Number.isFinite(body[field])) profileUpdate[field] = body[field];
   }
-  if (typeof profileUpdate.defaultMaxTradeTimeSeconds === "number") {
-    profileUpdate.defaultMaxTradeTimeSeconds = Math.max(0, profileUpdate.defaultMaxTradeTimeSeconds);
+  // None of these can meaningfully be negative.
+  for (const field of ["defaultMaxTradeTimeSeconds", "defaultPumpFeePercent", "defaultJitoFeeUsd"]) {
+    if (typeof profileUpdate[field] === "number") profileUpdate[field] = Math.max(0, profileUpdate[field] as number);
   }
   for (const field of NULLABLE_NUMERIC_FIELDS) {
     if (body[field] === null) profileUpdate[field] = null;

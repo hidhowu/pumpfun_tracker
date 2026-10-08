@@ -27,6 +27,7 @@ import type { TrailingStop, WalletSettings, WalletView } from "@/lib/types";
 type Props = {
   walletId: string;
   settings: WalletSettings;
+  lastAutoResetAt?: string | null;
   onUpdated: (settings: WalletSettings) => void;
   onReset?: (wallet: WalletView) => void;
 };
@@ -137,7 +138,10 @@ function TrailingStopsSection({ trailingStops, onSave }: { trailingStops: Traili
  * settings object (independent of every Profile/trader), so every field is
  * a direct value that saves immediately.
  */
-export function WalletSettingsPanel({ walletId, settings, onUpdated, onReset }: Props) {
+/** 00:00 UTC expressed in the viewer's own clock, e.g. "01:00". */
+const localResetTime = new Date(Date.UTC(2000, 0, 1)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+export function WalletSettingsPanel({ walletId, settings, lastAutoResetAt, onUpdated, onReset }: Props) {
   const [resettingFull, setResettingFull] = useState(false);
   const [resettingBalance, setResettingBalance] = useState(false);
 
@@ -202,10 +206,16 @@ export function WalletSettingsPanel({ walletId, settings, onUpdated, onReset }: 
               <div className="flex min-w-0 flex-col">
                 <span className="text-sm font-medium">Reset balance every day</span>
                 <span className="text-xs text-muted-foreground">
-                  At the start of each UTC day, balance goes back to the starting balance - open positions, trade
-                  history, and P&amp;L tracking are completely untouched. Useful for testing this strategy with a
-                  fresh amount every day.
+                  At 00:00 UTC ({localResetTime} your time) balance goes back to the starting balance - open
+                  positions, trade history, and P&amp;L tracking are completely untouched. Useful for testing this
+                  strategy with a fresh amount every day. Turning it on takes effect from the next reset.
                 </span>
+                {settings.autoResetBalanceDaily && (
+                  <span className="mt-1 text-xs text-muted-foreground">
+                    Last automatic reset:{" "}
+                    {lastAutoResetAt ? new Date(lastAutoResetAt).toLocaleString() : "not yet"}
+                  </span>
+                )}
               </div>
               <Switch
                 checked={settings.autoResetBalanceDaily}
@@ -263,17 +273,32 @@ export function WalletSettingsPanel({ walletId, settings, onUpdated, onReset }: 
               onSave={(v) => save({ tradeSizeUsd: v })}
               description="USD spent per simulated buy on this wallet - independent of the trader's own trade size."
             />
+            <div className="hidden sm:block" />
             <NumberField
-              id="w-fee"
-              label="Flat fee per trade"
-              prefix="$"
-              step={0.1}
+              id="w-pumpFee"
+              label="Pump fee"
+              suffix="%"
+              step={0.05}
               min={0}
-              value={settings.feeUsd}
-              onSave={(v) => save({ feeUsd: v })}
-              description="Deducted on both buy and sell, same as trader/global fee settings."
+              value={settings.pumpFeePercent ?? 1.25}
+              onSave={(v) => save({ pumpFeePercent: v })}
+              description="% of the trade's value pump.fun charges on every buy AND sell (0.95% protocol + 0.30% creator)."
+            />
+            <NumberField
+              id="w-jitoFee"
+              label="Jito fee per transaction"
+              prefix="$"
+              step={0.01}
+              min={0}
+              value={settings.jitoFeeUsd ?? 0}
+              onSave={(v) => save({ jitoFeeUsd: v })}
+              description="Flat USD cost to land each buy and each sell (Jito tip + priority fee)."
             />
           </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Buy fees are paid on top of the trade size and count against realized P&amp;L right away; sell fees come
+            out of the proceeds when the position closes.
+          </p>
         </div>
 
         <Separator />

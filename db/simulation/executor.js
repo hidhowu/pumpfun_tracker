@@ -6,6 +6,7 @@ import { NegativeBalanceEvent } from "../models/NegativeBalanceEvent.js";
 import { resolveTraderSettings } from "../settings.js";
 import { getCoinInfo, priceFromCoinInfo, prefetchPrices } from "../pumpFunApi.js";
 import { logEvent } from "../systemLog.js";
+import { computeTradeFees, realizedCounterDeltaOnClose } from "../fees.js";
 
 async function markSkipped(pending, reason) {
   pending.status = "skipped";
@@ -73,7 +74,10 @@ async function executeBuy(pending) {
   if (existingOpen) return markSkipped(pending, "position already open (race)");
 
   const settings = await resolveTraderSettings(pending.profileId, trader.address, { profileTrader });
-  if (!settings.allowNegativeBalance && profileTrader.sim.balanceUsd < settings.tradeSizeUsd) {
+  const spendUsd = settings.tradeSizeUsd;
+  const buyFees = computeTradeFees(spendUsd, settings);
+  const feeUsd = buyFees.totalFeeUsd;
+  if (!settings.allowNegativeBalance && profileTrader.sim.balanceUsd < spendUsd + feeUsd) {
     return markSkipped(pending, "insufficient balance and negative balance is disabled for this trader");
   }
 
@@ -81,8 +85,6 @@ async function executeBuy(pending) {
   const price = priceFromCoinInfo(coin);
   if (!price?.priceUsd) return markSkipped(pending, "no current price available for this mint");
 
-  const spendUsd = settings.tradeSizeUsd;
-  const feeUsd = settings.feeUsd;
   const tokenAmount = spendUsd / price.priceUsd;
   // At t=0 the position is worth exactly what was spent on it (that's the
   // definition of costBasisUsd) - the fee is a separate, already-realized
@@ -99,6 +101,9 @@ async function executeBuy(pending) {
       tokenAmount,
       costBasisUsd: spendUsd,
       buyFeeUsd: feeUsd,
+      buyPumpFeeUsd: buyFees.pumpFeeUsd,
+      buyJitoFeeUsd: buyFees.jitoFeeUsd,
+      buyFeeRealizedAtOpen: true,
       buyPriceUsd: price.priceUsd,
       openTriggerSignature: pending.sourceSignature,
       maxValueUsd: spendUsd,
@@ -120,15 +125,17 @@ async function executeBuy(pending) {
   await ProfileTrader.updateOne(
     { _id: profileTrader._id },
     {
-      $inc: { "sim.openPositionCount": 1 },
+      // The buy fee is money already gone - it hits realized P&L now, not
+      // only once the position closes (see db/fees.js).
+      $inc: { "sim.openPositionCount": 1, "sim.realizedPnlUsd": -feeUsd },
       $addToSet: { "sim.everBoughtMints": pending.mint },
       $set: { "sim.lastActionAt": new Date() },
     }
   );
 
   await markDone(pending);
-  logEvent("trade", `Bought ${pending.mint} for ${trader.address}: $${spendUsd.toFixed(2)} @ $${price.priceUsd}`, {
-    meta: { profileId: String(pending.profileId), traderAddress: trader.address, mint: pending.mint, spendUsd, priceUsd: price.priceUsd },
+  logEvent("trade", `Bought ${pending.mint} for ${trader.address}: $${spendUsd.toFixed(2)} + $${feeUsd.toFixed(2)} fees @ $${price.priceUsd}`, {
+    meta: { profileId: String(pending.profileId), traderAddress: trader.address, mint: pending.mint, spendUsd, feeUsd, priceUsd: price.priceUsd },
   });
 }
 
@@ -147,11 +154,13 @@ async function executeBuy(pending) {
  * corrupting them (this is exactly what caused negative openPositionCount
  * and doubled balance changes in production).
  */
-async function closePosition(positionId, { priceUsd, feeUsd, closeReason, closeSignature }) {
+async function closePosition(positionId, { priceUsd, fees, closeReason, closeSignature }) {
   const position = await SimPosition.findOne({ _id: positionId, status: "open" });
   if (!position) return null; // already closed by a concurrent call - nothing to do
 
   const proceedsUsd = position.tokenAmount * priceUsd;
+  const sellFees = computeTradeFees(proceedsUsd, fees);
+  const feeUsd = sellFees.totalFeeUsd;
   const totalCost = position.costBasisUsd + position.buyFeeUsd;
   const netProceeds = proceedsUsd - feeUsd;
   const realizedPnlUsd = netProceeds - totalCost;
@@ -177,6 +186,8 @@ async function closePosition(positionId, { priceUsd, feeUsd, closeReason, closeS
         sellPriceUsd: priceUsd,
         proceedsUsd,
         sellFeeUsd: feeUsd,
+        sellPumpFeeUsd: sellFees.pumpFeeUsd,
+        sellJitoFeeUsd: sellFees.jitoFeeUsd,
         realizedPnlUsd,
         realizedPnlPercent,
         ...(peakIsNow
@@ -204,7 +215,11 @@ async function closePosition(positionId, { priceUsd, feeUsd, closeReason, closeS
   await ProfileTrader.updateOne(
     { _id: profileTrader._id },
     {
-      $inc: { "sim.openPositionCount": -1, "sim.closedPositionCount": 1, "sim.realizedPnlUsd": realizedPnlUsd },
+      $inc: {
+        "sim.openPositionCount": -1,
+        "sim.closedPositionCount": 1,
+        "sim.realizedPnlUsd": realizedCounterDeltaOnClose(updated, realizedPnlUsd),
+      },
       $set: { "sim.lastActionAt": new Date() },
     }
   );
@@ -232,12 +247,39 @@ async function executeSell(pending) {
 
   await closePosition(position._id, {
     priceUsd: price.priceUsd,
-    feeUsd: settings.feeUsd,
+    fees: settings,
     closeReason: "trader_sell",
     closeSignature: pending.sourceSignature,
   });
 
   await markDone(pending);
+}
+
+/**
+ * Closes every open position this trader has, in every profile, at the
+ * current price (normal sell fees apply), and cancels anything still queued
+ * for them. Called the moment a trader is blacklisted - once blacklisted
+ * they're no longer watched, so no "trader sold" signal would ever arrive
+ * to close these. A position whose price can't be fetched right now is left
+ * open here and picked up by checkRiskExits' blacklisted check on its next
+ * sweep (a few seconds later).
+ */
+export async function closeAllPositionsForTrader(traderAddress, closeReason = "blacklisted") {
+  await PendingExecution.updateMany(
+    { traderAddress, status: "pending" },
+    { $set: { status: "skipped", skipReason: "trader blacklisted", processedAt: new Date() } }
+  );
+
+  const open = await SimPosition.find({ traderAddress, status: "open" });
+  await prefetchPrices(open.map((p) => p.mint));
+  let closed = 0;
+  for (const position of open) {
+    const price = priceFromCoinInfo(await getCoinInfo(position.mint).catch(() => null));
+    if (!price?.priceUsd) continue;
+    const settings = await resolveTraderSettings(position.profileId, traderAddress);
+    if (await closePosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason, closeSignature: null })) closed += 1;
+  }
+  return { closed, pending: open.length - closed };
 }
 
 /**
@@ -337,6 +379,13 @@ export async function checkRiskExits() {
       const price = priceFromCoinInfo(coin);
       if (!price?.priceUsd) return false;
 
+      // Backstop for closeAllPositionsForTrader: anything it couldn't price at
+      // blacklist time is closed here on the next sweep.
+      if (trader.status === "blacklisted") {
+        const fees = await resolveTraderSettings(position.profileId, position.traderAddress);
+        return !!(await closePosition(position._id, { priceUsd: price.priceUsd, fees, closeReason: "blacklisted", closeSignature: null }));
+      }
+
       const currentValue = position.tokenAmount * price.priceUsd;
       const totalCost = position.costBasisUsd + position.buyFeeUsd;
       const { unrealizedUsd, unrealizedPercent } = computeUnrealized(currentValue, totalCost);
@@ -372,17 +421,17 @@ export async function checkRiskExits() {
       if (!hasStopLoss && !hasTakeProfit && !hasMaxHoldTime && trailingStops.length === 0) return false;
 
       if (hasStopLoss && unrealizedPercent <= -Math.abs(settings.stopLossPercent)) {
-        return !!(await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "stop_loss", closeSignature: null }));
+        return !!(await closePosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "stop_loss", closeSignature: null }));
       }
 
       if (hasTakeProfit && unrealizedPercent >= Math.abs(settings.takeProfitPercent)) {
-        return !!(await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "take_profit", closeSignature: null }));
+        return !!(await closePosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "take_profit", closeSignature: null }));
       }
 
       if (hasMaxHoldTime) {
         const elapsedSeconds = (Date.now() - position.openedAt.getTime()) / 1000;
         if (elapsedSeconds >= settings.maxTradeTimeSeconds) {
-          return !!(await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "max_hold_time", closeSignature: null }));
+          return !!(await closePosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "max_hold_time", closeSignature: null }));
         }
       }
 
@@ -409,7 +458,7 @@ export async function checkRiskExits() {
               );
             }
           } else if (unrealizedPercent <= rule.exitPercent) {
-            return !!(await closePosition(position._id, { priceUsd: price.priceUsd, feeUsd: settings.feeUsd, closeReason: "trailing_stop", closeSignature: null }));
+            return !!(await closePosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "trailing_stop", closeSignature: null }));
           }
         }
       }

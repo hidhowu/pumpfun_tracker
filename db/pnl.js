@@ -152,23 +152,73 @@ export function computeStreaks(dailyBreakdown) {
   };
 }
 
-/** Aggregate actualized + combined P&L across a range, plus the day-by-day breakdown and streaks. Use days=7 for "weekly", 30 for "monthly". */
-export async function computeRangePnl(profileId, traderAddress, days) {
-  const dailyBreakdown = await computeDailyBreakdown(profileId, traderAddress, days);
+/**
+ * computeRangePnl for many traders at once, from 2 queries total instead of
+ * ~3 per day per trader (a 30-day leaderboard over 100 traders was ~9,000
+ * sequential-ish queries). `currentValueByAddress` supplies today's live
+ * portfolio value per trader (for today's actualized P&L); a trader missing
+ * from it just gets a null actualized figure for today. Same output shape
+ * as computeRangePnl, keyed by address.
+ */
+export async function computeRangePnlBatch(profileId, addresses, days, { currentValueByAddress = new Map() } = {}) {
+  const today = todayUtcString();
+  const dates = Array.from({ length: days }, (_, i) => addDaysUtc(today, -(days - 1 - i)));
+  const rangeStart = new Date(`${dates[0]}T00:00:00.000Z`);
+  const rangeEnd = dayBoundsUtc(today).end;
 
+  const [snapshots, closed] = await Promise.all([
+    DailySnapshot.find(
+      { profileId, traderAddress: { $in: addresses }, date: { $gte: dates[0], $lte: addDaysUtc(today, 1) } },
+      { traderAddress: 1, date: 1, portfolioValueUsdAtOpen: 1 }
+    ).lean(),
+    SimPosition.find(
+      { profileId, traderAddress: { $in: addresses }, status: "closed", closedAt: { $gte: rangeStart, $lt: rangeEnd } },
+      { traderAddress: 1, closedAt: 1, realizedPnlUsd: 1, realizedPnlPercent: 1 }
+    ).lean(),
+  ]);
+
+  const snapValue = new Map(snapshots.map((s) => [`${s.traderAddress}|${s.date}`, s.portfolioValueUsdAtOpen]));
+  const closedByKey = new Map();
+  for (const p of closed) {
+    const key = `${p.traderAddress}|${new Date(p.closedAt).toISOString().slice(0, 10)}`;
+    if (!closedByKey.has(key)) closedByKey.set(key, []);
+    closedByKey.get(key).push(p);
+  }
+
+  const result = new Map();
+  for (const address of addresses) {
+    const dailyBreakdown = dates.map((date) => {
+      const startValue = snapValue.get(`${address}|${date}`) ?? null;
+      let endValue = snapValue.get(`${address}|${addDaysUtc(date, 1)}`) ?? null;
+      if (endValue === null && date === today) endValue = currentValueByAddress.get(address) ?? null;
+      const actualizedUsd = startValue !== null && endValue !== null ? endValue - startValue : null;
+      const dayClosed = closedByKey.get(`${address}|${date}`) || [];
+      return {
+        date,
+        actualizedUsd,
+        actualizedPercent: startValue ? (actualizedUsd / startValue) * 100 : null,
+        combinedUsd: dayClosed.reduce((sum, p) => sum + (p.realizedPnlUsd || 0), 0),
+        combinedPercent: dayClosed.reduce((sum, p) => sum + (p.realizedPnlPercent || 0), 0),
+        closedTradeCount: dayClosed.length,
+        wins: dayClosed.filter((p) => (p.realizedPnlUsd || 0) > 0).length,
+        losses: dayClosed.filter((p) => (p.realizedPnlUsd || 0) < 0).length,
+      };
+    });
+    result.set(address, summarizeRange(dailyBreakdown, days));
+  }
+  return result;
+}
+
+function summarizeRange(dailyBreakdown, days) {
   const firstWithStart = dailyBreakdown.find((d) => d.actualizedUsd !== null);
-  const totalActualizedUsd = dailyBreakdown.reduce((sum, d) => sum + (d.actualizedUsd || 0), 0);
-  const totalCombinedUsd = dailyBreakdown.reduce((sum, d) => sum + d.combinedUsd, 0);
-  const totalCombinedPercent = dailyBreakdown.reduce((sum, d) => sum + d.combinedPercent, 0);
   const totalClosedTrades = dailyBreakdown.reduce((sum, d) => sum + d.closedTradeCount, 0);
   const totalWins = dailyBreakdown.reduce((sum, d) => sum + (d.wins || 0), 0);
   const totalLosses = dailyBreakdown.reduce((sum, d) => sum + (d.losses || 0), 0);
-
   return {
     days,
-    actualizedUsd: firstWithStart ? totalActualizedUsd : null,
-    combinedUsd: totalCombinedUsd,
-    combinedPercent: totalCombinedPercent,
+    actualizedUsd: firstWithStart ? dailyBreakdown.reduce((sum, d) => sum + (d.actualizedUsd || 0), 0) : null,
+    combinedUsd: dailyBreakdown.reduce((sum, d) => sum + d.combinedUsd, 0),
+    combinedPercent: dailyBreakdown.reduce((sum, d) => sum + d.combinedPercent, 0),
     closedTradeCount: totalClosedTrades,
     wins: totalWins,
     losses: totalLosses,
@@ -177,4 +227,10 @@ export async function computeRangePnl(profileId, traderAddress, days) {
     dailyBreakdown,
     streaks: computeStreaks(dailyBreakdown),
   };
+}
+
+/** Aggregate actualized + combined P&L across a range, plus the day-by-day breakdown and streaks. Use days=7 for "weekly", 30 for "monthly". */
+export async function computeRangePnl(profileId, traderAddress, days) {
+  const dailyBreakdown = await computeDailyBreakdown(profileId, traderAddress, days);
+  return summarizeRange(dailyBreakdown, days);
 }

@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, CheckCircle2, Loader2, Plus, ShieldAlert, Shuffle, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Plus, RefreshCw, ShieldAlert, Shuffle, Square, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -177,6 +177,8 @@ export default function ProxiesPage() {
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkTest, setBulkTest] = useState<{ done: number; total: number; passed: number } | null>(null);
+  const cancelBulkTest = useRef(false);
 
   const refresh = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -229,6 +231,45 @@ export default function ProxiesPage() {
     }
   }
 
+  /**
+   * Re-tests a set of proxies one after another (a few at a time, so a big
+   * list finishes in reasonable time without flooding pump.fun from many
+   * IPs at once). Each pass un-blacklists the proxy; `enableOnSuccess` also
+   * switches a disabled proxy back on, so working ones go straight back into
+   * rotation without scrolling to each one.
+   */
+  async function runBulkTest(targets: ProxyView[], { enableOnSuccess }: { enableOnSuccess: boolean }) {
+    if (targets.length === 0 || bulkTest) return;
+    cancelBulkTest.current = false;
+    let done = 0;
+    let passed = 0;
+    setBulkTest({ done, total: targets.length, passed });
+
+    const queue = [...targets];
+    const CONCURRENCY = 3;
+    async function worker() {
+      while (queue.length > 0 && !cancelBulkTest.current) {
+        const proxy = queue.shift()!;
+        setTestingId(proxy._id);
+        const ok = await testProxy(proxy._id, { enableOnSuccess })
+          .then((r) => r.ok)
+          .catch(() => false);
+        done += 1;
+        if (ok) passed += 1;
+        setBulkTest({ done, total: targets.length, passed });
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, targets.length) }, worker));
+
+    setTestingId(null);
+    setBulkTest(null);
+    await refresh({ silent: true });
+    const stopped = cancelBulkTest.current ? " (stopped early)" : "";
+    const message = `Tested ${done} prox${done === 1 ? "y" : "ies"}${stopped}: ${passed} working${enableOnSuccess ? " and re-activated" : ""}, ${done - passed} failed`;
+    if (passed > 0) toast.success(message);
+    else toast.error(message);
+  }
+
   async function handleDelete(proxy: ProxyView) {
     setPendingId(proxy._id);
     try {
@@ -266,6 +307,7 @@ export default function ProxiesPage() {
 
   const allSelected = (proxies?.length ?? 0) > 0 && selected.size === proxies?.length;
   const blacklistedCount = useMemo(() => (proxies ?? []).filter((p) => p.status === "blacklisted").length, [proxies]);
+  const inactiveProxies = useMemo(() => (proxies ?? []).filter((p) => p.status === "blacklisted" || !p.enabled), [proxies]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -294,6 +336,42 @@ export default function ProxiesPage() {
             <AlertTriangle className="size-3.5" />
             {blacklistedCount} blacklisted
           </div>
+        )}
+        {bulkTest ? (
+          <div className="inline-flex items-center gap-2">
+            <div className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-card/40 px-3 py-1.5 text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+              Testing {bulkTest.done}/{bulkTest.total} - {bulkTest.passed} working
+            </div>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => (cancelBulkTest.current = true)}>
+              <Square className="size-3.5" /> Stop
+            </Button>
+          </div>
+        ) : (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={inactiveProxies.length === 0}
+              onClick={() => runBulkTest(inactiveProxies, { enableOnSuccess: true })}
+              title="Tests every blacklisted or disabled proxy one by one, and re-activates the ones that work"
+            >
+              <RefreshCw className="size-3.5" />
+              Re-test blacklisted &amp; disabled ({inactiveProxies.length})
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5"
+              disabled={!proxies || proxies.length === 0}
+              onClick={() => runBulkTest(proxies ?? [], { enableOnSuccess: false })}
+              title="Tests every proxy - working ones are un-blacklisted, failing ones count toward blacklisting. Enabled/disabled switches are left as they are."
+            >
+              <CheckCircle2 className="size-3.5" />
+              Test all
+            </Button>
+          </>
         )}
         {selected.size > 0 && (
           <AlertDialog>
@@ -427,7 +505,7 @@ export default function ProxiesPage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            disabled={isTesting}
+                            disabled={isTesting || !!bulkTest}
                             onClick={() => handleTest(proxy)}
                             className="gap-1.5"
                           >

@@ -38,6 +38,7 @@ const CLOSE_REASON_META: Record<
   bench: { label: "Bench", icon: Anchor, className: "border-primary/30 text-primary" },
   trailing_stop: { label: "Trailing stop", icon: Waves, className: "border-primary/30 text-primary" },
   max_hold_time: { label: "Max hold time", icon: Clock, className: "border-border/60 text-muted-foreground" },
+  blacklisted: { label: "Trader blacklisted", icon: ShieldAlert, className: "border-border/60 text-muted-foreground" },
 };
 
 function CloseReasonBadge({ reason }: { reason: SimPosition["closeReason"] }) {
@@ -83,6 +84,20 @@ function DetailRow({ label, value, className }: { label: React.ReactNode; value:
       <span className="text-muted-foreground">{label}</span>
       <span className={`font-medium tabular-nums ${className ?? ""}`}>{value}</span>
     </div>
+  );
+}
+
+/** "$0.35" plus, when the position recorded it, the pump%/Jito split underneath. */
+function FeeBreakdown({ total, pump, jito }: { total: number; pump?: number | null; jito?: number | null }) {
+  return (
+    <span className="inline-flex flex-col items-end">
+      <span>{formatUsd(total)}</span>
+      {pump != null && jito != null && (
+        <span className="text-[11px] opacity-80">
+          pump {formatUsd(pump)} + jito {formatUsd(jito)}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -141,7 +156,12 @@ function TradeDetailDialog({ position, onClose }: { position: SimPosition | null
           <Separator />
 
           <DetailRow label="Amount spent (cost + fee)" value={formatUsd(spent)} />
+          <DetailRow label="Buy fee" value={<FeeBreakdown total={position.buyFeeUsd} pump={position.buyPumpFeeUsd} jito={position.buyJitoFeeUsd} />} />
           <DetailRow label="Proceeds (net of fee)" value={proceedsNet !== null ? formatUsd(proceedsNet) : "—"} />
+          <DetailRow
+            label="Sell fee"
+            value={position.sellFeeUsd !== null ? <FeeBreakdown total={position.sellFeeUsd} pump={position.sellPumpFeeUsd} jito={position.sellJitoFeeUsd} /> : "—"}
+          />
           <DetailRow
             label="Realized P&L"
             value={

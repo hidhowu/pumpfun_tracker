@@ -1,8 +1,11 @@
 import { Wallet } from "./models/Wallet.js";
+import { Trader } from "./models/Trader.js";
+import { addTradersBulk, isValidSolanaAddress } from "./traderService.js";
 import { WalletTrader } from "./models/WalletTrader.js";
 import { WalletPosition } from "./models/WalletPosition.js";
 import { WalletPendingExecution } from "./models/WalletPendingExecution.js";
 import { WalletDailySnapshot } from "./models/WalletDailySnapshot.js";
+import { WalletHourlySnapshot } from "./models/WalletHourlySnapshot.js";
 import { todayUtcString } from "./simulation/snapshot.js";
 
 /** Creates a Wallet with its starting balance as both startingBalanceUsd (reference) and balanceUsd (current, spendable). */
@@ -12,6 +15,7 @@ export async function createWallet({ name, startingBalanceUsd, settings = {} }) 
     startingBalanceUsd,
     balanceUsd: startingBalanceUsd,
     settings,
+    lastAutoResetDate: todayUtcString(), // starts with a full balance - first auto reset (if enabled) is tomorrow
   });
 }
 
@@ -19,12 +23,50 @@ export async function renameWallet(id, name) {
   return Wallet.findByIdAndUpdate(id, { $set: { name } }, { returnDocument: "after" });
 }
 
-/** Body is a partial patch of Wallet.settings' fields - only provided keys are touched. */
+// Every settable Wallet.settings field and how to validate it - anything
+// else in a patch is ignored rather than written blindly into the document.
+const NON_NEGATIVE_NUMBER_FIELDS = [
+  "tradeSizeUsd",
+  "dustBuyUsd",
+  "dustSellFractionPercent",
+  "maxTradeTimeSeconds",
+  "executionDelaySeconds",
+  "pumpFeePercent",
+  "jitoFeeUsd",
+];
+const NULLABLE_NUMBER_FIELDS = ["stopLossPercent", "takeProfitPercent"]; // null = disabled
+const BOOLEAN_FIELDS = ["autoResetBalanceDaily"];
+
+function isValidTrailingStops(value) {
+  return Array.isArray(value) && value.every((r) => r && Number.isFinite(r.armPercent) && Number.isFinite(r.exitPercent));
+}
+
+/** Body is a partial patch of Wallet.settings' fields - only provided, valid keys are touched. */
 export async function updateWalletSettings(id, patch) {
   const update = {};
-  for (const [key, value] of Object.entries(patch)) {
-    if (value !== undefined) update[`settings.${key}`] = value;
+  for (const key of NON_NEGATIVE_NUMBER_FIELDS) {
+    if (typeof patch[key] === "number" && Number.isFinite(patch[key])) update[`settings.${key}`] = Math.max(0, patch[key]);
   }
+  for (const key of NULLABLE_NUMBER_FIELDS) {
+    if (patch[key] === null) update[`settings.${key}`] = null;
+    else if (typeof patch[key] === "number" && Number.isFinite(patch[key])) update[`settings.${key}`] = patch[key];
+  }
+  for (const key of BOOLEAN_FIELDS) {
+    if (typeof patch[key] === "boolean") update[`settings.${key}`] = patch[key];
+  }
+  if (isValidTrailingStops(patch.trailingStops)) update["settings.trailingStops"] = patch.trailingStops;
+
+  // Turning the daily reset ON shouldn't wipe today's balance mid-day: mark
+  // today as already handled, so the first automatic reset is the next
+  // day boundary. Turning it OFF clears the marker.
+  if (patch.autoResetBalanceDaily === true) {
+    const current = await Wallet.findById(id, { "settings.autoResetBalanceDaily": 1 }).lean();
+    if (current && !current.settings?.autoResetBalanceDaily) update.lastAutoResetDate = todayUtcString();
+  } else if (patch.autoResetBalanceDaily === false) {
+    update.lastAutoResetDate = null;
+  }
+
+  if (Object.keys(update).length === 0) return Wallet.findById(id);
   return Wallet.findByIdAndUpdate(id, { $set: update }, { returnDocument: "after" });
 }
 
@@ -35,23 +77,51 @@ export async function deleteWallet(id) {
     WalletPosition.deleteMany({ walletId: id }),
     WalletPendingExecution.deleteMany({ walletId: id }),
     WalletDailySnapshot.deleteMany({ walletId: id }),
+    WalletHourlySnapshot.deleteMany({ walletId: id }),
   ]);
   await Wallet.deleteOne({ _id: id });
 }
 
-/** Bulk-assign: creates a WalletTrader row for every given address not already assigned (no-op for ones already there). */
-export async function addTradersToWallet(walletId, addresses) {
-  const existing = await WalletTrader.find({ walletId, traderAddress: { $in: addresses } }, { traderAddress: 1 }).lean();
+/**
+ * Bulk-assign traders to a wallet. Only ACTIVE tracked traders are ever
+ * assigned - a blacklisted (or untracked) address is skipped, never
+ * assigned. With `trackNew`, addresses not on the platform at all are first
+ * added as tracked traders (via addTradersBulk - which itself never
+ * re-activates a blacklisted address) and then assigned; without it they're
+ * reported as `untracked`.
+ *
+ * Returns { added, alreadyInWallet, blacklisted, untracked, invalid, newlyTracked }.
+ */
+export async function addTradersToWallet(walletId, rawAddresses, { trackNew = false } = {}) {
+  const addresses = [...new Set(rawAddresses.map((a) => (typeof a === "string" ? a.trim() : "")).filter(Boolean))];
+  const invalid = addresses.filter((a) => !isValidSolanaAddress(a));
+  const valid = addresses.filter((a) => isValidSolanaAddress(a));
+
+  let newlyTracked = [];
+  if (trackNew && valid.length > 0) {
+    ({ added: newlyTracked } = await addTradersBulk(valid));
+  }
+
+  const traderDocs = await Trader.find({ address: { $in: valid } }, { address: 1, status: 1 }).lean();
+  const statusByAddress = new Map(traderDocs.map((t) => [t.address, t.status]));
+  const blacklisted = valid.filter((a) => statusByAddress.get(a) === "blacklisted");
+  const untracked = valid.filter((a) => !statusByAddress.has(a));
+  const active = valid.filter((a) => statusByAddress.get(a) === "active");
+
+  const existing = await WalletTrader.find({ walletId, traderAddress: { $in: active } }, { traderAddress: 1 }).lean();
   const existingAddresses = new Set(existing.map((d) => d.traderAddress));
-  const toInsert = addresses.filter((a) => !existingAddresses.has(a));
+  const alreadyInWallet = active.filter((a) => existingAddresses.has(a));
+  const toInsert = active.filter((a) => !existingAddresses.has(a));
 
   if (toInsert.length > 0) {
     await WalletTrader.insertMany(
       toInsert.map((traderAddress) => ({ walletId, traderAddress })),
       { ordered: false }
-    );
+    ).catch((err) => {
+      if (err?.code !== 11000 && !err?.writeErrors) throw err; // concurrent duplicate assign - harmless
+    });
   }
-  return toInsert;
+  return { added: toInsert, alreadyInWallet, blacklisted, untracked, invalid, newlyTracked };
 }
 
 /** Un-assigns traders from a wallet. Any of their currently-open WalletPositions are left as-is (still tracked/closeable normally) - removal only stops NEW trades from being queued for them going forward. */
@@ -75,6 +145,7 @@ export async function resetWallet(id) {
     WalletPosition.deleteMany({ walletId: id }),
     WalletPendingExecution.deleteMany({ walletId: id }),
     WalletDailySnapshot.deleteMany({ walletId: id }),
+    // Hourly snapshots are deliberately kept - only deleting the wallet removes them.
     WalletTrader.updateMany(
       { walletId: id },
       { $set: { everBoughtMints: [], openPositionCount: 0, closedPositionCount: 0, realizedPnlUsd: 0, lastActionAt: null } }
@@ -156,6 +227,9 @@ export async function duplicateWallet(sourceId, { name, startingBalanceUsd, copy
     openPositionCount: copyTrades ? source.openPositionCount : 0,
     closedPositionCount: copyTrades ? source.closedPositionCount : 0,
     settings: copySettings ? source.settings : {},
+    // Same as turning the setting on (updateWalletSettings): the first
+    // automatic reset is the next day boundary, not the next minute.
+    lastAutoResetDate: todayUtcString(),
   });
 
   const tasks = [];

@@ -12,7 +12,8 @@ const FIELDS = [
   ["maxTradeTimeSeconds", "defaultMaxTradeTimeSeconds"],
   ["allowNegativeBalance", "defaultAllowNegativeBalance"],
   ["executionDelaySeconds", "defaultExecutionDelaySeconds"],
-  ["feeUsd", "defaultFeeUsd"],
+  ["pumpFeePercent", "defaultPumpFeePercent"],
+  ["jitoFeeUsd", "defaultJitoFeeUsd"],
 ];
 
 /**

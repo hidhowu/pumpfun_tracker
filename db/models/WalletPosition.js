@@ -19,7 +19,10 @@ const WalletPositionSchema = new Schema({
 
   tokenAmount: { type: Number, required: true },
   costBasisUsd: { type: Number, required: true },
-  buyFeeUsd: { type: Number, required: true },
+  buyFeeUsd: { type: Number, required: true }, // total: buyPumpFeeUsd + buyJitoFeeUsd (see db/fees.js)
+  buyPumpFeeUsd: { type: Number, default: null },
+  buyJitoFeeUsd: { type: Number, default: null },
+  buyFeeRealizedAtOpen: { type: Boolean, default: false }, // see db/models/SimPosition.js
   buyPriceUsd: { type: Number, required: true },
   openedAt: { type: Date, default: Date.now },
   openTriggerSignature: { type: String, required: true },
@@ -36,13 +39,15 @@ const WalletPositionSchema = new Schema({
   closedAt: { type: Date, default: null },
   closeReason: {
     type: String,
-    enum: ["trader_sell", "stop_loss", "take_profit", "trailing_stop", "max_hold_time", null],
+    enum: ["trader_sell", "stop_loss", "take_profit", "trailing_stop", "max_hold_time", "blacklisted", null],
     default: null,
   },
   closeTriggerSignature: { type: String, default: null },
   sellPriceUsd: { type: Number, default: null },
   proceedsUsd: { type: Number, default: null },
   sellFeeUsd: { type: Number, default: null },
+  sellPumpFeeUsd: { type: Number, default: null },
+  sellJitoFeeUsd: { type: Number, default: null },
   realizedPnlUsd: { type: Number, default: null },
   realizedPnlPercent: { type: Number, default: null },
 });

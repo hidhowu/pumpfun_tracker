@@ -1,4 +1,5 @@
 import type {
+  AddToWalletResult,
   EffectiveSettings,
   GlobalSettings,
   LeaderboardEntry,
@@ -62,13 +63,13 @@ export function getTrades(
 export function addTraderSingle(
   address: string,
   label?: string
-): Promise<{ added: string[]; skipped: string[]; invalid: string[] }> {
+): Promise<{ added: string[]; skipped: string[]; blacklisted: string[]; invalid: string[] }> {
   return request(`/api/traders`, { method: "POST", body: JSON.stringify({ address, label }) });
 }
 
 export function addTradersBulk(
   addresses: string[]
-): Promise<{ added: string[]; skipped: string[]; invalid: string[] }> {
+): Promise<{ added: string[]; skipped: string[]; blacklisted: string[]; invalid: string[] }> {
   return request(`/api/traders`, { method: "POST", body: JSON.stringify({ addresses }) });
 }
 
@@ -76,7 +77,7 @@ export function updateTrader(
   profileId: string,
   address: string,
   patch: Partial<{ status: "active" | "blacklisted"; muted: boolean | null; label: string; notes: string }>
-): Promise<{ trader: TraderDetail }> {
+): Promise<{ trader: TraderDetail; closedPositions: number; pendingCloses: number }> {
   return request(`/api/traders/${address}?profileId=${profileId}`, { method: "PATCH", body: JSON.stringify(patch) });
 }
 
@@ -243,9 +244,12 @@ export function deleteProxiesBulk(ids: string[]): Promise<{ deletedCount: number
   return request(`/api/proxies/bulk-delete`, { method: "POST", body: JSON.stringify({ ids }) });
 }
 
-/** Live connectivity check through this one proxy - a pass also un-blacklists it. */
-export function testProxy(id: string): Promise<{ ok: boolean; error: string | null; proxy: ProxyView }> {
-  return request(`/api/proxies/${id}/test`, { method: "POST" });
+/** Live connectivity check through this one proxy - a pass also un-blacklists it (and re-enables it, with enableOnSuccess). */
+export function testProxy(
+  id: string,
+  options: { enableOnSuccess?: boolean } = {}
+): Promise<{ ok: boolean; error: string | null; proxy: ProxyView }> {
+  return request(`/api/proxies/${id}/test`, { method: "POST", body: JSON.stringify(options) });
 }
 
 export function listTraderLists(): Promise<{ lists: TraderListView[] }> {
@@ -323,8 +327,13 @@ export function getWalletTraders(
   return request(`/api/wallets/${id}/traders?period=${period}`);
 }
 
-export function addTradersToWallet(walletId: string, addresses: string[]): Promise<{ added: string[] }> {
-  return request(`/api/wallets/${walletId}/traders`, { method: "POST", body: JSON.stringify({ addresses }) });
+/** Only active tracked traders are ever assigned - blacklisted ones are always skipped. trackNew also starts tracking addresses not on the platform yet. */
+export function addTradersToWallet(
+  walletId: string,
+  addresses: string[],
+  options: { trackNew?: boolean } = {}
+): Promise<AddToWalletResult> {
+  return request(`/api/wallets/${walletId}/traders`, { method: "POST", body: JSON.stringify({ addresses, ...options }) });
 }
 
 export function removeTradersFromWallet(walletId: string, addresses: string[]): Promise<{ removedCount: number }> {

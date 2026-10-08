@@ -437,17 +437,30 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
               onClear={() => save({ executionDelaySeconds: null })}
               description="Simulated latency before our fill, for this trader."
             />
+            <div className="hidden sm:block" />
             <OverrideField
-              id="ov-fee"
-              label="Flat fee per trade"
-              prefix="$"
-              step={0.1}
+              id="ov-pumpFee"
+              label="Pump fee"
+              suffix="%"
+              step={0.05}
               min={0}
-              override={settings.feeUsd}
-              effective={effectiveSettings.feeUsd}
-              onSave={(v) => save({ feeUsd: v })}
-              onClear={() => save({ feeUsd: null })}
-              description="Deducted on both buy and sell for this trader."
+              override={settings.pumpFeePercent ?? null}
+              effective={effectiveSettings.pumpFeePercent}
+              onSave={(v) => save({ pumpFeePercent: v })}
+              onClear={() => save({ pumpFeePercent: null })}
+              description="% of trade value, charged on every buy and sell for this trader."
+            />
+            <OverrideField
+              id="ov-jitoFee"
+              label="Jito fee per transaction"
+              prefix="$"
+              step={0.01}
+              min={0}
+              override={settings.jitoFeeUsd ?? null}
+              effective={effectiveSettings.jitoFeeUsd}
+              onSave={(v) => save({ jitoFeeUsd: v })}
+              onClear={() => save({ jitoFeeUsd: null })}
+              description="Flat USD per buy and per sell for this trader."
             />
           </div>
         </div>

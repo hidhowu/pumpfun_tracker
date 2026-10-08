@@ -24,6 +24,7 @@ import { WalletPerformanceTab } from "@/components/wallets/wallet-performance-ta
 import { WalletTradersTab } from "@/components/wallets/wallet-traders-tab";
 import { WalletTradeHistory } from "@/components/wallets/wallet-trade-history";
 import { WalletSettingsPanel } from "@/components/wallets/wallet-settings-panel";
+import { ExportCsvDialog } from "@/components/export-csv-dialog";
 import { deleteWallet, getWallet, renameWallet } from "@/lib/api";
 import type { WalletView } from "@/lib/types";
 
@@ -132,6 +133,12 @@ export default function WalletDetailPage() {
                 </button>
               )}
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+            <ExportCsvDialog
+              endpoint={`/api/wallets/${wallet._id}/export`}
+              title={`Export wallet "${wallet.name}"`}
+              description="Every trader's trades on this wallet since they were added - per hour, per day, or per trade, with a per-trader summary (win rate, P&L, win/loss days)."
+            />
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="ghost" size="sm" disabled={deleting} className="text-muted-foreground hover:text-negative">
@@ -155,6 +162,7 @@ export default function WalletDetailPage() {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
+            </div>
           </div>
 
           <Tabs defaultValue="performance" className="flex flex-col gap-4">
@@ -189,6 +197,7 @@ export default function WalletDetailPage() {
               <WalletSettingsPanel
                 walletId={wallet._id}
                 settings={wallet.settings}
+                lastAutoResetAt={wallet.lastAutoResetAt}
                 onUpdated={(settings) => setWallet((prev) => (prev ? { ...prev, settings } : prev))}
                 onReset={(updated) => setWallet(updated)}
               />

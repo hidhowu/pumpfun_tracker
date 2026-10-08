@@ -4,6 +4,7 @@ import { WalletDailySnapshot } from "../models/WalletDailySnapshot.js";
 import { WalletHourlySnapshot } from "../models/WalletHourlySnapshot.js";
 import { getCoinInfo, priceFromCoinInfo } from "../pumpFunApi.js";
 import { todayUtcString } from "./snapshot.js"; // same UTC-date-string helper the trader side uses, no need to duplicate it
+import { logEvent } from "../systemLog.js";
 
 /** Wallet-scoped mirror of db/simulation/snapshot.js's currentPortfolioValueUsd: current balance + unrealized value of every open WalletPosition. */
 export async function currentWalletValueUsd(walletId) {
@@ -83,24 +84,64 @@ export async function recordHourlyWalletSnapshots() {
  * completely untouched - this is "fresh capital to test with every day",
  * not a trade-history wipe.
  *
- * lastAutoResetDate guards against re-applying this on every hourly check
- * within the same UTC day. MUST be called before
- * ensureTodaySnapshotsForAllWallets in the same tick (see src/tracker.js) -
- * the whole point is that the day's baseline snapshot (which the daily P&L
- * chart measures "today's performance" against) captures the balance AFTER
- * this reset, not before it.
+ * Cheap enough to call often (one indexed find that matches nothing on every
+ * call but the first of the day) - the daemon checks every minute, and the
+ * wallet API routes call it too, so a reset is never more than a minute
+ * late and still happens even if the daemon is down or running stale code.
+ *
+ * Each wallet's reset is claimed atomically (lastAutoResetDate in the
+ * filter), so the daemon and the web app racing on the same wallet can't
+ * apply it twice. The day's baseline snapshot is re-based onto the
+ * post-reset value (and the pre-reset value kept as the previous day's
+ * close), so neither today's nor yesterday's P&L counts the injected
+ * capital as profit.
  */
 export async function applyDailyBalanceResets(date = todayUtcString()) {
-  const wallets = await Wallet.find(
+  const candidates = await Wallet.find(
     { "settings.autoResetBalanceDaily": true, lastAutoResetDate: { $ne: date } },
-    { _id: 1, startingBalanceUsd: 1 }
+    { _id: 1 }
   ).lean();
 
-  for (const wallet of wallets) {
-    await Wallet.updateOne(
-      { _id: wallet._id },
-      { $set: { balanceUsd: wallet.startingBalanceUsd, lastAutoResetDate: date } }
+  let applied = 0;
+  for (const { _id } of candidates) {
+    // Valued before the claim below: once the balance flips, the pre-reset
+    // value (needed as yesterday's close) is gone.
+    const valueBeforeResetUsd = await currentWalletValueUsd(_id);
+
+    const before = await Wallet.findOneAndUpdate(
+      { _id, "settings.autoResetBalanceDaily": true, lastAutoResetDate: { $ne: date } },
+      [{ $set: { balanceUsd: "$startingBalanceUsd", lastAutoResetDate: date, lastAutoResetAt: "$$NOW" } }],
+      { returnDocument: "before", updatePipeline: true }
+    ).lean();
+    if (!before) continue; // claimed by a concurrent caller
+
+    const deltaUsd = before.startingBalanceUsd - before.balanceUsd;
+    const existing = await WalletDailySnapshot.findOne({ walletId: _id, date });
+    if (existing) {
+      await WalletDailySnapshot.updateOne(
+        { _id: existing._id },
+        {
+          $inc: { portfolioValueUsdAtOpen: deltaUsd },
+          $set: { valueBeforeResetUsd: existing.valueBeforeResetUsd ?? existing.portfolioValueUsdAtOpen },
+        }
+      );
+    } else {
+      await WalletDailySnapshot.create({
+        walletId: _id,
+        date,
+        portfolioValueUsdAtOpen: valueBeforeResetUsd + deltaUsd,
+        valueBeforeResetUsd,
+      }).catch((err) => {
+        if (err?.code !== 11000) throw err; // created concurrently - its value was taken post-reset already
+      });
+    }
+
+    applied += 1;
+    logEvent(
+      "tracker",
+      `Daily balance reset: wallet "${before.name}" $${before.balanceUsd.toFixed(2)} -> $${before.startingBalanceUsd.toFixed(2)}`,
+      { meta: { walletId: String(_id), date, balanceBeforeUsd: before.balanceUsd, balanceAfterUsd: before.startingBalanceUsd } }
     );
   }
-  return wallets.length;
+  return applied;
 }

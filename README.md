@@ -36,8 +36,11 @@ When a **buy** is detected for a tracked (non-blacklisted) trader:
   independent of what the real trader spent), regardless of their allocation).
 - On fill: token amount = trade size ÷ the mint's *current* pump.fun price
   (not the trader's own fill price — we price as if buying right now, which
-  is what a real bot would do). A flat **fee** (default $0.6, modeling
-  creator fee + gas) is deducted separately and doesn't buy tokens.
+  is what a real bot would do). Fees are paid on top and don't buy tokens:
+  the **pump fee** (default 1.25% of the trade value - pump.fun's on-chain
+  0.95% protocol + 0.30% creator fee) plus a flat **Jito fee** in USD per
+  transaction (tip + priority fee). The buy fee hits realized P&L
+  immediately (see `db/fees.js`).
 - If **negative balance is disabled** for this trader and their balance can't
   cover the trade size, the buy is skipped entirely (not queued) until they
   have enough balance again (from a sale or a manual top-up).
@@ -50,7 +53,9 @@ When a **sell** is detected:
   a full exit at a crashed price still counts as real and triggers our sell,
   even though its USD value alone might look tiny.
 - Otherwise, queued (same execution delay) to sell our **entire** position —
-  even if the real trader only sold a fraction.
+  even if the real trader only sold a fraction. The same pump fee % (of the
+  gross proceeds) plus the Jito fee comes out of the sale, giving the fully
+  realized P&L.
 
 Independent of the trader's own actions, an open position is force-closed if
 its unrealized loss breaches the trader's **stop-loss %** (disabled by
@@ -68,7 +73,7 @@ off globally or per trader to hard-stop buys instead.
   losing streak" number — see the leaderboard and per-trader streak stats.
 
 All of the above (allocation, trade size, dust thresholds, stop-loss,
-negative-balance, execution delay, fee) has a **global default** and can be
+negative-balance, execution delay, pump fee %, Jito fee) has a **global default** and can be
 **overridden per trader**; `null` on a trader's override means "inherit the
 global default."
 

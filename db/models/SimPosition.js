@@ -17,7 +17,12 @@ const SimPositionSchema = new Schema({
   // Buy side
   tokenAmount: { type: Number, required: true },
   costBasisUsd: { type: Number, required: true }, // spend only, excludes fee
-  buyFeeUsd: { type: Number, required: true },
+  buyFeeUsd: { type: Number, required: true }, // total: buyPumpFeeUsd + buyJitoFeeUsd (see db/fees.js)
+  buyPumpFeeUsd: { type: Number, default: null }, // null on positions opened before the pump%/jito fee split
+  buyJitoFeeUsd: { type: Number, default: null },
+  // true = buyFeeUsd was already booked into ProfileTrader.sim.realizedPnlUsd
+  // when the buy filled - see db/fees.js's realizedCounterDeltaOnClose.
+  buyFeeRealizedAtOpen: { type: Boolean, default: false },
   buyPriceUsd: { type: Number, required: true }, // per-token price used for the fill
   openedAt: { type: Date, default: Date.now },
   openTriggerSignature: { type: String, required: true }, // the real trader's buy tx that triggered this
@@ -59,13 +64,15 @@ const SimPositionSchema = new Schema({
   // rendering correctly - it's never written for new closes.
   closeReason: {
     type: String,
-    enum: ["trader_sell", "stop_loss", "take_profit", "bench", "trailing_stop", "max_hold_time", null],
+    enum: ["trader_sell", "stop_loss", "take_profit", "bench", "trailing_stop", "max_hold_time", "blacklisted", null],
     default: null,
   },
   closeTriggerSignature: { type: String, default: null },
   sellPriceUsd: { type: Number, default: null },
   proceedsUsd: { type: Number, default: null }, // gross proceeds, excludes fee
-  sellFeeUsd: { type: Number, default: null },
+  sellFeeUsd: { type: Number, default: null }, // total: sellPumpFeeUsd + sellJitoFeeUsd
+  sellPumpFeeUsd: { type: Number, default: null },
+  sellJitoFeeUsd: { type: Number, default: null },
   realizedPnlUsd: { type: Number, default: null }, // (proceeds - sellFee) - (costBasis + buyFee)
   realizedPnlPercent: { type: Number, default: null }, // realizedPnlUsd / (costBasis + buyFee) * 100
 });

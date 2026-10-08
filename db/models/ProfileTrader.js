@@ -27,7 +27,8 @@ const SimSettingsSchema = new Schema(
     trailingStops: { type: [TrailingStopSchema], default: null },
     allowNegativeBalance: { type: Boolean, default: null },
     executionDelaySeconds: { type: Number, default: null },
-    feeUsd: { type: Number, default: null },
+    pumpFeePercent: { type: Number, default: null },
+    jitoFeeUsd: { type: Number, default: null },
   },
   { _id: false }
 );

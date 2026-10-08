@@ -108,6 +108,8 @@ export class TrackerService extends EventEmitter {
     this._walletRiskTimer = null;
     this._walletRiskLoopActive = false;
     this._walletSnapshotTimer = null;
+    this._walletRolloverTimer = null;
+    this._walletRolloverInProgress = false;
   }
 
   /** Creates and wires a LogSubscriber dedicated to exactly one RPC endpoint. */
@@ -424,7 +426,10 @@ export class TrackerService extends EventEmitter {
    *  - check every open position against its trader's stop-loss/take-profit/bench
    *  - make sure today's UTC daily-P&L snapshot exists for every active trader
    */
-  startSimulationLoops({ executionIntervalMs = 2000, snapshotIntervalMs = 3600000 } = {}) {
+  // snapshotIntervalMs: every minute (it used to be hourly), so each day's
+  // baseline is taken within a minute of 00:00 UTC rather than up to an hour
+  // late - cheap now that already-done pairs are skipped in one query.
+  startSimulationLoops({ executionIntervalMs = 2000, snapshotIntervalMs = 60000 } = {}) {
     ensureTodaySnapshotsForAllActiveTraders().catch((err) => this.emit("error", err));
 
     this._executionTimer = setInterval(() => {
@@ -435,7 +440,15 @@ export class TrackerService extends EventEmitter {
     this._runRiskCheckLoop();
 
     this._snapshotTimer = setInterval(() => {
-      ensureTodaySnapshotsForAllActiveTraders().catch((err) => this.emit("error", err));
+      // At day rollover every pair needs a fresh snapshot (with price
+      // lookups), which can outlast one tick - never run two sweeps at once.
+      if (this._snapshotInProgress) return;
+      this._snapshotInProgress = true;
+      ensureTodaySnapshotsForAllActiveTraders()
+        .catch((err) => this.emit("error", err))
+        .finally(() => {
+          this._snapshotInProgress = false;
+        });
     }, snapshotIntervalMs);
   }
 
@@ -492,14 +505,32 @@ export class TrackerService extends EventEmitter {
    * capture the balance AFTER a daily auto-reset, not before it, or "today's
    * performance" would be measured against yesterday's leftover balance.
    */
-  async _runWalletDailyMaintenance() {
-    await applyDailyBalanceResets();
-    await ensureTodaySnapshotsForAllWallets();
-    await recordHourlyWalletSnapshots();
+  async _runWalletDayRollover() {
+    // Overlap guard: a reset values each wallet's open positions first
+    // (price lookups), which on a slow proxy pool can outlast one tick.
+    if (this._walletRolloverInProgress) return;
+    this._walletRolloverInProgress = true;
+    try {
+      await applyDailyBalanceResets();
+      await ensureTodaySnapshotsForAllWallets();
+    } finally {
+      this._walletRolloverInProgress = false;
+    }
   }
 
-  startWalletSimulationLoops({ executionIntervalMs = 2000, snapshotIntervalMs = 3600000 } = {}) {
-    this._runWalletDailyMaintenance().catch((err) => this.emit("error", err));
+  /**
+   * The day rollover (auto balance reset + the day's baseline snapshot) is
+   * checked every minute, NOT on the hourly snapshot timer it used to share:
+   * hourly, the reset could land anywhere up to an hour after midnight UTC
+   * (or never be observed at all on a schedule anchored to whenever the
+   * daemon happened to start), with the wallet trading on yesterday's
+   * leftover balance in between. Both steps are a single cheap indexed query
+   * once they've already run for the day.
+   */
+  startWalletSimulationLoops({ executionIntervalMs = 2000, rolloverIntervalMs = 60000, snapshotIntervalMs = 3600000 } = {}) {
+    this._runWalletDayRollover()
+      .then(() => recordHourlyWalletSnapshots())
+      .catch((err) => this.emit("error", err));
 
     this._walletExecutionTimer = setInterval(() => {
       processDueWalletExecutions().catch((err) => this.emit("error", err));
@@ -508,8 +539,12 @@ export class TrackerService extends EventEmitter {
     this._walletRiskLoopActive = true;
     this._runWalletRiskCheckLoop();
 
+    this._walletRolloverTimer = setInterval(() => {
+      this._runWalletDayRollover().catch((err) => this.emit("error", err));
+    }, rolloverIntervalMs);
+
     this._walletSnapshotTimer = setInterval(() => {
-      this._runWalletDailyMaintenance().catch((err) => this.emit("error", err));
+      recordHourlyWalletSnapshots().catch((err) => this.emit("error", err));
     }, snapshotIntervalMs);
   }
 
@@ -538,11 +573,12 @@ export class TrackerService extends EventEmitter {
     this._walletRiskLoopActive = false;
     if (this._walletRiskTimer) clearTimeout(this._walletRiskTimer);
     this._walletRiskTimer = null;
-    for (const timer of [this._walletExecutionTimer, this._walletSnapshotTimer]) {
+    for (const timer of [this._walletExecutionTimer, this._walletSnapshotTimer, this._walletRolloverTimer]) {
       if (timer) clearInterval(timer);
     }
     this._walletExecutionTimer = null;
     this._walletSnapshotTimer = null;
+    this._walletRolloverTimer = null;
   }
 
   async _handleSignature({ address, signature, err, logs }) {
@@ -630,11 +666,13 @@ async function runCli() {
 
   const seedAddresses = [...config.trackedAddresses, ...process.argv.slice(2)];
   if (seedAddresses.length > 0) {
-    const { added, skipped, invalid } = await addTradersBulk(seedAddresses);
+    const { added, skipped, blacklisted, invalid } = await addTradersBulk(seedAddresses);
     if (added.length)
       console.log(`[tracker] seeded new traders: ${added.join(", ")}`);
     if (skipped.length)
       console.log(`[tracker] already tracked, skipped: ${skipped.join(", ")}`);
+    if (blacklisted.length)
+      console.log(`[tracker] blacklisted, skipped: ${blacklisted.join(", ")}`);
     if (invalid.length)
       console.error(`[tracker] not valid Solana addresses, ignored: ${invalid.join(", ")}`);
   }

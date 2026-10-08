@@ -43,7 +43,8 @@ export type TraderSimSettings = {
   trailingStops: TrailingStop[] | null;
   allowNegativeBalance: boolean | null;
   executionDelaySeconds: number | null;
-  feeUsd: number | null;
+  pumpFeePercent: number | null;
+  jitoFeeUsd: number | null;
 };
 
 // Same fields as TraderSimSettings, but resolved - never null except where null genuinely means "disabled".
@@ -58,7 +59,8 @@ export type EffectiveSettings = {
   trailingStops: TrailingStop[];
   allowNegativeBalance: boolean;
   executionDelaySeconds: number;
-  feeUsd: number;
+  pumpFeePercent: number; // % of trade value, charged on every buy and sell - see db/fees.js
+  jitoFeeUsd: number; // flat USD per buy and per sell
 };
 
 /** Today's (UTC) sim P&L quick-stats, bundled onto every trader in the list view. */
@@ -108,7 +110,9 @@ export type SimPosition = {
   status: "open" | "closed";
   tokenAmount: number;
   costBasisUsd: number;
-  buyFeeUsd: number;
+  buyFeeUsd: number; // total buy fee (pump % + jito)
+  buyPumpFeeUsd?: number | null; // breakdown - null on positions opened before the pump%/jito split
+  buyJitoFeeUsd?: number | null;
   buyPriceUsd: number;
   openedAt: string;
   openTriggerSignature: string;
@@ -130,11 +134,13 @@ export type SimPosition = {
   minUnrealizedPnlPercent: number | null;
   closedAt: string | null;
   // "bench" only appears on positions closed before the trailingStops rule list replaced the single bench-cap.
-  closeReason: "trader_sell" | "stop_loss" | "take_profit" | "bench" | "trailing_stop" | "max_hold_time" | null;
+  closeReason: "trader_sell" | "stop_loss" | "take_profit" | "bench" | "trailing_stop" | "max_hold_time" | "blacklisted" | null;
   closeTriggerSignature: string | null;
   sellPriceUsd: number | null;
   proceedsUsd: number | null;
   sellFeeUsd: number | null;
+  sellPumpFeeUsd?: number | null;
+  sellJitoFeeUsd?: number | null;
   realizedPnlUsd: number | null;
   realizedPnlPercent: number | null;
   // Only present on OPEN positions (live-priced by the API at read time).
@@ -244,7 +250,8 @@ export type GlobalSettings = {
   defaultTrailingStops: TrailingStop[];
   defaultAllowNegativeBalance: boolean;
   defaultExecutionDelaySeconds: number;
-  defaultFeeUsd: number;
+  defaultPumpFeePercent: number;
+  defaultJitoFeeUsd: number;
   // System-wide, not a per-trader override - how often stop-loss/take-profit/trailing-stops are re-checked.
   riskCheckIntervalSeconds: number;
 };
@@ -322,7 +329,8 @@ export type WalletSettings = {
   maxTradeTimeSeconds: number; // 0 = disabled/infinite
   trailingStops: TrailingStop[];
   executionDelaySeconds: number;
-  feeUsd: number;
+  pumpFeePercent: number;
+  jitoFeeUsd: number;
   // When true, balanceUsd auto-resets to startingBalanceUsd once per UTC day
   // - trade history/realizedPnlUsd are untouched. See db/simulation/walletSnapshot.js's applyDailyBalanceResets.
   autoResetBalanceDaily: boolean;
@@ -338,6 +346,7 @@ export type WalletView = {
   closedPositionCount: number;
   createdAt: string;
   lastAutoResetDate: string | null;
+  lastAutoResetAt: string | null;
   settings: WalletSettings;
   traderCount?: number; // present on the /api/wallets list endpoint only
   todayRealizedPnlUsd?: number; // present on the /api/wallets list endpoint only - sum of realizedPnlUsd for positions closed today (UTC)
@@ -415,4 +424,14 @@ export type WalletTraderDailyPerformance = {
   totalTrades: number;
   totalWins: number;
   totalLosses: number;
+};
+
+/** Response of POST /api/wallets/[id]/traders - see db/walletService.js's addTradersToWallet. */
+export type AddToWalletResult = {
+  added: string[];
+  alreadyInWallet: string[];
+  blacklisted: string[];
+  untracked: string[];
+  invalid: string[];
+  newlyTracked: string[];
 };

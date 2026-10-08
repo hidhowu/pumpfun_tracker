@@ -40,6 +40,7 @@ const WalletSchema = new Schema({
   // every hourly check within the same day (see
   // db/simulation/walletSnapshot.js's applyDailyBalanceResets).
   lastAutoResetDate: { type: String, default: null },
+  lastAutoResetAt: { type: Date, default: null }, // exact time of the last automatic reset - shown in wallet settings
 
   // Flat - one settings object for the whole wallet, no per-trader-within-
   // wallet override tier (unlike Profile/ProfileTrader's two-tier system).
@@ -55,7 +56,9 @@ const WalletSchema = new Schema({
     maxTradeTimeSeconds: { type: Number, default: 0 }, // 0 = disabled/infinite
     trailingStops: { type: [TrailingStopSchema], default: [] },
     executionDelaySeconds: { type: Number, default: 2 },
-    feeUsd: { type: Number, default: 0.6 },
+    // Fees on every buy AND sell - see db/fees.js. Replaces the old flat feeUsd.
+    pumpFeePercent: { type: Number, default: 1.25 },
+    jitoFeeUsd: { type: Number, default: 0 },
     // When true, balanceUsd is force-reset to startingBalanceUsd once per
     // UTC day (see applyDailyBalanceResets) - open positions, trade history,
     // and realizedPnlUsd are completely untouched, so day-over-day

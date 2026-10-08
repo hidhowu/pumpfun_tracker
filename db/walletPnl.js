@@ -38,7 +38,9 @@ export async function computeWalletDailyPnl(walletId, dateStr, { currentValue } 
   ]);
 
   const startValue = startSnap?.portfolioValueUsdAtOpen ?? null;
-  let endValue = endSnap?.portfolioValueUsdAtOpen ?? null;
+  // Next day's opening value, but measured BEFORE that day's auto balance
+  // reset (when one ran) - the reset's injected capital isn't this day's profit.
+  let endValue = endSnap ? (endSnap.valueBeforeResetUsd ?? endSnap.portfolioValueUsdAtOpen) : null;
   if (endValue === null && isToday) {
     endValue = currentValue !== undefined ? currentValue : await currentWalletValueUsd(walletId);
   }

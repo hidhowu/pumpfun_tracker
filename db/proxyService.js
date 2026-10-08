@@ -122,21 +122,47 @@ export async function deleteProxiesBulk(ids) {
  * un-blacklists the proxy if it had been - which is the whole point of the
  * button, not a side effect.
  */
-export async function testProxy(proxyId) {
+/**
+ * HTTP statuses that, coming back THROUGH a proxy, mean the proxy itself is
+ * unusable for pump.fun rather than pump.fun answering normally: 407 = the
+ * proxy rejected our credentials, 403 = pump.fun's bot protection has
+ * blocked that proxy's IP. Anything else (200, 404, 429, 5xx) proves the
+ * proxy connected and relayed a real pump.fun response.
+ */
+export const PROXY_BROKEN_HTTP_STATUSES = new Set([403, 407]);
+
+/**
+ * `enableOnSuccess` also flips a manually-disabled proxy back on when it
+ * passes - used by the bulk "re-test" action on /proxies.
+ */
+export async function testProxy(proxyId, { enableOnSuccess = false } = {}) {
   const proxy = await Proxy.findById(proxyId);
   if (!proxy) throw new Error("Proxy not found");
 
+  let error = null;
   try {
     // No -o (output file) flag here, deliberately - "/dev/null" is a Unix
     // path and this app also runs on Windows, where curl has no such device
     // to write to; letting execFile just capture stdout into memory (small,
-    // one JSON/error body) works identically on both, and we don't need the
-    // body anyway - only whether curl completed the request at all.
-    await execFileAsync("curl", ["-s", "-m", "10", "--proxy", proxy.url, TEST_URL]);
-    await recordProxyResult(proxy._id, true);
-    return { ok: true, proxy: await Proxy.findById(proxyId) };
+    // one JSON/error body) works identically on both. -w appends the HTTP
+    // status, which is what actually decides pass/fail: curl exits 0 for
+    // ANY HTTP response, including a 403 from pump.fun blocking this IP.
+    const { stdout } = await execFileAsync("curl", ["-s", "-m", "10", "-w", "\n%{http_code}", "--proxy", proxy.url, TEST_URL]);
+    const status = Number(stdout.slice(stdout.lastIndexOf("\n") + 1).trim());
+    if (!status) error = "No HTTP response through proxy";
+    else if (PROXY_BROKEN_HTTP_STATUSES.has(status)) error = `HTTP ${status} through proxy (${status === 407 ? "proxy auth rejected" : "blocked by pump.fun"})`;
   } catch (err) {
-    await recordProxyResult(proxy._id, false, err.message);
-    return { ok: false, error: err.message, proxy: await Proxy.findById(proxyId) };
+    error = err.message;
   }
+
+  if (error) {
+    await recordProxyResult(proxy._id, false, error);
+    return { ok: false, error, proxy: await Proxy.findById(proxyId) };
+  }
+  await recordProxyResult(proxy._id, true);
+  if (enableOnSuccess && !proxy.enabled) {
+    await Proxy.updateOne({ _id: proxy._id }, { $set: { enabled: true } });
+    invalidateProxyPoolCache();
+  }
+  return { ok: true, error: null, proxy: await Proxy.findById(proxyId) };
 }

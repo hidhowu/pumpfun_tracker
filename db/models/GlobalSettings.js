@@ -45,7 +45,10 @@ const GlobalSettingsSchema = new Schema({
   defaultTrailingStops: { type: [TrailingStopSchema], default: [] },
   defaultAllowNegativeBalance: { type: Boolean, default: true },
   defaultExecutionDelaySeconds: { type: Number, default: 2 },
-  defaultFeeUsd: { type: Number, default: 0.6 },
+  // Fees on every simulated buy AND sell - see db/fees.js. Replaces the old
+  // flat defaultFeeUsd (no longer read anywhere; left in old documents).
+  defaultPumpFeePercent: { type: Number, default: 1.25 },
+  defaultJitoFeeUsd: { type: Number, default: 0 },
 });
 
 export const GlobalSettings = models.GlobalSettings || model("GlobalSettings", GlobalSettingsSchema);

@@ -14,7 +14,8 @@ const FIELDS = [
   "maxTradeTimeSeconds",
   "allowNegativeBalance",
   "executionDelaySeconds",
-  "feeUsd",
+  "pumpFeePercent",
+  "jitoFeeUsd",
 ];
 
 type Params = { params: Promise<{ address: string }> };
@@ -50,7 +51,10 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 
   const patch: Record<string, unknown> = {};
   for (const field of FIELDS) {
-    if (field in body) patch[field] = body[field];
+    if (!(field in body)) continue;
+    const value = body[field];
+    // Fees can't be negative; null (clear the override) passes through.
+    patch[field] = (field === "pumpFeePercent" || field === "jitoFeeUsd") && typeof value === "number" ? Math.max(0, value) : value;
   }
   if ("trailingStops" in body) {
     if (body.trailingStops === null || isValidTrailingStops(body.trailingStops)) {

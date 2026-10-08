@@ -13,6 +13,11 @@ const WalletDailySnapshotSchema = new Schema({
   walletId: { type: Schema.Types.ObjectId, required: true, index: true },
   date: { type: String, required: true }, // "YYYY-MM-DD", UTC
   portfolioValueUsdAtOpen: { type: Number, required: true },
+  // Only set on days a daily auto-reset ran: the wallet's value right BEFORE
+  // the reset topped its balance back up. That's the true close of the
+  // previous day - without it, yesterday's P&L would count the injected
+  // reset capital as profit. See db/walletPnl.js's computeWalletDailyPnl.
+  valueBeforeResetUsd: { type: Number, default: null },
   createdAt: { type: Date, default: Date.now },
 });
 

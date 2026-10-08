@@ -19,6 +19,7 @@ const CLOSE_REASON_LABEL: Record<string, string> = {
   take_profit: "Take-profit",
   trailing_stop: "Trailing stop",
   max_hold_time: "Max hold time",
+  blacklisted: "Trader blacklisted",
 };
 
 export function WalletTradeHistory({ walletId }: Props) {

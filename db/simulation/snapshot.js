@@ -67,9 +67,14 @@ export async function ensureTodaySnapshotsForAllActiveTraders() {
     Profile.find({}, { _id: 1 }).lean(),
     Trader.find({ status: "active" }, { address: 1 }).lean(),
   ]);
+  const date = todayUtcString();
   for (const profile of profiles) {
+    // One query for every pair that's already done today, so only the
+    // missing ones pay for a lookup (and price fetches) - not every pair, every hour.
+    const existing = await DailySnapshot.find({ profileId: profile._id, date }, { traderAddress: 1 }).lean();
+    const done = new Set(existing.map((s) => s.traderAddress));
     for (const trader of traders) {
-      await ensureTodaySnapshot(profile._id, trader.address);
+      if (!done.has(trader.address)) await ensureTodaySnapshot(profile._id, trader.address, date);
     }
   }
   return profiles.length * traders.length;

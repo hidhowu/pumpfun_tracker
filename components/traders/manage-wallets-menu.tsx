@@ -48,7 +48,11 @@ export function ManageWalletsMenu({ traderAddress }: { traderAddress: string }) 
     setPendingId(wallet._id);
     try {
       if (checked) {
-        await addTradersToWallet(wallet._id, [traderAddress]);
+        const result = await addTradersToWallet(wallet._id, [traderAddress]);
+        if (result.blacklisted.length) {
+          toast.warning("This trader is blacklisted - it can't be added to a wallet");
+          return;
+        }
         setMemberOf((prev) => new Set(prev).add(wallet._id));
       } else {
         await removeTradersFromWallet(wallet._id, [traderAddress]);

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
 import { createWallet, listWallets } from "@/db/walletService";
+import { applyDailyBalanceResets } from "@/db/simulation/walletSnapshot";
 
 export async function GET() {
   await connectDb();
+  // Backstop for the daemon's minute-by-minute check - see applyDailyBalanceResets.
+  await applyDailyBalanceResets().catch(() => {});
   const wallets = await listWallets();
   return NextResponse.json({ wallets: JSON.parse(JSON.stringify(wallets)) });
 }
