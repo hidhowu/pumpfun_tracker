@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { getActiveProxyPool, recordProxyResult, PROXY_BROKEN_HTTP_STATUSES } from "./proxyService.js";
+import { getOnchainPrice } from "./onchainPrice.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -13,7 +14,16 @@ const execFileAsync = promisify(execFile);
 // newer real price comes in - this TTL only bounds how long a price can go
 // un-refreshed if nothing else happens to re-fetch it sooner.
 const CACHE_TTL_MS = 60_000;
-const cache = new Map(); // mint -> { data, expiresAt }
+const cache = new Map(); // mint -> { data, expiresAt, fetchedAt }
+
+// How old a cached price a MONITORING caller will accept - see getPrice.
+// Fills never use these: they pass { fresh: true } and always get a brand
+// new read taken after the execution delay.
+//  - RISK_SWEEP: stop-loss/take-profit/trailing/peak tracking. Must be at
+//    least as frequent as the sweep, or short spikes are missed (a 60s cache
+//    is why a position could show +58% live with a recorded peak of +10%).
+//  - DEFAULT: dashboard views, dust checks, snapshots.
+export const PRICE_MAX_AGE = { RISK_SWEEP: 5_000, DEFAULT: 10_000 };
 
 /**
  * Drops every cache entry whose TTL has already passed. Without this, a
@@ -129,12 +139,17 @@ async function curlGetJson(url) {
   return runCurl(url, null);
 }
 
-/** Raw coin info from pump.fun's own API (market cap, reserves, decimals, ...). */
-export async function getCoinInfo(mint) {
+/**
+ * Raw coin info from pump.fun's own API (market cap, reserves, decimals, ...).
+ * `maxAgeMs` (see PRICE_MAX_AGE) caps how old a cached reading may be for
+ * this caller; an older one triggers a fresh request.
+ */
+export async function getCoinInfo(mint, { maxAgeMs = CACHE_TTL_MS, fresh = false } = {}) {
   const cached = cache.get(mint);
-  if (cached && cached.expiresAt > Date.now()) return cached.data;
+  if (!fresh && cached && cached.expiresAt > Date.now() && Date.now() - cached.fetchedAt <= maxAgeMs) return cached.data;
 
-  const existingRequest = inflight.get(mint);
+  // A fresh read must not piggyback on a request that started before it was asked for.
+  const existingRequest = fresh ? null : inflight.get(mint);
   if (existingRequest) return existingRequest; // another caller already has this exact lookup in progress - share it, don't duplicate it
 
   const request = (async () => {
@@ -142,16 +157,17 @@ export async function getCoinInfo(mint) {
     const { status, body } = await curlGetJson(`${base}/coins-v3/${mint}`);
 
     if (status === 404) {
-      cache.set(mint, { data: null, expiresAt: Date.now() + CACHE_TTL_MS });
+      cache.set(mint, { data: null, expiresAt: Date.now() + CACHE_TTL_MS, fetchedAt: Date.now() });
       return null;
     }
     if (status !== 200) throw new Error(`pump.fun API HTTP ${status} for ${mint}`);
 
     const data = JSON.parse(body);
-    cache.set(mint, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+    cache.set(mint, { data, expiresAt: Date.now() + CACHE_TTL_MS, fetchedAt: Date.now() });
     return data;
   })();
 
+  if (fresh) return request;
   inflight.set(mint, request);
   try {
     return await request;
@@ -160,62 +176,55 @@ export async function getCoinInfo(mint) {
   }
 }
 
-// How many distinct mints prefetchPrices fetches concurrently per batch -
-// firing one curl process per distinct open-position mint ALL at once (which
-// is what a risk-check sweep used to do) is exactly what floods a small
-// proxy pool/trips pump.fun's rate limiting. Keeping one batch's concurrency
-// modest, and giving the pool a chance to recover between batches, trades a
-// bit of sweep latency for a much lower failure rate.
-const PREFETCH_BATCH_SIZE = 30;
+// ------------------------------------------------------------- getPrice
+
+const priceCache = new Map(); // mint -> { price, fetchedAt } - monitoring reads only
 
 /**
- * Warms the price cache for many mints at once, in bounded batches rather
- * than one unbounded Promise.all over every distinct mint. Each batch's
- * mints are looked up concurrently (still round-robining across proxies -
- * see curlGetJson); whichever ones in that batch still have no price get one
- * more try afterwards, in the same batch size - by then the earlier batches
- * have finished, so the proxy pool has far less concurrent pressure on it
- * than the initial fan-out did, which is often enough on its own to turn a
- * transient rate-limit/timeout into a success on retry.
+ * THE way to price a token. Reads the chain (db/onchainPrice.js: bonding
+ * curve, or the PumpSwap pool once graduated); falls back to pump.fun's
+ * API only if the chain read can't price it. Never throws - null means no
+ * price could be found.
  *
- * getCoinInfo only caches a *successful* 404 (genuinely no such coin) as a
- * negative result - a 429/timeout/other error is never cached (it throws
- * before reaching cache.set), so calling it again here for a mint that just
- * failed is a real re-attempt, not a no-op cache hit.
+ *  - { fresh: true } - for FILLS. Always a brand-new read (token AND SOL/USD)
+ *    started now; no cache, no sharing an in-flight request. A simulated
+ *    buy/sell fills at the price that exists when its execution delay ends.
+ *  - { maxAgeMs } - for MONITORING (views, P&L, stop-loss/take-profit). A
+ *    cached reading up to maxAgeMs old is fine and saves RPC calls.
  *
- * Callers (checkRiskExits/checkWalletRiskExits) call this once up front with
- * every open position's mint, then proceed with their own normal per-position
- * Promise.all exactly as before - those calls just hit an already-warm cache
- * instead of each spawning their own concurrent curl process.
- *
- * Also doubles as this cache's only cleanup point (pruneExpiredCache) - both
- * risk-check loops call this every ~7s regardless of whether anything
- * changed, which is exactly the periodic heartbeat that cache eviction
- * needs, without a dedicated timer for it.
+ * @returns {Promise<{priceUsd: number, priceInQuote: number|null, quoteMint?: string, source: string, graduated?: boolean, fetchedAt: number} | null>}
  */
-export async function prefetchPrices(mints) {
-  pruneExpiredCache();
-  const distinct = [...new Set(mints)];
-
-  async function runBatches(list) {
-    const failed = [];
-    for (let i = 0; i < list.length; i += PREFETCH_BATCH_SIZE) {
-      const batch = list.slice(i, i + PREFETCH_BATCH_SIZE);
-      const ok = await Promise.all(
-        batch.map(async (mint) => {
-          const coin = await getCoinInfo(mint).catch(() => null);
-          return priceFromCoinInfo(coin)?.priceUsd != null;
-        })
-      );
-      batch.forEach((mint, idx) => {
-        if (!ok[idx]) failed.push(mint);
-      });
-    }
-    return failed;
+export async function getPrice(mint, { fresh = false, maxAgeMs = PRICE_MAX_AGE.DEFAULT } = {}) {
+  if (!fresh) {
+    const cached = priceCache.get(mint);
+    if (cached && Date.now() - cached.fetchedAt <= maxAgeMs) return cached.price;
   }
 
-  const stillFailing = await runBatches(distinct);
-  if (stillFailing.length > 0) await runBatches(stillFailing);
+  let price = await getOnchainPrice(mint, { freshSol: fresh }).catch(() => null);
+  if (!price?.priceUsd) {
+    const fallback = priceFromCoinInfo(await getCoinInfo(mint, { fresh, maxAgeMs }).catch(() => null));
+    price = fallback?.priceUsd ? { ...fallback, source: "pump_api" } : null;
+  }
+  if (!price) return null;
+
+  const stamped = { ...price, fetchedAt: Date.now() };
+  priceCache.set(mint, { price: stamped, fetchedAt: stamped.fetchedAt });
+  return stamped;
+}
+
+/**
+ * Warms the price cache for many mints at once - e.g. every open position
+ * before a risk sweep. All of them go through getPrice in the same tick, so
+ * db/onchainPrice.js batches them into one getMultipleAccounts round (up to
+ * 100 accounts per call) instead of one request per mint. Also prunes the
+ * pump.fun API cache, which only the fallback path still fills.
+ */
+export async function prefetchPrices(mints, { maxAgeMs = PRICE_MAX_AGE.DEFAULT } = {}) {
+  pruneExpiredCache();
+  for (const [mint, entry] of priceCache) {
+    if (Date.now() - entry.fetchedAt > 10 * 60_000) priceCache.delete(mint); // closed positions' mints - see pruneExpiredCache
+  }
+  await Promise.all([...new Set(mints)].map((mint) => getPrice(mint, { maxAgeMs })));
 }
 
 /** Derives a per-token price from a coin's reserves/market-cap, the same way the bonding curve prices trades. */

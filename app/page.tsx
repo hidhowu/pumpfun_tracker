@@ -16,11 +16,8 @@ import type { Trader, TraderListView } from "@/lib/types";
 const POLL_INTERVAL_MS = 8000;
 const ALL_TRADERS_VALUE = "__all__"; // Select can't use "" as an item value, so this stands in for "no list filter"
 
-function blacklistCloseSummary(closed: number, pending: number) {
-  if (closed + pending === 0) return "";
-  const parts = [`${closed} open position${closed === 1 ? "" : "s"} closed`];
-  if (pending) parts.push(`${pending} closing shortly (price unavailable)`);
-  return ` - ${parts.join(", ")}`;
+function blacklistCloseSummary(closing: number) {
+  return closing > 0 ? ` - selling ${closing} open position${closing === 1 ? "" : "s"} (after the execution delay)` : "";
 }
 
 export default function DashboardPage() {
@@ -64,8 +61,8 @@ export default function DashboardPage() {
   async function handleBlacklistToggle(address: string, blacklist: boolean) {
     if (!currentProfileId) return;
     try {
-      const { closedPositions, pendingCloses } = await updateTrader(currentProfileId, address, { status: blacklist ? "blacklisted" : "active" });
-      toast.success(blacklist ? `Trader blacklisted${blacklistCloseSummary(closedPositions, pendingCloses)}` : "Trader unblacklisted");
+      const { closingPositions } = await updateTrader(currentProfileId, address, { status: blacklist ? "blacklisted" : "active" });
+      toast.success(blacklist ? `Trader blacklisted${blacklistCloseSummary(closingPositions)}` : "Trader unblacklisted");
       await refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update trader");

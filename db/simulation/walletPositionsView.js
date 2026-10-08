@@ -1,12 +1,12 @@
 import { WalletPosition } from "../models/WalletPosition.js";
-import { getCoinInfo, priceFromCoinInfo } from "../pumpFunApi.js";
+import { getPrice } from "../pumpFunApi.js";
+import { recordPriceSample, withPriceSample } from "./priceSamples.js";
 
 /** Wallet-scoped mirror of db/simulation/positionsView.js's markOpenPositions. */
 export async function markOpenWalletPositions(positions) {
   return Promise.all(
     positions.map(async (position) => {
-      const coin = await getCoinInfo(position.mint).catch(() => null);
-      const price = priceFromCoinInfo(coin);
+      const price = await getPrice(position.mint);
       const totalCost = position.costBasisUsd + position.buyFeeUsd;
 
       if (!price?.priceUsd) {
@@ -16,8 +16,9 @@ export async function markOpenWalletPositions(positions) {
       const currentValueUsd = position.tokenAmount * price.priceUsd;
       const unrealizedPnlUsd = currentValueUsd - totalCost;
       const unrealizedPnlPercent = totalCost > 0 ? (unrealizedPnlUsd / totalCost) * 100 : 0;
+      await recordPriceSample(WalletPosition, position, currentValueUsd).catch(() => {}); // see positionsView.js
 
-      return { ...position, currentPriceUsd: price.priceUsd, currentValueUsd, unrealizedPnlUsd, unrealizedPnlPercent };
+      return { ...withPriceSample(position, currentValueUsd, unrealizedPnlUsd, unrealizedPnlPercent), currentPriceUsd: price.priceUsd, currentValueUsd, unrealizedPnlUsd, unrealizedPnlPercent };
     })
   );
 }

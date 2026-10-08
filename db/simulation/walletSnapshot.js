@@ -2,7 +2,7 @@ import { Wallet } from "../models/Wallet.js";
 import { WalletPosition } from "../models/WalletPosition.js";
 import { WalletDailySnapshot } from "../models/WalletDailySnapshot.js";
 import { WalletHourlySnapshot } from "../models/WalletHourlySnapshot.js";
-import { getCoinInfo, priceFromCoinInfo } from "../pumpFunApi.js";
+import { getPrice } from "../pumpFunApi.js";
 import { todayUtcString } from "./snapshot.js"; // same UTC-date-string helper the trader side uses, no need to duplicate it
 import { logEvent } from "../systemLog.js";
 
@@ -16,8 +16,7 @@ export async function currentWalletValueUsd(walletId) {
 
   const unrealizedPerPosition = await Promise.all(
     openPositions.map(async (position) => {
-      const coin = await getCoinInfo(position.mint).catch(() => null);
-      const price = priceFromCoinInfo(coin);
+      const price = await getPrice(position.mint);
       return price?.priceUsd ? position.tokenAmount * price.priceUsd : position.costBasisUsd;
     })
   );

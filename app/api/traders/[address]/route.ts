@@ -35,13 +35,12 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   const existing = await Trader.findOne({ address });
   if (!existing) return NextResponse.json({ error: "Trader not found" }, { status: 404 });
 
-  let closedPositions = 0;
-  let pendingCloses = 0;
+  let closingPositions = 0;
   if (body.status !== undefined) {
     if (!["active", "blacklisted"].includes(body.status)) {
       return NextResponse.json({ error: "status must be 'active' or 'blacklisted'" }, { status: 400 });
     }
-    ({ closedPositions, pendingCloses } = await setBlacklisted(address, body.status === "blacklisted"));
+    ({ closingPositions } = await setBlacklisted(address, body.status === "blacklisted"));
   }
 
   if (body.muted !== undefined) {
@@ -54,5 +53,5 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 
   const updated = await Trader.findOne({ address });
   const view = await resolveTraderDetailView(profileId, updated!);
-  return NextResponse.json({ trader: view, closedPositions, pendingCloses });
+  return NextResponse.json({ trader: view, closingPositions });
 }

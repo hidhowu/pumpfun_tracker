@@ -1,5 +1,6 @@
 import { SimPosition } from "../models/SimPosition.js";
-import { getCoinInfo, priceFromCoinInfo } from "../pumpFunApi.js";
+import { getPrice } from "../pumpFunApi.js";
+import { recordPriceSample, withPriceSample } from "./priceSamples.js";
 
 /**
  * Marks a list of OPEN SimPosition docs (lean or hydrated) with their
@@ -10,8 +11,7 @@ import { getCoinInfo, priceFromCoinInfo } from "../pumpFunApi.js";
 export async function markOpenPositions(positions) {
   return Promise.all(
     positions.map(async (position) => {
-      const coin = await getCoinInfo(position.mint).catch(() => null);
-      const price = priceFromCoinInfo(coin);
+      const price = await getPrice(position.mint);
       const totalCost = position.costBasisUsd + position.buyFeeUsd;
 
       if (!price?.priceUsd) {
@@ -27,9 +27,12 @@ export async function markOpenPositions(positions) {
       const currentValueUsd = position.tokenAmount * price.priceUsd;
       const unrealizedPnlUsd = currentValueUsd - totalCost;
       const unrealizedPnlPercent = totalCost > 0 ? (unrealizedPnlUsd / totalCost) * 100 : 0;
+      // The price shown here is a real observation - fold it into the
+      // recorded peak/trough so they can never contradict it (see priceSamples.js).
+      await recordPriceSample(SimPosition, position, currentValueUsd).catch(() => {});
 
       return {
-        ...position,
+        ...withPriceSample(position, currentValueUsd, unrealizedPnlUsd, unrealizedPnlPercent),
         currentPriceUsd: price.priceUsd,
         currentValueUsd,
         unrealizedPnlUsd,

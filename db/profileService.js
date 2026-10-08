@@ -88,11 +88,91 @@ export async function renameProfile(profileId, name) {
   return Profile.findOneAndUpdate({ _id: profileId }, { $set: { name } }, { returnDocument: "after" });
 }
 
-/** Deletes a profile and every document scoped to it. Rejected for the last remaining profile or the Default one - losing either would silently orphan the app's baseline. */
+/**
+ * Makes `profileId` THE default profile (exactly one ever has isDefault).
+ * The default is what the app falls back to when no profile is selected, and
+ * it can't be deleted - so moving the default elsewhere is how the old
+ * default becomes deletable.
+ */
+export async function setDefaultProfile(profileId) {
+  const profile = await Profile.findById(profileId);
+  if (!profile) throw new Error("Profile not found");
+  // Set the new one first: if the second write fails there are briefly two
+  // defaults (harmless - every reader takes the first), never zero.
+  await Profile.updateOne({ _id: profileId }, { $set: { isDefault: true } });
+  await Profile.updateMany({ _id: { $ne: profileId }, isDefault: true }, { $set: { isDefault: false } });
+  return Profile.findById(profileId);
+}
+
+/**
+ * Every profile plus headline numbers for the Profiles page, from a few
+ * aggregate queries across ALL profiles at once (not per profile):
+ * realized P&L (lifetime, after fees), today's realized P&L, open trades,
+ * total sim balance, closed-trade count and win rate.
+ */
+export async function listProfilesOverview() {
+  const dayStart = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
+  const [profiles, traderStats, openCounts, closedStats, todayStats] = await Promise.all([
+    Profile.find({}).sort({ createdAt: 1 }).lean(),
+    ProfileTrader.aggregate([
+      {
+        $group: {
+          _id: "$profileId",
+          realizedPnlUsd: { $sum: "$sim.realizedPnlUsd" },
+          balanceUsd: { $sum: "$sim.balanceUsd" },
+          startingBalanceUsd: { $sum: "$sim.startingAllocationUsd" },
+          traderCount: { $sum: 1 },
+        },
+      },
+    ]),
+    SimPosition.aggregate([{ $match: { status: "open" } }, { $group: { _id: "$profileId", count: { $sum: 1 } } }]),
+    SimPosition.aggregate([
+      { $match: { status: "closed" } },
+      {
+        $group: {
+          _id: "$profileId",
+          closed: { $sum: 1 },
+          wins: { $sum: { $cond: [{ $gt: ["$realizedPnlUsd", 0] }, 1, 0] } },
+          losses: { $sum: { $cond: [{ $lt: ["$realizedPnlUsd", 0] }, 1, 0] } },
+        },
+      },
+    ]),
+    SimPosition.aggregate([
+      { $match: { status: "closed", closedAt: { $gte: dayStart } } },
+      { $group: { _id: "$profileId", pnl: { $sum: "$realizedPnlUsd" }, count: { $sum: 1 } } },
+    ]),
+  ]);
+
+  const by = (rows) => new Map(rows.map((r) => [String(r._id), r]));
+  const traders = by(traderStats);
+  const open = by(openCounts);
+  const closed = by(closedStats);
+  const today = by(todayStats);
+
+  return profiles.map((p) => {
+    const id = String(p._id);
+    const c = closed.get(id);
+    const decided = (c?.wins || 0) + (c?.losses || 0);
+    return {
+      ...p,
+      realizedPnlUsd: traders.get(id)?.realizedPnlUsd || 0,
+      todayRealizedPnlUsd: today.get(id)?.pnl || 0,
+      todayClosedTrades: today.get(id)?.count || 0,
+      balanceUsd: traders.get(id)?.balanceUsd || 0,
+      startingBalanceUsd: traders.get(id)?.startingBalanceUsd || 0,
+      traderCount: traders.get(id)?.traderCount || 0,
+      openTradeCount: open.get(id)?.count || 0,
+      closedTradeCount: c?.closed || 0,
+      winRatePercent: decided > 0 ? (c.wins / decided) * 100 : null,
+    };
+  });
+}
+
+/** Deletes a profile and every document scoped to it. Rejected for the last remaining profile or the Default one - losing either would silently orphan the app's baseline. Make another profile the default first (setDefaultProfile) to delete this one. */
 export async function deleteProfile(profileId) {
   const profile = await Profile.findById(profileId);
   if (!profile) throw new Error("Profile not found");
-  if (profile.isDefault) throw new Error("Can't delete the Default profile");
+  if (profile.isDefault) throw new Error("Can't delete the default profile - make another profile the default first");
 
   const totalProfiles = await Profile.countDocuments({});
   if (totalProfiles <= 1) throw new Error("Can't delete the last remaining profile");

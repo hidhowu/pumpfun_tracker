@@ -4,7 +4,7 @@ import { SimPosition } from "../models/SimPosition.js";
 import { PendingExecution } from "../models/PendingExecution.js";
 import { NegativeBalanceEvent } from "../models/NegativeBalanceEvent.js";
 import { resolveTraderSettings } from "../settings.js";
-import { getCoinInfo, priceFromCoinInfo, prefetchPrices } from "../pumpFunApi.js";
+import { getPrice, prefetchPrices, PRICE_MAX_AGE } from "../pumpFunApi.js";
 import { logEvent } from "../systemLog.js";
 import { computeTradeFees, realizedCounterDeltaOnClose } from "../fees.js";
 
@@ -18,6 +18,23 @@ async function markSkipped(pending, reason) {
     `Skipped ${pending.action} of ${pending.mint} for ${pending.traderAddress}: ${reason}`,
     { level: "warn", meta: { profileId: String(pending.profileId), traderAddress: pending.traderAddress, mint: pending.mint, action: pending.action, reason } }
   );
+}
+
+// A fill with no readable price (RPC hiccup, or the few seconds a token is
+// migrating from its curve to its pool) is retried a little later instead of
+// being dropped - dropping a SELL would leave the position open forever,
+// since the trader's sell signal never comes again. Buys get fewer retries:
+// a buy filled long after the signal isn't a faithful copy any more.
+const MAX_PRICE_RETRIES = { buy: 2, sell: 5 };
+
+async function retryWithoutPrice(pending) {
+  if ((pending.attempts || 0) >= MAX_PRICE_RETRIES[pending.action]) {
+    return markSkipped(pending, `no price available after ${pending.attempts + 1} attempts`);
+  }
+  pending.attempts = (pending.attempts || 0) + 1;
+  pending.status = "pending";
+  pending.triggerAt = new Date(Date.now() + 1000 * pending.attempts);
+  await pending.save();
 }
 
 async function markDone(pending) {
@@ -81,9 +98,8 @@ async function executeBuy(pending) {
     return markSkipped(pending, "insufficient balance and negative balance is disabled for this trader");
   }
 
-  const coin = await getCoinInfo(pending.mint).catch(() => null);
-  const price = priceFromCoinInfo(coin);
-  if (!price?.priceUsd) return markSkipped(pending, "no current price available for this mint");
+  const price = await getPrice(pending.mint, { fresh: true });
+  if (!price?.priceUsd) return retryWithoutPrice(pending);
 
   const tokenAmount = spendUsd / price.priceUsd;
   // At t=0 the position is worth exactly what was spent on it (that's the
@@ -241,18 +257,46 @@ async function executeSell(pending) {
   if (!position) return markSkipped(pending, "no open position (race - already closed)");
 
   const settings = await resolveTraderSettings(pending.profileId, pending.traderAddress);
-  const coin = await getCoinInfo(pending.mint).catch(() => null);
-  const price = priceFromCoinInfo(coin);
-  if (!price?.priceUsd) return markSkipped(pending, "no current price available for this mint");
+  const price = await getPrice(pending.mint, { fresh: true });
+  if (!price?.priceUsd) return retryWithoutPrice(pending);
 
   await closePosition(position._id, {
     priceUsd: price.priceUsd,
     fees: settings,
-    closeReason: "trader_sell",
-    closeSignature: pending.sourceSignature,
+    closeReason: pending.closeReason || "trader_sell",
+    closeSignature: pending.closeReason && pending.closeReason !== "trader_sell" ? null : pending.sourceSignature,
   });
 
   await markDone(pending);
+}
+
+/**
+ * Every exit we decide on ourselves - stop-loss, take-profit, max hold,
+ * trailing stop, blacklisted - is a SELL, so it goes through the same queue
+ * as a copied trade: queued now, filled only after the execution delay, at
+ * a fresh price read at that moment (executeSell). The sweep's monitoring
+ * price only DECIDES that we exit; it never prices the sale.
+ *
+ * At most one sell can be pending per position (unique index), so if one is
+ * already queued - the trader's own sell, or an exit from an earlier sweep -
+ * this is a no-op. Returns true if a new exit was queued.
+ */
+async function queueExit(position, executionDelaySeconds, closeReason) {
+  try {
+    await PendingExecution.create({
+      profileId: position.profileId,
+      traderAddress: position.traderAddress,
+      mint: position.mint,
+      action: "sell",
+      closeReason,
+      triggerAt: new Date(Date.now() + (executionDelaySeconds || 0) * 1000),
+      sourceSignature: `exit:${closeReason}:${position._id}`,
+    });
+    return true;
+  } catch (err) {
+    if (err?.code === 11000) return false; // a sell for this position is already queued
+    throw err;
+  }
 }
 
 /**
@@ -265,21 +309,21 @@ async function executeSell(pending) {
  * sweep (a few seconds later).
  */
 export async function closeAllPositionsForTrader(traderAddress, closeReason = "blacklisted") {
+  // Cancel queued BUYS only - a sell already queued for a position is kept
+  // (it closes that position anyway, after its own delay).
   await PendingExecution.updateMany(
-    { traderAddress, status: "pending" },
+    { traderAddress, action: "buy", status: "pending" },
     { $set: { status: "skipped", skipReason: "trader blacklisted", processedAt: new Date() } }
   );
 
+  // Each open position is SOLD like any other trade: queued, filled after
+  // that profile's execution delay at a fresh price (see queueExit).
   const open = await SimPosition.find({ traderAddress, status: "open" });
-  await prefetchPrices(open.map((p) => p.mint));
-  let closed = 0;
   for (const position of open) {
-    const price = priceFromCoinInfo(await getCoinInfo(position.mint).catch(() => null));
-    if (!price?.priceUsd) continue;
     const settings = await resolveTraderSettings(position.profileId, traderAddress);
-    if (await closePosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason, closeSignature: null })) closed += 1;
+    await queueExit(position, settings.executionDelaySeconds, closeReason);
   }
-  return { closed, pending: open.length - closed };
+  return { closing: open.length };
 }
 
 /**
@@ -338,8 +382,9 @@ export async function processDuePendingExecutions() {
  *     and "arm at 50%, exit at 20%" can both be configured and race
  *     independently.
  *
- * Not a latency-sensitive mirror of someone else's action, so no execution
- * delay is applied here.
+ * "Close" above means the exit is QUEUED (queueExit), not filled here:
+ * every exit is a sell, so it waits the execution delay and then fills at a
+ * fresh price, exactly like a copied trade. Returns how many exits it queued.
  */
 export async function checkRiskExits() {
   const openPositions = await SimPosition.find({ status: "open" });
@@ -349,7 +394,7 @@ export async function checkRiskExits() {
   // that Promise.all would fire one curl process per distinct mint all at
   // once, which is what was overloading the proxy pool/triggering pump.fun
   // rate limits in the first place.
-  await prefetchPrices(openPositions.map((p) => p.mint));
+  await prefetchPrices(openPositions.map((p) => p.mint), { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
 
   const traderCache = new Map();
   const settingsCache = new Map(); // `${profileId}:${traderAddress}` -> resolved settings
@@ -375,15 +420,14 @@ export async function checkRiskExits() {
       }
       if (!trader) return false;
 
-      const coin = await getCoinInfo(position.mint).catch(() => null);
-      const price = priceFromCoinInfo(coin);
+      const price = await getPrice(position.mint, { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
       if (!price?.priceUsd) return false;
 
       // Backstop for closeAllPositionsForTrader: anything it couldn't price at
       // blacklist time is closed here on the next sweep.
       if (trader.status === "blacklisted") {
-        const fees = await resolveTraderSettings(position.profileId, position.traderAddress);
-        return !!(await closePosition(position._id, { priceUsd: price.priceUsd, fees, closeReason: "blacklisted", closeSignature: null }));
+        const traderSettings = await resolveTraderSettings(position.profileId, position.traderAddress);
+        return !!(await queueExit(position, traderSettings.executionDelaySeconds, "blacklisted"));
       }
 
       const currentValue = position.tokenAmount * price.priceUsd;
@@ -421,17 +465,17 @@ export async function checkRiskExits() {
       if (!hasStopLoss && !hasTakeProfit && !hasMaxHoldTime && trailingStops.length === 0) return false;
 
       if (hasStopLoss && unrealizedPercent <= -Math.abs(settings.stopLossPercent)) {
-        return !!(await closePosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "stop_loss", closeSignature: null }));
+        return !!(await queueExit(position, settings.executionDelaySeconds, "stop_loss"));
       }
 
       if (hasTakeProfit && unrealizedPercent >= Math.abs(settings.takeProfitPercent)) {
-        return !!(await closePosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "take_profit", closeSignature: null }));
+        return !!(await queueExit(position, settings.executionDelaySeconds, "take_profit"));
       }
 
       if (hasMaxHoldTime) {
         const elapsedSeconds = (Date.now() - position.openedAt.getTime()) / 1000;
         if (elapsedSeconds >= settings.maxTradeTimeSeconds) {
-          return !!(await closePosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "max_hold_time", closeSignature: null }));
+          return !!(await queueExit(position, settings.executionDelaySeconds, "max_hold_time"));
         }
       }
 
@@ -458,7 +502,7 @@ export async function checkRiskExits() {
               );
             }
           } else if (unrealizedPercent <= rule.exitPercent) {
-            return !!(await closePosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "trailing_stop", closeSignature: null }));
+            return !!(await queueExit(position, settings.executionDelaySeconds, "trailing_stop"));
           }
         }
       }

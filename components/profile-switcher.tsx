@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Check, ChevronsUpDown, Loader2, Plus, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { Check, ChevronsUpDown, Layers, Loader2, Plus, Trash2 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,7 +33,7 @@ import { createProfile, deleteProfile } from "@/lib/api";
 import type { Profile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-function CreateProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function CreateProfileDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; onCreated?: () => void }) {
   const { profiles, currentProfileId, refresh, setCurrentProfileId } = useProfile();
   const [name, setName] = useState("");
   const [mode, setMode] = useState<"fresh" | "clone">("fresh");
@@ -53,6 +54,7 @@ function CreateProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChan
       setCurrentProfileId(profile._id);
       setName("");
       onOpenChange(false);
+      onCreated?.();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to create profile");
     } finally {
@@ -143,7 +145,15 @@ function CreateProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   );
 }
 
-function DeleteProfileDialog({ profile, onOpenChange }: { profile: Profile | null; onOpenChange: (open: boolean) => void }) {
+export function DeleteProfileDialog({
+  profile,
+  onOpenChange,
+  onDeleted,
+}: {
+  profile: Profile | null;
+  onOpenChange: (open: boolean) => void;
+  onDeleted?: () => void;
+}) {
   const { profiles, currentProfileId, refresh, setCurrentProfileId } = useProfile();
   const [submitting, setSubmitting] = useState(false);
 
@@ -162,6 +172,7 @@ function DeleteProfileDialog({ profile, onOpenChange }: { profile: Profile | nul
       }
       await refresh();
       onOpenChange(false);
+      onDeleted?.();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to delete profile");
     } finally {
@@ -242,6 +253,7 @@ export function ProfileSwitcher() {
                   className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                 >
                   <span className="truncate">{profile.name}</span>
+                  {profile.isDefault && <span className="shrink-0 text-[10px] text-muted-foreground">default</span>}
                   {profile._id === currentProfileId && <Check className="size-3.5 shrink-0 text-primary" />}
                 </button>
                 {canDelete && (
@@ -264,6 +276,11 @@ export function ProfileSwitcher() {
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => setCreateOpen(true)} className="gap-1.5">
             <Plus className="size-3.5" /> Create new profile
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild className="gap-1.5">
+            <Link href="/profiles">
+              <Layers className="size-3.5" /> Manage profiles
+            </Link>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

@@ -429,10 +429,16 @@ export class TrackerService extends EventEmitter {
   // snapshotIntervalMs: every minute (it used to be hourly), so each day's
   // baseline is taken within a minute of 00:00 UTC rather than up to an hour
   // late - cheap now that already-done pairs are skipped in one query.
-  startSimulationLoops({ executionIntervalMs = 2000, snapshotIntervalMs = 60000 } = {}) {
+  // executionIntervalMs: how often due fills are picked up. This bounds how
+  // late a fill can land past its execution delay - at the old 2000ms, a
+  // "2s" delay really filled 2-4s after the signal. Two indexed queries per
+  // tick, so 250ms is cheap.
+  startSimulationLoops({ executionIntervalMs = 250, snapshotIntervalMs = 60000 } = {}) {
     ensureTodaySnapshotsForAllActiveTraders().catch((err) => this.emit("error", err));
 
     this._executionTimer = setInterval(() => {
+      // Overlapping runs are fine (each item is claimed atomically) and
+      // keep one slow price lookup from holding up every other due fill.
       processDuePendingExecutions().catch((err) => this.emit("error", err));
     }, executionIntervalMs);
 
@@ -527,13 +533,13 @@ export class TrackerService extends EventEmitter {
    * leftover balance in between. Both steps are a single cheap indexed query
    * once they've already run for the day.
    */
-  startWalletSimulationLoops({ executionIntervalMs = 2000, rolloverIntervalMs = 60000, snapshotIntervalMs = 3600000 } = {}) {
+  startWalletSimulationLoops({ executionIntervalMs = 250, rolloverIntervalMs = 60000, snapshotIntervalMs = 3600000 } = {}) {
     this._runWalletDayRollover()
       .then(() => recordHourlyWalletSnapshots())
       .catch((err) => this.emit("error", err));
 
     this._walletExecutionTimer = setInterval(() => {
-      processDueWalletExecutions().catch((err) => this.emit("error", err));
+      processDueWalletExecutions().catch((err) => this.emit("error", err)); // overlap-safe, see startSimulationLoops
     }, executionIntervalMs);
 
     this._walletRiskLoopActive = true;

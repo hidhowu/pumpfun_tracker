@@ -7,6 +7,7 @@ import type {
   HttpRpcEndpointView,
   OpenPositionWithTrader,
   Profile,
+  ProfileOverview,
   ProxyView,
   RpcEndpointAddress,
   RpcEndpointView,
@@ -77,7 +78,7 @@ export function updateTrader(
   profileId: string,
   address: string,
   patch: Partial<{ status: "active" | "blacklisted"; muted: boolean | null; label: string; notes: string }>
-): Promise<{ trader: TraderDetail; closedPositions: number; pendingCloses: number }> {
+): Promise<{ trader: TraderDetail; closingPositions: number }> {
   return request(`/api/traders/${address}?profileId=${profileId}`, { method: "PATCH", body: JSON.stringify(patch) });
 }
 
@@ -156,6 +157,16 @@ export function createProfile(
 
 export function renameProfile(id: string, name: string): Promise<{ profile: Profile }> {
   return request(`/api/profiles/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+}
+
+/** Makes this the default profile - the previous default becomes an ordinary (deletable) profile. */
+export function setDefaultProfile(id: string): Promise<{ profile: Profile }> {
+  return request(`/api/profiles/${id}`, { method: "PATCH", body: JSON.stringify({ isDefault: true }) });
+}
+
+/** Every profile with its headline numbers - see db/profileService.js's listProfilesOverview. */
+export function getProfilesOverview(): Promise<{ profiles: ProfileOverview[] }> {
+  return request(`/api/profiles/overview`);
 }
 
 export function deleteProfile(id: string): Promise<{ deleted: true }> {

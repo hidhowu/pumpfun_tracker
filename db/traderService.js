@@ -103,12 +103,11 @@ export async function addTradersBulk(entries) {
 }
 
 /**
- * Blacklisting also closes every open position this trader has - in every
- * profile and every wallet - at the current price, and cancels anything
- * queued for them (once blacklisted they're no longer watched, so their sell
- * signal would never arrive). Returns { trader, closedPositions, pendingCloses },
- * where pendingCloses are positions that couldn't be priced right now and
- * will be closed by the next risk-check sweep.
+ * Blacklisting also sells every open position this trader has - in every
+ * profile and every wallet - and cancels their queued buys (once
+ * blacklisted they're no longer watched, so their sell signal would never
+ * arrive). The sells go through the normal queue: each fills after its
+ * execution delay at a fresh price. Returns { trader, closingPositions }.
  */
 export async function setBlacklisted(address, blacklisted) {
   const trader = await Trader.findOneAndUpdate(
@@ -116,17 +115,13 @@ export async function setBlacklisted(address, blacklisted) {
     { status: blacklisted ? "blacklisted" : "active", blacklistedAt: blacklisted ? new Date() : null },
     { returnDocument: "after" }
   );
-  if (!trader || !blacklisted) return { trader, closedPositions: 0, pendingCloses: 0 };
+  if (!trader || !blacklisted) return { trader, closingPositions: 0 };
 
   const [profileResult, walletResult] = await Promise.all([
     closeAllPositionsForTrader(address, "blacklisted"),
     closeAllWalletPositionsForTrader(address, "blacklisted"),
   ]);
-  return {
-    trader,
-    closedPositions: profileResult.closed + walletResult.closed,
-    pendingCloses: profileResult.pending + walletResult.pending,
-  };
+  return { trader, closingPositions: profileResult.closing + walletResult.closing };
 }
 
 /** muted: true | false | null (null clears the override, falling back to the shared default) - shared across every profile, not per-profile (a wallet's notification preference isn't a strategy choice). */

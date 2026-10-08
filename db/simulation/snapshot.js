@@ -3,7 +3,7 @@ import { Profile } from "../models/Profile.js";
 import { ProfileTrader } from "../models/ProfileTrader.js";
 import { SimPosition } from "../models/SimPosition.js";
 import { DailySnapshot } from "../models/DailySnapshot.js";
-import { getCoinInfo, priceFromCoinInfo } from "../pumpFunApi.js";
+import { getPrice } from "../pumpFunApi.js";
 
 export function todayUtcString(date = new Date()) {
   return date.toISOString().slice(0, 10); // "YYYY-MM-DD"
@@ -27,8 +27,7 @@ export async function currentPortfolioValueUsd(profileId, traderAddress) {
 
   const unrealizedPerPosition = await Promise.all(
     openPositions.map(async (position) => {
-      const coin = await getCoinInfo(position.mint).catch(() => null);
-      const price = priceFromCoinInfo(coin);
+      const price = await getPrice(position.mint);
       return price?.priceUsd ? position.tokenAmount * price.priceUsd : position.costBasisUsd; // fall back to cost basis if price is unavailable
     })
   );

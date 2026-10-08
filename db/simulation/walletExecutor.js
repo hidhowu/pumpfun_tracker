@@ -3,7 +3,7 @@ import { Wallet } from "../models/Wallet.js";
 import { WalletTrader } from "../models/WalletTrader.js";
 import { WalletPosition } from "../models/WalletPosition.js";
 import { WalletPendingExecution } from "../models/WalletPendingExecution.js";
-import { getCoinInfo, priceFromCoinInfo, prefetchPrices } from "../pumpFunApi.js";
+import { getPrice, prefetchPrices, PRICE_MAX_AGE } from "../pumpFunApi.js";
 import { logEvent } from "../systemLog.js";
 import { computeTradeFees, realizedCounterDeltaOnClose } from "../fees.js";
 
@@ -16,6 +16,23 @@ async function markSkipped(pending, reason) {
     level: "warn",
     meta: { walletId: String(pending.walletId), traderAddress: pending.traderAddress, mint: pending.mint, action: pending.action, reason },
   });
+}
+
+// A fill with no readable price (RPC hiccup, or the few seconds a token is
+// migrating from its curve to its pool) is retried a little later instead of
+// being dropped - dropping a SELL would leave the position open forever,
+// since the trader's sell signal never comes again. Buys get fewer retries:
+// a buy filled long after the signal isn't a faithful copy any more.
+const MAX_PRICE_RETRIES = { buy: 2, sell: 5 };
+
+async function retryWithoutPrice(pending) {
+  if ((pending.attempts || 0) >= MAX_PRICE_RETRIES[pending.action]) {
+    return markSkipped(pending, `no price available after ${pending.attempts + 1} attempts`);
+  }
+  pending.attempts = (pending.attempts || 0) + 1;
+  pending.status = "pending";
+  pending.triggerAt = new Date(Date.now() + 1000 * pending.attempts);
+  await pending.save();
 }
 
 async function markDone(pending) {
@@ -57,9 +74,8 @@ async function executeWalletBuy(pending) {
   const walletDoc = await Wallet.findById(pending.walletId);
   if (!walletDoc) return markSkipped(pending, "wallet no longer exists");
 
-  const coin = await getCoinInfo(pending.mint).catch(() => null);
-  const price = priceFromCoinInfo(coin);
-  if (!price?.priceUsd) return markSkipped(pending, "no current price available for this mint");
+  const price = await getPrice(pending.mint, { fresh: true });
+  if (!price?.priceUsd) return retryWithoutPrice(pending);
 
   const spendUsd = walletDoc.settings.tradeSizeUsd;
   const buyFees = computeTradeFees(spendUsd, walletDoc.settings);
@@ -205,41 +221,65 @@ async function executeWalletSell(pending) {
   const walletDoc = await Wallet.findById(pending.walletId);
   if (!walletDoc) return markSkipped(pending, "wallet no longer exists");
 
-  const coin = await getCoinInfo(pending.mint).catch(() => null);
-  const price = priceFromCoinInfo(coin);
-  if (!price?.priceUsd) return markSkipped(pending, "no current price available for this mint");
+  const price = await getPrice(pending.mint, { fresh: true });
+  if (!price?.priceUsd) return retryWithoutPrice(pending);
 
   await closeWalletPosition(position._id, {
     priceUsd: price.priceUsd,
     fees: walletDoc.settings,
-    closeReason: "trader_sell",
-    closeSignature: pending.sourceSignature,
+    closeReason: pending.closeReason || "trader_sell",
+    closeSignature: pending.closeReason && pending.closeReason !== "trader_sell" ? null : pending.sourceSignature,
   });
 
   await markDone(pending);
 }
 
+/**
+ * Every exit we decide on ourselves - stop-loss, take-profit, max hold,
+ * trailing stop, blacklisted - is a SELL, so it goes through the same queue
+ * as a copied trade: queued now, filled only after the execution delay, at
+ * a fresh price read at that moment (executeSell). The sweep's monitoring
+ * price only DECIDES that we exit; it never prices the sale.
+ *
+ * At most one sell can be pending per position (unique index), so if one is
+ * already queued - the trader's own sell, or an exit from an earlier sweep -
+ * this is a no-op. Returns true if a new exit was queued.
+ */
+async function queueExit(position, executionDelaySeconds, closeReason) {
+  try {
+    await WalletPendingExecution.create({
+      walletId: position.walletId,
+      traderAddress: position.traderAddress,
+      mint: position.mint,
+      action: "sell",
+      closeReason,
+      triggerAt: new Date(Date.now() + (executionDelaySeconds || 0) * 1000),
+      sourceSignature: `exit:${closeReason}:${position._id}`,
+    });
+    return true;
+  } catch (err) {
+    if (err?.code === 11000) return false; // a sell for this position is already queued
+    throw err;
+  }
+}
+
 /** Wallet-scoped mirror of db/simulation/executor.js's closeAllPositionsForTrader - every wallet this trader has open positions on. */
 export async function closeAllWalletPositionsForTrader(traderAddress, closeReason = "blacklisted") {
   await WalletPendingExecution.updateMany(
-    { traderAddress, status: "pending" },
+    { traderAddress, action: "buy", status: "pending" },
     { $set: { status: "skipped", skipReason: "trader blacklisted", processedAt: new Date() } }
   );
 
+  // Sold like any other trade - queued, filled after the wallet's execution delay at a fresh price.
   const open = await WalletPosition.find({ traderAddress, status: "open" });
-  await prefetchPrices(open.map((p) => p.mint));
   const walletCache = new Map();
-  let closed = 0;
   for (const position of open) {
-    const price = priceFromCoinInfo(await getCoinInfo(position.mint).catch(() => null));
-    if (!price?.priceUsd) continue;
     const key = String(position.walletId);
     if (!walletCache.has(key)) walletCache.set(key, await Wallet.findById(position.walletId));
     const wallet = walletCache.get(key);
-    if (!wallet) continue;
-    if (await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: wallet.settings, closeReason, closeSignature: null })) closed += 1;
+    if (wallet) await queueExit(position, wallet.settings.executionDelaySeconds, closeReason);
   }
-  return { closed, pending: open.length - closed };
+  return { closing: open.length };
 }
 
 /** Wallet-scoped mirror of processDuePendingExecutions - same atomic-claim pattern, own collection. */
@@ -281,7 +321,7 @@ export async function checkWalletRiskExits() {
   // Same reasoning as checkRiskExits: warm the cache for every distinct
   // mint in bounded batches before the per-position fan-out below, instead
   // of that Promise.all firing one curl process per distinct mint at once.
-  await prefetchPrices(openPositions.map((p) => p.mint));
+  await prefetchPrices(openPositions.map((p) => p.mint), { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
 
   const walletCache = new Map();
   // Traders blacklisted while a position was open - closed below (backstop
@@ -301,8 +341,7 @@ export async function checkWalletRiskExits() {
       }
       if (!wallet) return false;
 
-      const coin = await getCoinInfo(position.mint).catch(() => null);
-      const price = priceFromCoinInfo(coin);
+      const price = await getPrice(position.mint, { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
       if (!price?.priceUsd) return false;
 
       const currentValue = position.tokenAmount * price.priceUsd;
@@ -326,7 +365,7 @@ export async function checkWalletRiskExits() {
 
       const settings = wallet.settings;
       if (blacklisted.has(position.traderAddress)) {
-        return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "blacklisted", closeSignature: null }));
+        return !!(await queueExit(position, settings.executionDelaySeconds, "blacklisted"));
       }
       const hasStopLoss = settings.stopLossPercent !== null && settings.stopLossPercent !== undefined;
       const hasTakeProfit = settings.takeProfitPercent !== null && settings.takeProfitPercent !== undefined;
@@ -335,17 +374,17 @@ export async function checkWalletRiskExits() {
       if (!hasStopLoss && !hasTakeProfit && !hasMaxHoldTime && trailingStops.length === 0) return false;
 
       if (hasStopLoss && unrealizedPercent <= -Math.abs(settings.stopLossPercent)) {
-        return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "stop_loss", closeSignature: null }));
+        return !!(await queueExit(position, settings.executionDelaySeconds, "stop_loss"));
       }
 
       if (hasTakeProfit && unrealizedPercent >= Math.abs(settings.takeProfitPercent)) {
-        return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "take_profit", closeSignature: null }));
+        return !!(await queueExit(position, settings.executionDelaySeconds, "take_profit"));
       }
 
       if (hasMaxHoldTime) {
         const elapsedSeconds = (Date.now() - position.openedAt.getTime()) / 1000;
         if (elapsedSeconds >= settings.maxTradeTimeSeconds) {
-          return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "max_hold_time", closeSignature: null }));
+          return !!(await queueExit(position, settings.executionDelaySeconds, "max_hold_time"));
         }
       }
 
@@ -372,7 +411,7 @@ export async function checkWalletRiskExits() {
               );
             }
           } else if (unrealizedPercent <= rule.exitPercent) {
-            return !!(await closeWalletPosition(position._id, { priceUsd: price.priceUsd, fees: settings, closeReason: "trailing_stop", closeSignature: null }));
+            return !!(await queueExit(position, settings.executionDelaySeconds, "trailing_stop"));
           }
         }
       }

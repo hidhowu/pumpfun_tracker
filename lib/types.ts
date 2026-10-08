@@ -306,6 +306,19 @@ export type Profile = {
   createdAt: string;
 };
 
+/** A profile plus its headline numbers, for the /profiles page. P&L is realized, after fees. */
+export type ProfileOverview = Profile & {
+  realizedPnlUsd: number;
+  todayRealizedPnlUsd: number; // trades closed today (UTC)
+  todayClosedTrades: number;
+  balanceUsd: number;
+  startingBalanceUsd: number;
+  traderCount: number;
+  openTradeCount: number;
+  closedTradeCount: number;
+  winRatePercent: number | null;
+};
+
 export type LeaderboardEntry = {
   address: string;
   label: string;

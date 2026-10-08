@@ -89,10 +89,10 @@ export function TraderHeader({ trader, onUpdated }: Props) {
     if (!currentProfileId) return;
     setBusy(true);
     try {
-      const { trader: updated, closedPositions, pendingCloses } = await updateTrader(currentProfileId, trader.address, { status: "blacklisted" });
+      const { trader: updated, closingPositions } = await updateTrader(currentProfileId, trader.address, { status: "blacklisted" });
       onUpdated(updated);
       toast.success(
-        `Trader blacklisted — tracking stopped${closedPositions + pendingCloses > 0 ? `, ${closedPositions + pendingCloses} open position(s) closed` : ""}`
+        `Trader blacklisted — tracking stopped${closingPositions > 0 ? `, selling ${closingPositions} open position(s)` : ""}`
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to blacklist");
@@ -192,7 +192,7 @@ export function TraderHeader({ trader, onUpdated }: Props) {
                     <AlertDialogTitle>Blacklist this trader?</AlertDialogTitle>
                     <AlertDialogDescription>
                       Tracking stops immediately — no new trades will be recorded until you unblacklist them.
-                      Every open position from this trader (in every profile and wallet) is sold at the current price.
+                      Every open position from this trader (in every profile and wallet) is sold, after the usual execution delay.
                       Their existing history is kept and still visible from the Blacklisted section.
                     </AlertDialogDescription>
                   </AlertDialogHeader>

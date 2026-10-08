@@ -4,7 +4,7 @@ import { Profile } from "../models/Profile.js";
 import { SimPosition } from "../models/SimPosition.js";
 import { PendingExecution } from "../models/PendingExecution.js";
 import { resolveTraderSettings } from "../settings.js";
-import { getCoinInfo, priceFromCoinInfo } from "../pumpFunApi.js";
+import { getPrice } from "../pumpFunApi.js";
 import { ensureTraderInitialized } from "./init.js";
 
 const CLOSING_OUT_FRACTION_PERCENT = 95;
@@ -19,8 +19,7 @@ const CLOSING_OUT_FRACTION_PERCENT = 95;
  */
 export async function estimateTradeUsdValue(trade) {
   if (!trade.tokenAmount) return null;
-  const coin = await getCoinInfo(trade.mint).catch(() => null);
-  const price = priceFromCoinInfo(coin);
+  const price = await getPrice(trade.mint);
   if (!price?.priceUsd) return null;
   return trade.tokenAmount * price.priceUsd;
 }

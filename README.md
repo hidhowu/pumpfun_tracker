@@ -95,7 +95,9 @@ db/models/                Trader, Trade, PositionLot, SimPosition, PendingExecut
 db/traderService.js       addTrader/addTradersBulk (dup-protected), blacklist/mute, settings overrides, adjustBalance
 db/settings.js            resolveTraderSettings() - override ?? global default, per field
 db/positionLedger.js      recordTrade() - persists a REAL trade + FIFO PositionLots -> the trader's own on-chain PnL
-db/pumpFunApi.js          current price/market-cap lookups (frontend-api-v3.pump.fun) - shells out to curl, see below
+db/onchainPrice.js        live prices from the chain: bonding curve, or the PumpSwap pool once graduated (batched RPC)
+db/pumpFunApi.js          getPrice() - on-chain first, pump.fun API fallback; fills always read fresh, never cached
+db/fees.js                pump fee % + Jito fee per buy/sell
 db/pnl.js                 computeDailyPnl / computeRangePnl / streaks (actualized + combined)
 db/simulation/init.js     first-time balance initialization for a trader
 db/simulation/engine.js   evaluateRealTrade() - dust/dup decisions, queues a PendingExecution
