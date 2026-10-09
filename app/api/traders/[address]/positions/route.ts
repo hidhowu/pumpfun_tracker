@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { SimPosition } from "@/db/models/SimPosition";
 import { markOpenPositions } from "@/db/simulation/positionsView";
 
@@ -14,6 +15,8 @@ type Params = { params: Promise<{ address: string }> };
  * their realized numbers stored on the document.
  */
 export async function GET(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { address } = await params;
   const profileId = request.nextUrl.searchParams.get("profileId");

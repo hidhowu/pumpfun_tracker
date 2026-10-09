@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { computeWalletHourlyBreakdown, computeWalletRangePnl } from "@/db/walletPnl";
 import { currentWalletValueUsd } from "@/db/simulation/walletSnapshot";
 import { todayUtcString } from "@/db/simulation/snapshot";
@@ -15,6 +16,8 @@ type Params = { params: Promise<{ id: string }> };
  * period=day also returns `hourlyBreakdown`: that day's 24 hour buckets.
  */
 export async function GET(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const period = request.nextUrl.searchParams.get("period") || "week";

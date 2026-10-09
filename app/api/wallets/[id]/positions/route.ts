@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { WalletPosition } from "@/db/models/WalletPosition";
 import { markOpenWalletPositions } from "@/db/simulation/walletPositionsView";
 
@@ -12,6 +13,8 @@ type Params = { params: Promise<{ id: string }> };
  * app/api/traders/[address]/positions/route.ts exactly, walletId-scoped.
  */
 export async function GET(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const status = request.nextUrl.searchParams.get("status");

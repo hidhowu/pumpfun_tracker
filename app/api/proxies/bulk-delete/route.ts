@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { deleteProxiesBulk } from "@/db/proxyService";
 
 /** Body: { ids: string[] }. */
 export async function POST(request: NextRequest) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const body = await request.json().catch(() => ({}));
   const ids: string[] = Array.isArray(body.ids) ? body.ids : [];

@@ -16,6 +16,19 @@ const TEST_URL = "https://frontend-api-v3.pump.fun/coins-v3/So111111111111111111
 // smaller/slower-changing proxy list.
 let poolCache = { proxies: [], expiresAt: 0 };
 
+// "scheme://user:secret@" -> "scheme://user:****@", anywhere in a string.
+const URL_CREDENTIALS_RE = /\b([a-z][a-z0-9+.-]*:\/\/[^:@/\s]+):[^\s]*@/gi;
+
+/** Masks the password in any URL inside `text` - for error messages, which echo curl's full command line. */
+export function redactCredentials(text) {
+  return typeof text === "string" ? text.replace(URL_CREDENTIALS_RE, "$1:****@") : text;
+}
+
+/** A proxy as sent to the browser: the URL's password never leaves the server. */
+export function toProxyView(proxy) {
+  return { ...proxy, url: redactCredentials(proxy.url), lastError: redactCredentials(proxy.lastError) };
+}
+
 /** Enabled AND currently-healthy (non-blacklisted) proxies, round-robin candidates. */
 export async function getActiveProxyPool() {
   if (poolCache.expiresAt > Date.now()) return poolCache.proxies;
@@ -63,7 +76,7 @@ export async function recordProxyResult(proxyId, ok, errorMessage = null) {
 
     const updated = await Proxy.findOneAndUpdate(
       { _id: proxyId },
-      { $inc: { consecutiveFailures: 1 }, $set: { lastError: errorMessage, lastCheckedAt: new Date() } },
+      { $inc: { consecutiveFailures: 1 }, $set: { lastError: redactCredentials(errorMessage), lastCheckedAt: new Date() } },
       { returnDocument: "after" }
     );
     if (updated && updated.consecutiveFailures >= FAILURE_THRESHOLD && updated.status !== "blacklisted") {
@@ -152,7 +165,7 @@ export async function testProxy(proxyId, { enableOnSuccess = false } = {}) {
     if (!status) error = "No HTTP response through proxy";
     else if (PROXY_BROKEN_HTTP_STATUSES.has(status)) error = `HTTP ${status} through proxy (${status === 407 ? "proxy auth rejected" : "blocked by pump.fun"})`;
   } catch (err) {
-    error = err.message;
+    error = redactCredentials(err.message);
   }
 
   if (error) {

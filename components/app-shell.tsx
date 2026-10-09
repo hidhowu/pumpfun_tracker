@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Radar, ShieldBan, Settings, Activity, Trophy, ScrollText, Router, Shuffle, Wallet, Layers } from "lucide-react";
+import { Radar, ShieldBan, Settings, Activity, Trophy, ScrollText, Router, Shuffle, Wallet, Layers, UserRound, LogOut } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -34,7 +34,14 @@ const NAV_ITEMS = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+async function signOut() {
+  await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+  // A full load, not router.push: the root layout (signed-in shell) doesn't re-render on client navigation.
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.assign("/login");
+}
+
+export function AppShell({ username, children }: { username: string; children: React.ReactNode }) {
   const pathname = usePathname();
 
   return (
@@ -74,9 +81,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>
-          <div className="px-2 py-1 text-xs text-muted-foreground">
-            Local-only dashboard &middot; no login
-          </div>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={pathname === "/account"} tooltip={`Account (${username})`}>
+                <Link href="/account">
+                  <UserRound />
+                  <span className="truncate">{username}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton onClick={signOut} tooltip="Sign out">
+                <LogOut />
+                <span>Sign out</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
         </SidebarFooter>
       </Sidebar>
       <SidebarInset>

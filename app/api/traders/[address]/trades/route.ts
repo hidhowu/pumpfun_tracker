@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { Trade } from "@/db/models/Trade";
 
 type Params = { params: Promise<{ address: string }> };
 
 export async function GET(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { address } = await params;
 

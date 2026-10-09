@@ -22,9 +22,16 @@ const DAY_MS = 24 * HOUR_MS;
 
 // ---------------------------------------------------------------- formatting
 
+// Excel/Sheets run any cell starting with one of these as a formula - a
+// label like "=HYPERLINK(...)" would execute when the CSV is opened, so
+// such text gets a leading ' (plain numbers like "-12.50" are left alone).
+const FORMULA_START_RE = /^[=+\-@\t\r]/;
+const PLAIN_NUMBER_RE = /^-?\d+(\.\d+)?$/;
+
 function csvCell(value) {
   if (value === null || value === undefined) return "";
-  const s = String(value);
+  let s = String(value);
+  if (FORMULA_START_RE.test(s) && !PLAIN_NUMBER_RE.test(s)) s = `'${s}`;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 

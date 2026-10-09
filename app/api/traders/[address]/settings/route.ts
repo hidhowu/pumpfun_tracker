@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { Trader } from "@/db/models/Trader";
 import { setTraderSimSettings } from "@/db/traderService";
 import { resolveTraderSettings } from "@/db/settings";
@@ -40,6 +41,8 @@ function isValidTrailingStops(value: unknown): value is { armPercent: number; ex
  * "no trailing stops for this trader") or `null` to inherit the global list.
  */
 export async function PATCH(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { address } = await params;
   const profileId = request.nextUrl.searchParams.get("profileId");

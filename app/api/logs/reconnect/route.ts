@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { SystemCommand } from "@/db/models/SystemCommand";
 
 /**
@@ -10,6 +11,8 @@ import { SystemCommand } from "@/db/models/SystemCommand";
  * pending so mashing the button doesn't queue up a pile of reconnects.
  */
 export async function POST() {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const existing = await SystemCommand.findOne({ type: "reconnect_rpc", status: { $in: ["pending", "processing"] } }).lean();
   const command = existing ?? (await SystemCommand.create({ type: "reconnect_rpc" }));

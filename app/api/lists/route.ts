@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { createList, listAllWithCounts } from "@/db/listService";
 
 export async function GET() {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const lists = await listAllWithCounts();
   return NextResponse.json({ lists: JSON.parse(JSON.stringify(lists)) });
@@ -10,6 +13,8 @@ export async function GET() {
 
 /** Body: { name: string } */
 export async function POST(request: NextRequest) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const body = await request.json().catch(() => ({}));
   const name = typeof body.name === "string" ? body.name.trim() : "";

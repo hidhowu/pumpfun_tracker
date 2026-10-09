@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { Proxy } from "@/db/models/Proxy";
-import { invalidateProxyPoolCache } from "@/db/proxyService";
+import { invalidateProxyPoolCache, toProxyView } from "@/db/proxyService";
 
 type Params = { params: Promise<{ id: string }> };
 
 /** Body: { label?: string, enabled?: boolean }. Toggling enabled takes effect on the pool's next read (cache invalidated here). */
 export async function PATCH(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
@@ -15,13 +18,15 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   if (typeof body.label === "string") update.label = body.label;
   if (typeof body.enabled === "boolean") update.enabled = body.enabled;
 
-  const updated = await Proxy.findByIdAndUpdate(id, { $set: update }, { returnDocument: "after" });
+  const updated = await Proxy.findByIdAndUpdate(id, { $set: update }, { returnDocument: "after" }).lean();
   if (!updated) return NextResponse.json({ error: "Proxy not found" }, { status: 404 });
   invalidateProxyPoolCache();
-  return NextResponse.json({ proxy: JSON.parse(JSON.stringify(updated)) });
+  return NextResponse.json({ proxy: JSON.parse(JSON.stringify(toProxyView(updated))) });
 }
 
 export async function DELETE(_request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const deleted = await Proxy.findByIdAndDelete(id);

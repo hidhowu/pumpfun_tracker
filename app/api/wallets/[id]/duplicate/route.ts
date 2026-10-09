@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { duplicateWallet } from "@/db/walletService";
 
 type Params = { params: Promise<{ id: string }> };
@@ -11,6 +12,8 @@ type Params = { params: Promise<{ id: string }> };
  * duplicateWallet for why.
  */
 export async function POST(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const body = await request.json().catch(() => ({}));

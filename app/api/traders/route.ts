@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { Trader } from "@/db/models/Trader";
 import { addTradersBulk } from "@/db/traderService";
 import { resolveTraderViews } from "@/lib/traderView";
 
 export async function GET(request: NextRequest) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const status = request.nextUrl.searchParams.get("status"); // "active" | "blacklisted" | null (all)
   const listId = request.nextUrl.searchParams.get("listId"); // narrows to one TraderList's members, or null (all)
@@ -30,6 +33,8 @@ export async function GET(request: NextRequest) {
  * `blacklisted`.
  */
 export async function POST(request: NextRequest) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const body = await request.json().catch(() => ({}));
 

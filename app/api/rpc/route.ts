@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { RpcEndpoint } from "@/db/models/RpcEndpoint";
 import { Trader } from "@/db/models/Trader";
 
@@ -12,6 +13,8 @@ import { Trader } from "@/db/models/Trader";
  * endpoint's address list one at a time to spot what's missing.
  */
 export async function GET() {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const [endpoints, counts, unresolvedAddresses] = await Promise.all([
     RpcEndpoint.find({}).sort({ createdAt: 1 }).lean(),
@@ -43,6 +46,8 @@ function isValidWsUrl(url: unknown): url is string {
 
 /** Body: { url: string, label?: string } */
 export async function POST(request: NextRequest) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const body = await request.json().catch(() => ({}));
   const url = typeof body.url === "string" ? body.url.trim() : "";

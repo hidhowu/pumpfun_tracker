@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { renameProfile, deleteProfile, setDefaultProfile } from "@/db/profileService";
 
 type Params = { params: Promise<{ id: string }> };
@@ -10,6 +11,8 @@ type Params = { params: Promise<{ id: string }> };
  * db/profileService.js's setDefaultProfile).
  */
 export async function PATCH(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
@@ -32,6 +35,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 
 /** Deletes a profile and every document scoped to it. Rejected for the Default profile or the last remaining one. */
 export async function DELETE(_request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
 

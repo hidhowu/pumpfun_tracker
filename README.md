@@ -16,7 +16,7 @@ Two processes, sharing one MongoDB database:
    watches is driven entirely by the `Trader` collection (`status: "active"`),
    polled every 15s — so adding/blacklisting/unblacklisting a trader from the
    dashboard takes effect within seconds, no restart needed.
-2. **Dashboard** (Next.js, `app/`) — a local-only (no login) admin UI: trader
+2. **Dashboard** (Next.js, `app/`) — a sign-in-protected admin UI: trader
    list with live sim balance/PnL, a leaderboard ranked by realized
    performance, per-trader detail (balance, open positions, closed trades,
    P&L breakdown, settings overrides), bulk add (duplicate-protected),
@@ -143,6 +143,7 @@ SOLANA_COMMITMENT=processed
 TRACKED_ADDRESSES=
 MONGODB_URI=mongodb://127.0.0.1:27017/pumpfun_tracker
 PUMP_FUN_API_BASE=https://frontend-api-v3.pump.fun
+SESSION_SECRET=<48+ random characters>
 ```
 
 - `SOLANA_RPC_URLS` — comma-separated HTTP endpoints, picked at random per
@@ -169,6 +170,37 @@ npm run track    # the tracker daemon
 They're independent — restarting the dashboard never drops a live log
 subscription, and the tracker keeps writing to MongoDB regardless of whether
 the dashboard is open.
+
+## Sign-in
+
+Every page and every `/api` route requires a signed-in session. There is no
+sign-up page: accounts are created from the server's shell only.
+
+```
+npm run user -- create <username>    # prompts for the password (hidden)
+npm run user -- passwd <username>    # reset a password; signs out its sessions
+npm run user -- list | signout <username> | unlock <username> | delete <username>
+```
+
+`SESSION_SECRET` must be set in `.env` (see `.env.example`) or the dashboard
+refuses to serve anything. Passwords: 12+ characters, 3 of lowercase /
+uppercase / digits / symbols, stored as scrypt hashes. Sessions end after
+12h idle or 7 days, and can be revoked server-side. 5 wrong passwords for a
+username (or 30 from one IP) within 15 minutes locks further attempts.
+
+How it's enforced: `proxy.ts` turns away any request without a validly
+signed session cookie (deny by default, so new routes are covered
+automatically), and every route handler also verifies the session against
+the database — new API routes must start with:
+
+```ts
+const denied = await requireApiSession();
+if (denied) return denied;
+```
+
+**Serve the dashboard over HTTPS** (e.g. a TLS reverse proxy in front of
+`next start`) — over plain HTTP the password and session cookie cross the
+network unencrypted. The login page warns when it's loaded over HTTP.
 
 ## The "missed transactions" bug (fixed)
 

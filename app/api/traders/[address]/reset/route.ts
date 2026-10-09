@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { Trader } from "@/db/models/Trader";
 import { resetTraderSimulation } from "@/db/traderService";
 import { resolveTraderDetailView } from "@/lib/traderView";
@@ -8,6 +9,8 @@ type Params = { params: Promise<{ address: string }> };
 
 /** Wipes this trader's simulation state (positions, pending fills, P&L history) and resets balance back to their starting allocation. */
 export async function POST(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { address } = await params;
   const profileId = request.nextUrl.searchParams.get("profileId");

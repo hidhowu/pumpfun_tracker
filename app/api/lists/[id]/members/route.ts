@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { addTradersToList, removeTradersFromList } from "@/db/listService";
 
 type Params = { params: Promise<{ id: string }> };
 
 /** Body: { addresses: string[] } - tags every given address into this list. */
 export async function POST(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
@@ -18,6 +21,8 @@ export async function POST(request: NextRequest, { params }: Params) {
 
 /** Body: { addresses: string[] } - untags every given address from this list. */
 export async function DELETE(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const body = await request.json().catch(() => ({}));

@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { getGlobalSettings, GlobalSettings } from "@/db/models/GlobalSettings";
 import { getSystemSettings, SystemSettings } from "@/db/models/SystemSettings";
 
 /** GET/PATCH here present one flat settings object to the UI, backed by two collections: GlobalSettings (per-profile strategy defaults) and SystemSettings (defaultMuted/riskCheckIntervalSeconds - shared across every profile). */
 export async function GET(request: NextRequest) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const profileId = request.nextUrl.searchParams.get("profileId");
   if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });
@@ -56,6 +59,8 @@ function isValidTrailingStops(value: unknown): value is { armPercent: number; ex
  * of which profile is selected.
  */
 export async function PATCH(request: NextRequest) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const profileId = request.nextUrl.searchParams.get("profileId");
   if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });

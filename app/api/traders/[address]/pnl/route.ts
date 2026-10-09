@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { computeRangePnl } from "@/db/pnl";
 import { ensureTodaySnapshot } from "@/db/simulation/snapshot";
 import { getNegativeBalanceBreakdown } from "@/db/negativeBalance";
@@ -10,6 +11,8 @@ const PERIOD_DAYS: Record<string, number> = { day: 1, week: 7, month: 30 };
 
 /** ?period=day|week|month (default week) */
 export async function GET(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { address } = await params;
   const profileId = request.nextUrl.searchParams.get("profileId");

@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { RpcEndpoint } from "@/db/models/RpcEndpoint";
 
 type Params = { params: Promise<{ id: string }> };
 
 /** Body: { label?: string, enabled?: boolean }. Disabling the last enabled endpoint is rejected - it would leave zero tracking coverage. */
 export async function PATCH(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
@@ -33,6 +36,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 
 /** Deleting redistributes its addresses to the remaining active endpoints on the daemon's next sync pass. Rejected if it's the last enabled one. */
 export async function DELETE(_request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
 

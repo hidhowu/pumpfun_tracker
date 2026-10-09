@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { SimPosition } from "@/db/models/SimPosition";
 import { Trader } from "@/db/models/Trader";
 import { markOpenPositions } from "@/db/simulation/positionsView";
@@ -12,6 +13,8 @@ import { markOpenPositions } from "@/db/simulation/positionsView";
  * owns it. Live-priced the same way the per-trader route is (markOpenPositions).
  */
 export async function GET(request: NextRequest) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const profileId = request.nextUrl.searchParams.get("profileId");
   if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });

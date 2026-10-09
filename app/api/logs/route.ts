@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { SystemLog } from "@/db/models/SystemLog";
 
 /**
@@ -8,6 +9,8 @@ import { SystemLog } from "@/db/models/SystemLog";
  * 24h are already gone by the time this runs - see SystemLog's TTL index.
  */
 export async function GET(request: NextRequest) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const category = request.nextUrl.searchParams.get("category");
   const limit = Math.min(500, Math.max(1, Number(request.nextUrl.searchParams.get("limit") || "100")));

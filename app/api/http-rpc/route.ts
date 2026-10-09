@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { HttpRpcEndpoint } from "@/db/models/HttpRpcEndpoint";
 
 export async function GET() {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const endpoints = await HttpRpcEndpoint.find({}).sort({ createdAt: 1 }).lean();
   return NextResponse.json({ endpoints: JSON.parse(JSON.stringify(endpoints)) });
@@ -14,6 +17,8 @@ function isValidHttpUrl(url: unknown): url is string {
 
 /** Body: { url: string, label?: string } */
 export async function POST(request: NextRequest) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const body = await request.json().catch(() => ({}));
   const url = typeof body.url === "string" ? body.url.trim() : "";

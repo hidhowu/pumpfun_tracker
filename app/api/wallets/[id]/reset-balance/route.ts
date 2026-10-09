@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { resetWalletBalance } from "@/db/walletService";
 
 type Params = { params: Promise<{ id: string }> };
 
 /** Resets balanceUsd back to startingBalanceUsd only - every position, trade history, and realizedPnlUsd is left untouched. */
 export async function POST(_request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
 

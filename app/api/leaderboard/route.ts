@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { Trader } from "@/db/models/Trader";
 import { computeRangePnlBatch } from "@/db/pnl";
 import { resolveTraderViews } from "@/lib/traderView";
@@ -13,6 +14,8 @@ const PERIOD_DAYS: Record<string, number> = { day: 1, week: 7, month: 30 };
  * (required).
  */
 export async function GET(request: NextRequest) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const profileId = request.nextUrl.searchParams.get("profileId");
   if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });

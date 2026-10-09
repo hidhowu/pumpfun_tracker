@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { RpcEndpoint } from "@/db/models/RpcEndpoint";
 import { Trader } from "@/db/models/Trader";
 
@@ -7,6 +8,8 @@ type Params = { params: Promise<{ id: string }> };
 
 /** Every active trader currently assigned to this endpoint, with its live subscription status. */
 export async function GET(_request: Request, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
 

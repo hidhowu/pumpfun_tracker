@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { deleteList, renameList } from "@/db/listService";
 
 type Params = { params: Promise<{ id: string }> };
 
 /** Body: { name: string } */
 export async function PATCH(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
@@ -19,6 +22,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 
 /** Deletes the list and untags every trader that had it - never leaves a dangling listId. */
 export async function DELETE(_request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   await deleteList(id);

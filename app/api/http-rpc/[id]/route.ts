@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { HttpRpcEndpoint } from "@/db/models/HttpRpcEndpoint";
 
 type Params = { params: Promise<{ id: string }> };
@@ -12,6 +13,8 @@ type Params = { params: Promise<{ id: string }> };
  * DB-managed entry can never leave it with zero endpoints.
  */
 export async function PATCH(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
@@ -26,6 +29,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 }
 
 export async function DELETE(_request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const deleted = await HttpRpcEndpoint.findByIdAndDelete(id);

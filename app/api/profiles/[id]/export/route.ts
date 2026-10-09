@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { exportProfileCsv, parseExportOptions } from "@/db/exportService";
 
 type Params = { params: Promise<{ id: string }> };
@@ -10,6 +11,8 @@ type Params = { params: Promise<{ id: string }> };
  * see app/api/wallets/[id]/export/route.ts and db/exportService.js.
  */
 export async function GET(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const result = await exportProfileCsv(id, parseExportOptions(request.nextUrl.searchParams));

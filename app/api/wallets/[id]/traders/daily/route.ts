@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { WalletTrader } from "@/db/models/WalletTrader";
 import { Trader } from "@/db/models/Trader";
 import { computeWalletTradersDailyPnl } from "@/db/walletPnl";
@@ -16,6 +17,8 @@ type Params = { params: Promise<{ id: string }> };
  * Traders Performance tab.
  */
 export async function GET(_request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
 

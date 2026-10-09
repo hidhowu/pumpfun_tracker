@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { adjustBalance } from "@/db/traderService";
 import { BalanceAdjustment } from "@/db/models/BalanceAdjustment";
 
@@ -7,6 +8,8 @@ type Params = { params: Promise<{ address: string }> };
 
 /** Body: { "amountUsd": number, "reason"?: string }. amountUsd can be negative (a manual deduction). */
 export async function POST(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { address } = await params;
   const profileId = request.nextUrl.searchParams.get("profileId");
@@ -27,6 +30,8 @@ export async function POST(request: NextRequest, { params }: Params) {
 }
 
 export async function GET(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { address } = await params;
   const profileId = request.nextUrl.searchParams.get("profileId");

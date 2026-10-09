@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { Trader } from "@/db/models/Trader";
 import { setBlacklisted, setMuted, setTraderMeta } from "@/db/traderService";
 import { resolveTraderDetailView } from "@/lib/traderView";
@@ -7,6 +8,8 @@ import { resolveTraderDetailView } from "@/lib/traderView";
 type Params = { params: Promise<{ address: string }> };
 
 export async function GET(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { address } = await params;
   const profileId = request.nextUrl.searchParams.get("profileId");
@@ -26,6 +29,8 @@ export async function GET(request: NextRequest, { params }: Params) {
  *   { "label": "...", "notes": "..." }
  */
 export async function PATCH(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { address } = await params;
   const profileId = request.nextUrl.searchParams.get("profileId");

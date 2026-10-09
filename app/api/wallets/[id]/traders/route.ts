@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { WalletTrader } from "@/db/models/WalletTrader";
 import { Trader } from "@/db/models/Trader";
 import { Wallet } from "@/db/models/Wallet";
@@ -20,6 +21,8 @@ type Params = { params: Promise<{ id: string }> };
  * they've done anywhere else.
  */
 export async function GET(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const period = request.nextUrl.searchParams.get("period") || "day";
@@ -61,6 +64,8 @@ export async function GET(request: NextRequest, { params }: Params) {
  * db/walletService.js's addTradersToWallet for the response shape.
  */
 export async function POST(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
@@ -74,6 +79,8 @@ export async function POST(request: NextRequest, { params }: Params) {
 
 /** Body: { addresses: string[] } - unassigns every given address. Their existing WalletPositions are left as-is. */
 export async function DELETE(request: NextRequest, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
   const body = await request.json().catch(() => ({}));

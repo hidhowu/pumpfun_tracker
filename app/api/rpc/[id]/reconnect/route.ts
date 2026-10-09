@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
+import { requireApiSession } from "@/lib/auth/session";
 import { RpcEndpoint } from "@/db/models/RpcEndpoint";
 import { SystemCommand } from "@/db/models/SystemCommand";
 
@@ -7,6 +8,8 @@ type Params = { params: Promise<{ id: string }> };
 
 /** Queues a reconnect targeted at exactly this endpoint - the other endpoints keep running uninterrupted. */
 export async function POST(_request: Request, { params }: Params) {
+  const denied = await requireApiSession();
+  if (denied) return denied;
   await connectDb();
   const { id } = await params;
 
