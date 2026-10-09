@@ -4,7 +4,7 @@ module.exports = {
       name: "pumpfun-tracker-web",
       cwd: __dirname,
       script: "npx",
-      args: "next start -p 4001",
+      args: "next start -p 4001 -H 127.0.0.1",
       interpreter: "none",
       env: { PORT: "4001" },
     },
