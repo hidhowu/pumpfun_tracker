@@ -3,7 +3,8 @@ import { loadRpcPoolDefinition, resolveBacktestSettings } from "./settings.js";
 
 const REFRESH_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 25_000;
-const SOFT_LIMIT = 8; // "slow down" answers tolerated in one call before it gives up
+const FORBIDDEN_REST_MS = 5000; // an endpoint that answered 403 sits out this long before it is used again
+const SOFT_LIMIT = 8; // refusals (429 / 403 / 503) tolerated in one call before it gives up
 
 /**
  * HTTP JSON-RPC pool for backtests. Same `call(method, params)` surface as
@@ -46,8 +47,8 @@ export class BacktestRpcPool {
     await this.refresh();
     if (this.slots.size === 0) throw new Error("No RPC endpoints available for backtests");
     // Two budgets: real failures (timeouts, missing data...) stop after a few tries on different endpoints, but
-    // "slow down" answers (429 / 403 / 503) are waited out - each one slows that endpoint and rests it, and the
-    // call only gives up after many of them in a row.
+    // refusals (429 / 403 / 503) just move the call on to the next endpoint - the refusing one rests a few seconds -
+    // and the call only gives up after many of them in a row.
     const hardLimit = maxAttempts ?? Math.max(4, this.slots.size * 2);
     const softLimit = Math.max(SOFT_LIMIT, this.slots.size * 3);
     const tried = new Set();
@@ -71,10 +72,10 @@ export class BacktestRpcPool {
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
         if (res.status === 429 || res.status === 503 || res.status === 403) {
-          this.#slowDown(member.id, res.status, res.headers.get("retry-after"));
+          this.#rest(member.id, res.status, res.headers.get("retry-after"));
           lastError = new Error(
             res.status === 403
-              ? `${redact(url)} refused the request (HTTP 403 forbidden) ${soft + 1} times in a row, slowing down each time`
+              ? `${redact(url)} refused the request (HTTP 403 forbidden) ${soft + 1} times in a row, across the endpoints tried`
               : `${redact(url)} rate-limited (HTTP ${res.status})`
           );
           tried.add(member.id);
@@ -87,7 +88,7 @@ export class BacktestRpcPool {
           const limited = json.error.code === 429 || /rate.?limit|too many/i.test(json.error.message || "");
           const forbidden = json.error.code === 403 || /forbidden/i.test(json.error.message || "");
           if (limited || forbidden) {
-            this.#slowDown(member.id, forbidden ? 403 : 429, null);
+            this.#rest(member.id, forbidden ? 403 : 429, null);
             lastError = new Error(`${redact(url)} ${forbidden ? "refused the request" : "rate-limited"}: ${json.error.message}`);
             tried.add(member.id);
             soft += 1;
@@ -100,7 +101,6 @@ export class BacktestRpcPool {
           continue;
         }
         this.failures.delete(member.id);
-        this.slots.recover(member.id);
         return json.result;
       } catch (err) {
         lastError = err;
@@ -111,15 +111,17 @@ export class BacktestRpcPool {
     throw lastError || new Error("RPC call failed with no further detail");
   }
 
-  /** The endpoint pushed back: rest it for a growing time and, for 403/429, run it slower from now on so it stops happening. */
-  #slowDown(id, status, retryAfterHeader) {
+  /** The endpoint pushed back: keep it out of rotation for a moment (a fixed few seconds for 403, the server's own ask or a growing wait for 429/503), while the other endpoints carry on. */
+  #rest(id, status, retryAfterHeader) {
+    if (status === 403) {
+      this.slots.cool(id, FORBIDDEN_REST_MS);
+      return;
+    }
     const n = (this.failures.get(id) || 0) + 1;
     this.failures.set(id, n);
     const asked = Number(retryAfterHeader);
-    const base = status === 403 ? 3000 : 1000;
-    const coolMs = Number.isFinite(asked) && asked > 0 ? asked * 1000 : Math.min(60_000, base * 2 ** Math.min(n - 1, 5));
+    const coolMs = Number.isFinite(asked) && asked > 0 ? asked * 1000 : Math.min(30_000, 1000 * 2 ** Math.min(n, 5));
     this.slots.cool(id, coolMs);
-    if (status === 403 || status === 429) this.slots.throttle(id, 0.75);
   }
 }
 
