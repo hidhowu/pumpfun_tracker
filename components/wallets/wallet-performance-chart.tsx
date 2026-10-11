@@ -35,7 +35,7 @@ export type ChartPoint = {
 const nextHour = (hour: number) => String((hour + 1) % 24).padStart(2, "0") + ":00";
 
 /** Day period -> 24 hourly points; week/month -> one point per day. */
-export function toChartPoints(pnl: WalletPnlBreakdown): ChartPoint[] {
+export function toChartPoints(pnl: Pick<WalletPnlBreakdown, "hourlyBreakdown" | "dailyBreakdown">): ChartPoint[] {
   if (pnl.hourlyBreakdown) {
     return pnl.hourlyBreakdown.map((h) => ({
       key: `h${h.hour}`,

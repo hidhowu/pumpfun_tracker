@@ -1,4 +1,5 @@
 /** Types for the Backtest feature - see db/backtest/ and app/api/backtest/. */
+import type { NegativeBalanceDayStats, WalletPnlBreakdown } from "./types";
 
 /** One entry of the Backtest address list - separate from live Traders. */
 export type BacktestAddressView = {
@@ -197,4 +198,34 @@ export type BacktestSettingsView = {
   effective: BacktestEffectiveSettings;
   worker: { heartbeatAt: string | null; id: string | null };
   capacity: { proxies: number; rpcDedicated: number; rpcShared: number; pumpCapacityRps: number; rpcCapacityRps: number };
+};
+
+/** One address of a run, as the address page shows it: the run it belongs to, its progress, and its simulated wallet. */
+export type BacktestAddressDetail = {
+  run: Pick<BacktestRunDefinition, "_id" | "name" | "days" | "windowStart" | "windowEnd" | "profileName" | "settings" | "status" | "control">;
+  trader: BacktestRunTraderView;
+  notes: string;
+  wallet: {
+    startingUsd: number;
+    balanceUsd: number; // uncommitted cash
+    walletValueUsd: number; // cash + open trades marked at the end of the window
+    realizedPnlUsd: number;
+    unrealizedPnlUsd: number;
+    openPositionCount: number;
+    closedPositionCount: number;
+    negativeBalanceEventCount: number;
+    maxNegativeBalanceUsd: number;
+  };
+};
+
+export type BacktestPnlPeriod = "day" | "week" | "month" | "all";
+
+/** The live wallet P&L shape (so the same chart draws it) plus what only a backtest knows. */
+export type BacktestAddressPnl = Omit<WalletPnlBreakdown, "period"> & {
+  period: BacktestPnlPeriod;
+  averageTradesPerDay: number;
+  negativeBalanceBreakdown: NegativeBalanceDayStats[];
+  range: { from: string; to: string };
+  // null = fully simulated, "" = nothing yet, "YYYY-MM-DD" = days strictly before it are complete.
+  through: string | null;
 };

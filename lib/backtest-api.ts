@@ -1,8 +1,11 @@
 import { request } from "./api";
 import type {
+  BacktestAddressDetail,
+  BacktestAddressPnl,
   BacktestAddressView,
   BacktestDaily,
   BacktestEquityPoint,
+  BacktestPnlPeriod,
   BacktestPositionView,
   BacktestRunDetail,
   BacktestRunSummary,
@@ -71,6 +74,14 @@ export function getBacktestDaily(id: string): Promise<BacktestDaily> {
 
 export function getBacktestEquity(id: string, address?: string): Promise<{ points: BacktestEquityPoint[] }> {
   return request(`/api/backtest/runs/${id}/equity${address ? `?address=${address}` : ""}`);
+}
+
+export function getBacktestAddress(id: string, address: string): Promise<BacktestAddressDetail> {
+  return request(`/api/backtest/runs/${id}/addresses/${address}`);
+}
+
+export function getBacktestAddressPnl(id: string, address: string, period: BacktestPnlPeriod, date?: string): Promise<BacktestAddressPnl> {
+  return request(`/api/backtest/runs/${id}/addresses/${address}/pnl?period=${period}${date ? `&date=${date}` : ""}`);
 }
 
 export function promoteBacktestAddresses(

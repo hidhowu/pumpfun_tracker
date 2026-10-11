@@ -8,6 +8,7 @@ import { Profile } from "../models/Profile.js";
 import { getGlobalSettings } from "../models/GlobalSettings.js";
 import { addTradersBulk, isValidSolanaAddress } from "../traderService.js";
 import { traderProgressPercent, runProgressPercent, estimateRemainingMs } from "./progress.js";
+import { getRunAddress as getRunAddressDetail } from "./addressView.js";
 
 const DAY_MS = 86_400_000;
 export const MAX_BACKTEST_DAYS = 120;
@@ -225,10 +226,17 @@ function finishStats(row) {
 
 const EMPTY_STATS = finishStats(null);
 
-async function statsByAddress(runId) {
-  const rows = await BacktestPosition.aggregate([{ $match: { runId } }, { $group: { _id: "$address", ...POSITION_STATS_GROUP } }]);
+async function statsByAddress(runId, address) {
+  const rows = await BacktestPosition.aggregate([{ $match: address ? { runId, address } : { runId } }, { $group: { _id: "$address", ...POSITION_STATS_GROUP } }]);
   return new Map(rows.map((r) => [r._id, finishStats(r)]));
 }
+
+/** One address of a run: its progress, stats and simulated wallet - for the address page. */
+export function getRunAddress(runId, address) {
+  return getRunAddressDetail(runId, address, { statsFor: async (rid, addr) => (await statsByAddress(rid, addr)).get(addr) ?? EMPTY_STATS });
+}
+
+export { getRunAddressPnl } from "./addressView.js";
 
 function runProgress(run, runTraders) {
   const percent = run.status === "completed" ? 100 : runProgressPercent(runTraders);
@@ -303,7 +311,7 @@ export async function listRunPositions(runId, { address, status, page = 1, limit
   else match.status = { $ne: "skipped" };
   const [positions, total] = await Promise.all([
     BacktestPosition.find(match)
-      .sort({ openedAt: -1, signalTime: -1 })
+      .sort(status === "closed" ? { closedAt: -1, signalTime: -1 } : { openedAt: -1, signalTime: -1 })
       .skip((Math.max(1, page) - 1) * limit)
       .limit(limit)
       .lean(),

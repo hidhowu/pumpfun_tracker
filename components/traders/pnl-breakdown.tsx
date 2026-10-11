@@ -110,7 +110,7 @@ export function PnlBreakdown({ address }: Props) {
   );
 }
 
-function HeadlineStat({
+export function HeadlineStat({
   label,
   value,
   hint,
@@ -136,7 +136,7 @@ function HeadlineStat({
   );
 }
 
-function StreakStat({ streak }: { streak: PnlBreakdownType["streaks"]["currentStreak"] }) {
+export function StreakStat({ streak }: { streak: PnlBreakdownType["streaks"]["currentStreak"] }) {
   const Icon = streak.type === "profit" ? Flame : streak.type === "loss" ? Snowflake : Minus;
   const tone = streak.type === "profit" ? "text-positive" : streak.type === "loss" ? "text-negative" : "text-muted-foreground";
   return (
@@ -157,7 +157,7 @@ function StreakStat({ streak }: { streak: PnlBreakdownType["streaks"]["currentSt
   );
 }
 
-function DailyBar({
+export function DailyBar({
   day,
   negativeBalance,
 }: {

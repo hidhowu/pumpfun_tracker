@@ -60,7 +60,7 @@ type Props = {
   onOpen: (address: string) => void;
 };
 
-/** Every address in the run with its own progress and the results it has produced so far. Click a row for its trades. */
+/** Every address in the run with its own progress and the results it has produced so far. Click a row for the address's full page. */
 export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "pnl", dir: "desc" });

@@ -25,7 +25,6 @@ import type { BacktestRunDetail } from "@/lib/backtest-types";
 import { DailyGrid } from "./daily-grid";
 import { EquityChart } from "./equity-chart";
 import { PositionsTable } from "./positions-table";
-import { AddressSheet } from "./address-sheet";
 import { RunTradersTable } from "./run-traders-table";
 import { WorkerStatus } from "./worker-status";
 import { ProgressBar, RunStatusBadge, StrategyChips, formatDate, formatDuration, formatSignedPercent } from "./shared";
@@ -42,7 +41,6 @@ export function RunDashboard({ runId }: { runId: string }) {
   // Bumped on every poll while the run is active, so the chart / daily grid / trade list below re-read as results arrive.
   const [refreshKey, setRefreshKey] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [openAddress, setOpenAddress] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const lastStatus = useRef<string | null>(null);
@@ -157,7 +155,6 @@ export function RunDashboard({ runId }: { runId: string }) {
   const canCancel = (running && run.control === "run") || run.status === "paused";
   const failedCount = progress.addressesFailed;
   const settled = !running && run.status !== "paused";
-  const openTrader = traders.find((t) => t.address === openAddress) ?? null;
   const pct = progress.percent;
 
   return (
@@ -275,7 +272,7 @@ export function RunDashboard({ runId }: { runId: string }) {
               </div>
             </div>
           )}
-          <RunTradersTable traders={traders} selected={selected} onSelectedChange={setSelected} onOpen={setOpenAddress} />
+          <RunTradersTable traders={traders} selected={selected} onSelectedChange={setSelected} onOpen={(address) => router.push(`/backtest/${runId}/${address}`)} />
         </TabsContent>
 
         <TabsContent value="daily">
@@ -291,8 +288,6 @@ export function RunDashboard({ runId }: { runId: string }) {
           <PositionsTable runId={runId} refreshKey={refreshKey} />
         </TabsContent>
       </Tabs>
-
-      <AddressSheet runId={runId} trader={openTrader} onClose={() => setOpenAddress(null)} refreshKey={refreshKey} />
 
       <AlertDialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
         <AlertDialogContent>
