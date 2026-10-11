@@ -201,7 +201,7 @@ export function ManageListsMenu({
             lists.map((list) => (
               <DropdownMenuCheckboxItem
                 key={list._id}
-                checked={currentListIds.includes(list._id)}
+                checked={(currentListIds ?? []).includes(list._id)}
                 onSelect={(e) => e.preventDefault()}
                 onCheckedChange={(checked) => toggle(list, checked)}
                 className="justify-between"
