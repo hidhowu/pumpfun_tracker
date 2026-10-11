@@ -12,6 +12,8 @@ import type {
   RpcEndpointAddress,
   RpcEndpointView,
   TraderListView,
+  ListOverview,
+  ListPnlBreakdown,
   SimPosition,
   SystemLogEntry,
   Trade,
@@ -283,6 +285,26 @@ export function renameTraderList(id: string, name: string): Promise<{ list: Trad
 
 export function deleteTraderList(id: string): Promise<{ deleted: true }> {
   return request(`/api/lists/${id}`, { method: "DELETE" });
+}
+
+/** Every list's headline performance on one profile. */
+export function getListsOverview(profileId: string): Promise<{ lists: ListOverview[] }> {
+  return request(`/api/lists/overview?profileId=${profileId}`);
+}
+
+export function getListPnl(
+  listId: string,
+  profileId: string,
+  period: "day" | "week" | "month" = "week",
+  date?: string
+): Promise<ListPnlBreakdown> {
+  const qs = new URLSearchParams({ profileId, period });
+  if (date) qs.set("date", date);
+  return request(`/api/lists/${listId}/pnl?${qs.toString()}`);
+}
+
+export function getListTradersDaily(listId: string, profileId: string): Promise<{ dates: string[]; traders: WalletTraderDailyPerformance[] }> {
+  return request(`/api/lists/${listId}/traders/daily?profileId=${profileId}`);
 }
 
 export function addTradersToList(listId: string, addresses: string[]): Promise<{ modifiedCount: number }> {

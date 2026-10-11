@@ -175,6 +175,32 @@ export type TraderListView = {
   memberCount: number;
 };
 
+/** One row of GET /api/lists/overview - a list's headline numbers on one profile. */
+export type ListOverview = {
+  _id: string;
+  name: string;
+  traderCount: number;
+  realizedPnlUsd: number; // lifetime, on this profile
+  todayPnlUsd: number;
+  weekPnlUsd: number;
+  openPositionCount: number;
+  closedPositionCount: number;
+  weekWinRatePercent: number | null;
+};
+
+export type ListSummary = {
+  traderCount: number;
+  startingUsd: number;
+  balanceUsd: number; // uncommitted cash only
+  currentValueUsd: number; // cash + live value of open positions
+  realizedPnlUsd: number;
+  openPositionCount: number;
+  closedPositionCount: number;
+};
+
+/** GET /api/lists/[id]/pnl - the wallet pnl shape (so the wallet chart renders it) plus the list and its headline summary. */
+export type ListPnlBreakdown = WalletPnlBreakdown & { list: { _id: string; name: string }; summary: ListSummary };
+
 export type TraderDetail = Trader & {
   openPositions: SimPosition[]; // live-priced
   unrealizedPnlUsd: number;
@@ -437,6 +463,7 @@ export type WalletTraderDailyPerformance = {
   totalTrades: number;
   totalWins: number;
   totalLosses: number;
+  overall?: { pnlUsd: number; trades: number; wins: number; losses: number }; // all-time totals - lists only
 };
 
 /** Response of POST /api/wallets/[id]/traders - see db/walletService.js's addTradersToWallet. */

@@ -10,7 +10,13 @@ import { formatAddress, formatUsd } from "@/lib/format";
 import type { WalletTraderDailyPerformance } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type Props = { walletId: string; refreshKey?: number };
+type Props = {
+  walletId?: string;
+  /** Overrides the wallet fetch - lets a trader list reuse this table. When set, rows may carry `overall` and get an extra all-time column. */
+  load?: () => Promise<{ dates: string[]; traders: WalletTraderDailyPerformance[] }>;
+  emptyMessage?: string;
+  refreshKey?: number;
+};
 
 function dayHeader(date: string) {
   const weekday = new Date(`${date}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" });
@@ -34,17 +40,18 @@ function PnlCell({ pnlUsd, tradeCount, wins, losses }: { pnlUsd: number; tradeCo
  * UTC days on this wallet, with per-day and per-trader totals - the detailed
  * counterpart to the Traders Performance overview table.
  */
-export function WalletTradersDailyTable({ walletId, refreshKey = 0 }: Props) {
+export function WalletTradersDailyTable({ walletId, load, emptyMessage, refreshKey = 0 }: Props) {
   const [data, setData] = useState<{ dates: string[]; traders: WalletTraderDailyPerformance[] } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    getWalletTradersDaily(walletId)
+    (load ? load() : getWalletTradersDaily(walletId as string))
       .then((res) => !cancelled && setData(res))
       .catch((e) => !cancelled && toast.error(e instanceof Error ? e.message : "Failed to load daily trader performance"));
     return () => {
       cancelled = true;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is an inline closure; walletId/refreshKey are the real triggers
   }, [walletId, refreshKey]);
 
   if (!data) {
@@ -60,7 +67,7 @@ export function WalletTradersDailyTable({ walletId, refreshKey = 0 }: Props) {
   if (data.traders.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-border/60 py-10 text-center text-sm text-muted-foreground">
-        No traders assigned yet - add some to start mirroring their trades on this wallet.
+        {emptyMessage ?? "No traders assigned yet - add some to start mirroring their trades on this wallet."}
       </div>
     );
   }
@@ -86,6 +93,17 @@ export function WalletTradersDailyTable({ walletId, refreshKey = 0 }: Props) {
     { pnlUsd: 0, tradeCount: 0, wins: 0, losses: 0 }
   );
 
+  const hasOverall = data.traders.some((t) => t.overall);
+  const overallGrand = data.traders.reduce(
+    (acc, t) => ({
+      pnlUsd: acc.pnlUsd + (t.overall?.pnlUsd ?? 0),
+      tradeCount: acc.tradeCount + (t.overall?.trades ?? 0),
+      wins: acc.wins + (t.overall?.wins ?? 0),
+      losses: acc.losses + (t.overall?.losses ?? 0),
+    }),
+    { pnlUsd: 0, tradeCount: 0, wins: 0, losses: 0 }
+  );
+
   return (
     <div className="overflow-x-auto">
       <Table>
@@ -101,7 +119,8 @@ export function WalletTradersDailyTable({ walletId, refreshKey = 0 }: Props) {
                 </TableHead>
               );
             })}
-            <TableHead className="pr-4 text-right">7-day total</TableHead>
+            <TableHead className={cn("text-right", !hasOverall && "pr-4")}>7-day total</TableHead>
+            {hasOverall && <TableHead className="pr-4 text-right">Overall</TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -123,9 +142,19 @@ export function WalletTradersDailyTable({ walletId, refreshKey = 0 }: Props) {
                   <PnlCell {...d} />
                 </TableCell>
               ))}
-              <TableCell className="pr-4 text-right font-medium tabular-nums">
+              <TableCell className={cn("text-right font-medium tabular-nums", !hasOverall && "pr-4")}>
                 <PnlCell pnlUsd={t.totalPnlUsd} tradeCount={t.totalTrades} wins={t.totalWins} losses={t.totalLosses} />
               </TableCell>
+              {hasOverall && (
+                <TableCell className="pr-4 text-right font-medium tabular-nums">
+                  <PnlCell
+                    pnlUsd={t.overall?.pnlUsd ?? 0}
+                    tradeCount={t.overall?.trades ?? 0}
+                    wins={t.overall?.wins ?? 0}
+                    losses={t.overall?.losses ?? 0}
+                  />
+                </TableCell>
+              )}
             </TableRow>
           ))}
         </TableBody>
@@ -137,9 +166,14 @@ export function WalletTradersDailyTable({ walletId, refreshKey = 0 }: Props) {
                 <PnlCell {...d} />
               </TableCell>
             ))}
-            <TableCell className="pr-4 text-right font-medium tabular-nums">
+            <TableCell className={cn("text-right font-medium tabular-nums", !hasOverall && "pr-4")}>
               <PnlCell {...grand} />
             </TableCell>
+            {hasOverall && (
+              <TableCell className="pr-4 text-right font-medium tabular-nums">
+                <PnlCell {...overallGrand} />
+              </TableCell>
+            )}
           </TableRow>
         </TableFooter>
       </Table>
