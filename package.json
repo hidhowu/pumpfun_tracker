@@ -11,6 +11,7 @@
     "lint": "eslint",
     "parse": "node src/parseTransaction.js",
     "track": "node src/tracker.js",
+    "backtest": "node src/backtestWorker.js",
     "user": "node extras/manageUsers.mjs"
   },
   "dependencies": {

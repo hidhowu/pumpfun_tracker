@@ -1,0 +1,205 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { getActiveProxyPool, recordProxyResult, redactCredentials, PROXY_BROKEN_HTTP_STATUSES } from "../proxyService.js";
+import { resolveBacktestSettings } from "./settings.js";
+import { SlotPool, sleep } from "./slotPool.js";
+
+const execFileAsync = promisify(execFile);
+
+const BASE = () => process.env.PUMP_SWAP_API_BASE || "https://swap-api.pump.fun";
+const MARKER = "\n__PUMPCLIENT__";
+const REFRESH_MS = 15_000;
+const MAX_ATTEMPTS = 10;
+const PAGE_LIMIT = 100; // the API's maximum
+// Tuple (timestamp, slotIndexId) is the keyset: a huge id with timestamp T means "everything up to and including second T".
+const MAX_ID = "9".repeat(22);
+const DIRECT_ID = "direct";
+
+/** Normalises one API trade: numbers instead of decimal strings, seconds instead of ISO. */
+function normalizeTrade(t) {
+  return {
+    id: t.slotIndexId,
+    sig: t.tx,
+    ts: Math.floor(Date.parse(t.timestamp) / 1000),
+    user: t.userAddress,
+    type: t.type,
+    program: t.program,
+    // Pool price immediately BEFORE this trade - i.e. the pool state at that moment.
+    priceUsd: Number(t.priceUsd),
+    priceSol: Number(t.priceSol),
+    // This trade's own average execution price.
+    fillPriceUsd: Number(t.fillPriceUsd),
+    amountSol: Number(t.amountSol),
+    amountUsd: Number(t.amountUsd),
+    baseAmount: Number(t.baseAmount),
+  };
+}
+
+const byTime = (a, b) => (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+/**
+ * Reads a token's trade history from pump.fun's swap API through the proxy
+ * pool, round-robin, one rate-limited slot per proxy (see SlotPool). A 429
+ * cools only the proxy that got it, for the time the server asked; the call
+ * moves to another proxy. While proxies exist, requests never fall back to a
+ * direct connection - that would burn this machine's own IP. With no proxies
+ * configured at all it goes direct at the (low) configured direct rate.
+ */
+export class PumpTradesClient {
+  constructor() {
+    this.slots = new SlotPool();
+    this.refreshedAt = 0;
+    this.refreshing = null;
+    this.settings = null;
+    this.okRecordedAt = new Map(); // proxy id -> last time a success was written to Mongo (writes throttled)
+    this.stats = { requests: 0, rateLimited: 0, failures: 0 };
+  }
+
+  async refresh(force = false) {
+    if (!force && Date.now() - this.refreshedAt < REFRESH_MS) return;
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = (async () => {
+      const [{ effective }, proxies] = await Promise.all([resolveBacktestSettings(), getActiveProxyPool().catch(() => [])]);
+      this.settings = effective;
+      this.slots.sync(
+        proxies.length > 0
+          ? proxies.map((p) => ({ id: String(p._id), rps: effective.proxyRps, data: { proxy: p } }))
+          : [{ id: DIRECT_ID, rps: effective.directRps, data: { proxy: null } }]
+      );
+      this.refreshedAt = Date.now();
+    })().finally(() => {
+      this.refreshing = null;
+    });
+    return this.refreshing;
+  }
+
+  #url(mint, cursor) {
+    const s = this.settings;
+    const qs = new URLSearchParams({ limit: String(PAGE_LIMIT), cursor });
+    if (s.minSolAmount > 0) qs.set("minSolAmount", String(s.minSolAmount));
+    if (s.program) qs.set("program", s.program);
+    return `${BASE()}/v2/coins/${mint}/trades?${qs}`;
+  }
+
+  async #curl(url, proxyUrl) {
+    const args = ["-s", "-m", "20", "--compressed", "-H", "accept: application/json", "-w", `${MARKER}%{http_code}|%header{retry-after}`];
+    if (proxyUrl) args.push("--proxy", proxyUrl);
+    args.push(url);
+    const { stdout } = await execFileAsync("curl", args, { maxBuffer: 16 * 1024 * 1024 });
+    const at = stdout.lastIndexOf(MARKER);
+    const body = at >= 0 ? stdout.slice(0, at) : stdout;
+    const [status, retryAfter] = at >= 0 ? stdout.slice(at + MARKER.length).split("|") : ["0", ""];
+    return { status: Number(status) || 0, retryAfter: Number(retryAfter) || 0, body };
+  }
+
+  /** One page of history: trades strictly before `cursor`, newest first. */
+  async fetchPage(mint, cursor) {
+    await this.refresh();
+    const url = this.#url(mint, cursor);
+    const tried = new Set();
+    let lastError;
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const reservation = this.slots.reserve({ exclude: tried.size < this.slots.size ? tried : undefined });
+      if (!reservation) throw new Error("No proxies or direct slot available");
+      const { member, waitMs } = reservation;
+      if (waitMs > 0) await sleep(waitMs);
+      const proxy = member.data.proxy;
+      this.stats.requests += 1;
+
+      try {
+        const { status, retryAfter, body } = await this.#curl(url, proxy?.url ?? null);
+        if (status === 429) {
+          this.stats.rateLimited += 1;
+          this.slots.cool(member.id, Math.min(120, Math.max(5, retryAfter || 15)) * 1000);
+          tried.add(member.id);
+          lastError = new Error("pump.fun rate limit (429)");
+          continue;
+        }
+        if (!status || (proxy && PROXY_BROKEN_HTTP_STATUSES.has(status))) {
+          if (proxy) recordProxyResult(proxy._id, false, `HTTP ${status || "no response"} through proxy`).catch(() => {});
+          this.slots.cool(member.id, 20_000);
+          tried.add(member.id);
+          lastError = new Error(`no usable response${proxy ? " through proxy" : ""} (HTTP ${status || "none"})`);
+          continue;
+        }
+        if (proxy) this.#recordOk(proxy._id);
+        if (status === 404) return { trades: [], nextCursor: null, hasMore: false };
+        if (status >= 500) {
+          lastError = new Error(`pump.fun HTTP ${status}`);
+          await sleep(500 * (attempt + 1));
+          continue;
+        }
+        if (status !== 200) throw new Error(`pump.fun HTTP ${status}`);
+        const json = JSON.parse(body);
+        const trades = (json.trades || []).map(normalizeTrade);
+        return { trades, nextCursor: json.pagination?.nextCursor ?? null, hasMore: !!json.pagination?.hasMore };
+      } catch (err) {
+        this.stats.failures += 1;
+        lastError = new Error(redactCredentials(err.message));
+        tried.add(member.id);
+        if (proxy) recordProxyResult(proxy._id, false, err.message).catch(() => {});
+        await sleep(300 * (attempt + 1));
+      }
+    }
+    throw lastError || new Error("pump.fun request failed");
+  }
+
+  #recordOk(proxyId) {
+    const key = String(proxyId);
+    if (Date.now() - (this.okRecordedAt.get(key) || 0) < 30_000) return;
+    this.okRecordedAt.set(key, Date.now());
+    recordProxyResult(proxyId, true).catch(() => {});
+  }
+
+  /**
+   * Every trade with `fromSec <= timestamp <= toSec`, oldest first, read
+   * completely: pages backward from `toSec` until a page reaches before
+   * `fromSec` (or history runs out), so nothing inside the window is missing
+   * even when the token trades thousands of times a minute.
+   *
+   * `prior` is the newest trade strictly before `fromSec` if the last page
+   * happened to include one (null otherwise) - the fallback price source when
+   * nothing traded inside the window.
+   *
+   * @returns {Promise<{trades: object[], prior: object|null, pages: number, exhausted: boolean, truncated: boolean}>}
+   */
+  async fetchRange(mint, fromSec, toSec, { maxPages = 400 } = {}) {
+    let cursor = `${MAX_ID}-${toSec * 1000}`;
+    const seen = new Set();
+    const inside = [];
+    let prior = null;
+    let pages = 0;
+    let exhausted = false;
+    let truncated = false;
+
+    for (;;) {
+      if (pages >= maxPages) {
+        truncated = true;
+        break;
+      }
+      const page = await this.fetchPage(mint, cursor);
+      pages += 1;
+      let reachedBefore = false;
+      for (const t of page.trades) {
+        if (t.ts < fromSec) {
+          reachedBefore = true;
+          if (!prior || byTime(t, prior) > 0) prior = t;
+          continue;
+        }
+        if (t.ts > toSec || seen.has(t.id)) continue;
+        seen.add(t.id);
+        inside.push(t);
+      }
+      if (reachedBefore) break;
+      if (!page.hasMore || !page.nextCursor || page.trades.length === 0) {
+        exhausted = true;
+        break;
+      }
+      cursor = page.nextCursor;
+    }
+
+    inside.sort(byTime);
+    return { trades: inside, prior, pages, exhausted, truncated };
+  }
+}

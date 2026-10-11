@@ -28,7 +28,7 @@ import type {
   WalletView,
 } from "./types";
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+export async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
@@ -227,13 +227,17 @@ export function listHttpRpcEndpoints(): Promise<{ endpoints: HttpRpcEndpointView
   return request(`/api/http-rpc`);
 }
 
-export function addHttpRpcEndpoint(url: string, label?: string): Promise<{ endpoint: HttpRpcEndpointView }> {
-  return request(`/api/http-rpc`, { method: "POST", body: JSON.stringify({ url, label }) });
+export function addHttpRpcEndpoint(
+  url: string,
+  label?: string,
+  scope?: "both" | "backtest"
+): Promise<{ endpoint: HttpRpcEndpointView }> {
+  return request(`/api/http-rpc`, { method: "POST", body: JSON.stringify({ url, label, scope }) });
 }
 
 export function updateHttpRpcEndpoint(
   id: string,
-  patch: Partial<{ label: string; enabled: boolean }>
+  patch: Partial<{ label: string; enabled: boolean; scope: "both" | "backtest" }>
 ): Promise<{ endpoint: HttpRpcEndpointView }> {
   return request(`/api/http-rpc/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
 }

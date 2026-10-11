@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Radar, ShieldBan, Settings, Activity, Trophy, ScrollText, Router, Shuffle, Wallet, Layers, ListChecks, UserRound, LogOut } from "lucide-react";
+import { Radar, ShieldBan, Settings, Activity, Trophy, ScrollText, Router, Shuffle, Wallet, Layers, ListChecks, UserRound, LogOut, FlaskConical } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -27,6 +27,7 @@ const NAV_ITEMS = [
   { href: "/wallets", label: "Wallets", icon: Wallet },
   { href: "/lists", label: "Lists", icon: ListChecks },
   { href: "/profiles", label: "Profiles", icon: Layers },
+  { href: "/backtest", label: "Backtest", icon: FlaskConical },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
   { href: "/blacklisted", label: "Blacklisted", icon: ShieldBan },
   { href: "/rpc", label: "RPC", icon: Router },
@@ -65,7 +66,7 @@ export function AppShell({ username, children }: { username: string; children: R
             <SidebarGroupContent>
               <SidebarMenu>
                 {NAV_ITEMS.map((item) => {
-                  const active = pathname === item.href;
+                  const active = item.href === "/" ? pathname === "/" : pathname === item.href || pathname.startsWith(`${item.href}/`);
                   return (
                     <SidebarMenuItem key={item.href}>
                       <SidebarMenuButton asChild isActive={active} tooltip={item.label}>

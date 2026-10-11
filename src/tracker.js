@@ -361,7 +361,7 @@ export class TrackerService extends EventEmitter {
    * install has no replica set).
    */
   async syncHttpRpcPoolFromDb() {
-    const enabled = await HttpRpcEndpoint.find({ enabled: true }, { url: 1 }).lean();
+    const enabled = await HttpRpcEndpoint.find({ enabled: true, scope: { $ne: "backtest" } }, { url: 1 }).lean();
     const merged = [...new Set([...config.rpcUrls, ...enabled.map((e) => e.url)])];
     this.rpcPool.urls = merged;
   }

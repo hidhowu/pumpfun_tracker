@@ -430,10 +430,13 @@ function classifyTransaction(summaryEvents) {
  * Fetches and fully decodes a Solana transaction signature.
  * @param {string} signature
  * @param {RpcPool} rpcPool
+ * @param {{maxAttempts?: number, baseDelayMs?: number}} [fetchOptions] retry behaviour for the getTransaction call -
+ *   the live tracker keeps the generous defaults (a just-seen transaction may not be fetchable for a few seconds);
+ *   backtests pass a small maxAttempts since an old transaction that isn't there now never will be.
  * @returns {Promise<{signature: string, summary: object, parsedTransaction: object}>}
  */
-export async function parseTransaction(signature, rpcPool) {
-  const tx = await fetchTransaction(rpcPool, signature);
+export async function parseTransaction(signature, rpcPool, fetchOptions) {
+  const tx = await fetchTransaction(rpcPool, signature, fetchOptions);
 
   const message = tx.transaction.message;
   const accountKeys = message.accountKeys.map((k) => ({

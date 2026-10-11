@@ -44,6 +44,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   addHttpRpcEndpoint,
@@ -164,6 +165,7 @@ function AddHttpRpcDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [label, setLabel] = useState("");
+  const [scope, setScope] = useState<"both" | "backtest">("both");
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit() {
@@ -173,10 +175,11 @@ function AddHttpRpcDialog({ onAdded }: { onAdded: () => void }) {
     }
     setSubmitting(true);
     try {
-      await addHttpRpcEndpoint(url.trim(), label.trim() || undefined);
+      await addHttpRpcEndpoint(url.trim(), label.trim() || undefined, scope);
       toast.success("HTTP RPC endpoint added");
       setUrl("");
       setLabel("");
+      setScope("both");
       setOpen(false);
       onAdded();
     } catch (e) {
@@ -216,6 +219,21 @@ function AddHttpRpcDialog({ onAdded }: { onAdded: () => void }) {
           <div className="space-y-1.5">
             <Label htmlFor="http-rpc-label">Label (optional)</Label>
             <Input id="http-rpc-label" placeholder="e.g. Alchemy #2" value={label} onChange={(e) => setLabel(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="http-rpc-scope">Used for</Label>
+            <Select value={scope} onValueChange={(v) => setScope(v as "both" | "backtest")}>
+              <SelectTrigger id="http-rpc-scope" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="both">Live tracking + backtests</SelectItem>
+                <SelectItem value="backtest">Backtests only</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              &quot;Backtests only&quot; keeps slow or cheap providers out of live trade detection entirely.
+            </p>
           </div>
         </div>
         <DialogFooter>
@@ -259,6 +277,18 @@ function HttpRpcSection() {
     setPendingId(endpoint._id);
     try {
       await updateHttpRpcEndpoint(endpoint._id, { enabled });
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update endpoint");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  async function handleScopeChange(endpoint: HttpRpcEndpointView, scope: "both" | "backtest") {
+    setPendingId(endpoint._id);
+    try {
+      await updateHttpRpcEndpoint(endpoint._id, { scope });
       await refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update endpoint");
@@ -316,6 +346,7 @@ function HttpRpcSection() {
               <TableHeader>
                 <TableRow className="border-border/60 hover:bg-transparent">
                   <TableHead>Endpoint</TableHead>
+                  <TableHead>Used for</TableHead>
                   <TableHead className="text-center">Enabled</TableHead>
                   <TableHead className="pr-4 text-right">Actions</TableHead>
                 </TableRow>
@@ -330,6 +361,21 @@ function HttpRpcSection() {
                           <span className="truncate font-medium">{endpoint.label || "Unlabeled endpoint"}</span>
                           <span className="truncate font-mono text-xs text-muted-foreground">{endpoint.url}</span>
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        <Select
+                          value={endpoint.scope ?? "both"}
+                          disabled={isPending}
+                          onValueChange={(v) => handleScopeChange(endpoint, v as "both" | "backtest")}
+                        >
+                          <SelectTrigger size="sm" className="w-[11.5rem]" aria-label="Endpoint scope">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="both">Live + backtests</SelectItem>
+                            <SelectItem value="backtest">Backtests only</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-center">

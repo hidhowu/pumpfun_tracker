@@ -15,7 +15,7 @@ function isValidHttpUrl(url: unknown): url is string {
   return typeof url === "string" && /^https?:\/\/.+/i.test(url.trim());
 }
 
-/** Body: { url: string, label?: string } */
+/** Body: { url: string, label?: string, scope?: "both" | "backtest" } */
 export async function POST(request: NextRequest) {
   const denied = await requireApiSession();
   if (denied) return denied;
@@ -28,7 +28,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const endpoint = await HttpRpcEndpoint.create({ url, label: body.label || "" });
+    const scope = body.scope === "backtest" ? "backtest" : "both";
+    const endpoint = await HttpRpcEndpoint.create({ url, label: body.label || "", scope });
     return NextResponse.json({ endpoint: JSON.parse(JSON.stringify(endpoint)) });
   } catch (err) {
     if ((err as { code?: number }).code === 11000) {

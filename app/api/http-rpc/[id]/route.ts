@@ -6,7 +6,7 @@ import { HttpRpcEndpoint } from "@/db/models/HttpRpcEndpoint";
 type Params = { params: Promise<{ id: string }> };
 
 /**
- * Body: { label?: string, enabled?: boolean }. No "last enabled" guard here
+ * Body: { label?: string, enabled?: boolean, scope?: "both" | "backtest" }. No "last enabled" guard here
  * (unlike the WS RpcEndpoint route) - the tracker daemon always keeps
  * .env's SOLANA_RPC_URLS as a permanent floor in its pool (see
  * src/tracker.js's startHttpRpcPoolSync), so disabling/deleting every
@@ -22,6 +22,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   const update: Record<string, unknown> = {};
   if (typeof body.label === "string") update.label = body.label;
   if (typeof body.enabled === "boolean") update.enabled = body.enabled;
+  if (body.scope === "both" || body.scope === "backtest") update.scope = body.scope;
 
   const updated = await HttpRpcEndpoint.findByIdAndUpdate(id, { $set: update }, { returnDocument: "after" });
   if (!updated) return NextResponse.json({ error: "RPC endpoint not found" }, { status: 404 });

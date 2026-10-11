@@ -77,7 +77,7 @@ let dbRpcCache = { urls: [], expiresAt: 0 };
 /** .env SOLANA_RPC_URLS plus every enabled HTTP endpoint from the /rpc page - same pool the tracker daemon uses. */
 async function rpcUrls() {
   if (dbRpcCache.expiresAt < Date.now()) {
-    const enabled = await HttpRpcEndpoint.find({ enabled: true }, { url: 1 }).lean().catch(() => []);
+    const enabled = await HttpRpcEndpoint.find({ enabled: true, scope: { $ne: "backtest" } }, { url: 1 }).lean().catch(() => []);
     dbRpcCache = { urls: enabled.map((e) => e.url), expiresAt: Date.now() + 30_000 };
   }
   const envUrls = (process.env.SOLANA_RPC_URLS || "").split(",").map((s) => s.trim()).filter(Boolean);

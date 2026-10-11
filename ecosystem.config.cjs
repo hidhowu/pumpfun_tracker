@@ -14,5 +14,12 @@ module.exports = {
       script: "src/tracker.js",
       interpreter: "node",
     },
+    {
+      // Runs backtests (see db/backtest/). Separate from the daemon so a long backtest can never slow live trading.
+      name: "pumpfun-tracker-backtest",
+      cwd: __dirname,
+      script: "src/backtestWorker.js",
+      interpreter: "node",
+    },
   ],
 };

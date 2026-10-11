@@ -313,6 +313,8 @@ export type HttpRpcEndpointView = {
   url: string;
   label: string;
   enabled: boolean;
+  // "both" = live tracking + backtests; "backtest" = backtests only, never used live.
+  scope: "both" | "backtest";
   createdAt: string;
 };
 

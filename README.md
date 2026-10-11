@@ -110,6 +110,38 @@ app/api/leaderboard/      ranks active traders by weekly (or day/month) combined
 app/, components/, lib/   the dashboard UI (Next.js App Router + Tailwind v4 + shadcn/ui + Lucide icons)
 ```
 
+## Backtest
+
+Replays an address's last N days of pump.fun trades as a copy-trade with a
+chosen profile's settings, so unprofitable addresses can be dropped without
+waiting days for live results. Lives in `db/backtest/`, runs in its own
+process (`npm run backtest`, or pm2 app `pumpfun-tracker-backtest`) fed by
+MongoDB jobs - the dashboard (Backtest menu) only creates and reads them, so
+closing the page never stops anything and a restart resumes where it left off.
+
+Per address, in two stages (both resumable, progress and partial P&L visible live):
+
+1. **Collect** - `getSignaturesForAddress` back to the window start, then each
+   successful transaction through `parseTransaction`/`extractPumpTrades`.
+   Parsed trades are cached per address (`BacktestTx`, coverage in
+   `BacktestScan`), so a later, longer backtest only fetches the missing days.
+2. **Simulate** - per token: the first non-dust buy and the first non-dust sell
+   after it (same dust rules as live). Our fill is `executionDelaySeconds` after
+   the trader's buy, at the pool price then (`priceUsd` of the first trade at or
+   after that second, from `swap-api.pump.fun`). Every pool price change after
+   that is checked against stop-loss / take-profit / trailing stops; the exit is
+   the earliest of those, the trader's sell, or max hold time, and also fills
+   after the delay. Trade history is read in gap-free windows (cursor =
+   `slotIndexId-timestampMs`, newest first, 100 per page), resized to how busy
+   the token is.
+
+Speed is set by proxies (pump.fun allows ~1 request/s per IP; requests are
+round-robined with a per-proxy rate limit and `Retry-After` cooldowns) and RPCs
+(per-endpoint rate limit). On the RPC page an endpoint can be set to **Backtests
+only** so slow providers never serve live trading; endpoints shared with live
+run at a fraction of the rate. Concurrency defaults are derived from the number
+of proxies/RPCs (Backtest -> Backtest settings).
+
 ## A note on pump.fun's API and Node's `fetch`
 
 `db/pumpFunApi.js` shells out to `curl` instead of using Node's native
