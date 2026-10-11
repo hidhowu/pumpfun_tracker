@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
 import { requireApiSession } from "@/lib/auth/session";
-import { controlBacktestRun, deleteBacktestRun, getBacktestRun } from "@/db/backtest/service";
+import { controlBacktestRun, deleteBacktestRun, getBacktestRun, updateBacktestRun } from "@/db/backtest/service";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -15,7 +15,10 @@ export async function GET(_request: NextRequest, { params }: Params) {
   return NextResponse.json(JSON.parse(JSON.stringify(detail)));
 }
 
-/** Body: { action: "pause" | "resume" | "cancel" | "retry_failed" } */
+/**
+ * Body: { action: "pause" | "resume" | "cancel" | "retry_failed" | "retry_skipped" }
+ *    or { update: { name?: string, maxSignatures?: number, profileId?: string } } - see updateBacktestRun.
+ */
 export async function PATCH(request: NextRequest, { params }: Params) {
   const denied = await requireApiSession();
   if (denied) return denied;
@@ -23,6 +26,15 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
   try {
+    if (body.update && typeof body.update === "object") {
+      const u = body.update;
+      const result = await updateBacktestRun(id, {
+        name: typeof u.name === "string" ? u.name : undefined,
+        maxSignatures: u.maxSignatures !== undefined ? Number(u.maxSignatures) : undefined,
+        profileId: typeof u.profileId === "string" && u.profileId ? u.profileId : undefined,
+      });
+      return NextResponse.json(JSON.parse(JSON.stringify(result)));
+    }
     const run = await controlBacktestRun(id, String(body.action));
     return NextResponse.json({ run: JSON.parse(JSON.stringify(run)) });
   } catch (err) {

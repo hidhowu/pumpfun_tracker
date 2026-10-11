@@ -209,7 +209,24 @@ export async function createBacktestRun({ name, days, profileId, addresses, maxS
   return run;
 }
 
-/** pause | resume | cancel | retry_failed */
+const FRESH_SIM = {
+  "sim.done": false,
+  "sim.signalsTotal": 0,
+  "sim.signalsDone": 0,
+  "sim.simulatedThrough": null,
+  "sim.skipped": { dust: 0, noData: 0, insufficientBalance: 0, unresolved: 0, error: 0 },
+};
+
+/** Puts addresses that ended in `stage` back to "pending" so the worker picks them up again. Returns how many. */
+async function requeueAddresses(runId, stage) {
+  const res = await BacktestRunTrader.updateMany(
+    { runId, stage },
+    { $set: { stage: "pending", error: null, claimedBy: null, leaseUntil: null, finishedAt: null, "collect.listing": false } }
+  );
+  return res.modifiedCount || 0;
+}
+
+/** pause | resume | cancel | retry_failed | retry_skipped */
 export async function controlBacktestRun(runId, action) {
   const run = await BacktestRun.findById(runId);
   if (!run) throw new Error("Backtest not found");
@@ -217,8 +234,10 @@ export async function controlBacktestRun(runId, action) {
     if (!ACTIVE_STATUSES.includes(run.status)) throw new Error("Only a queued or running backtest can be paused");
     await BacktestRun.updateOne({ _id: runId }, { $set: { control: "pause" } });
   } else if (action === "resume") {
-    if (run.status !== "paused") throw new Error("Only a paused backtest can be resumed");
-    await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued" } });
+    // A cancelled backtest keeps everything it finished (and the addresses it hadn't reached), so it can be picked up again exactly like a paused one.
+    if (run.status !== "paused" && run.status !== "cancelled") throw new Error("Only a paused or cancelled backtest can be resumed");
+    await BacktestRunTrader.updateMany({ runId, claimedBy: { $ne: null } }, { $set: { claimedBy: null, leaseUntil: null } });
+    await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued", finishedAt: null, error: null } });
   } else if (action === "cancel") {
     if (!["queued", "running", "paused"].includes(run.status)) throw new Error("This backtest has already finished");
     await BacktestRun.updateOne({ _id: runId }, { $set: { control: "cancel", status: run.status === "paused" ? "cancelled" : run.status, finishedAt: run.status === "paused" ? new Date() : null } });
@@ -228,10 +247,78 @@ export async function controlBacktestRun(runId, action) {
       { $set: { stage: "pending", error: null, claimedBy: null, leaseUntil: null, finishedAt: null } }
     );
     if (res.modifiedCount > 0) await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued", finishedAt: null, error: null } });
+  } else if (action === "retry_skipped") {
+    if (ACTIVE_STATUSES.includes(run.status)) throw new Error("Pause the backtest first");
+    const n = await requeueAddresses(runId, "skipped");
+    if (n === 0) throw new Error("No skipped addresses to retry");
+    if (run.status === "completed" || run.status === "failed") {
+      await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued", finishedAt: null, error: null } });
+    }
   } else {
     throw new Error("Unknown action");
   }
   return BacktestRun.findById(runId).lean();
+}
+
+/**
+ * Edits a backtest. The name can change any time; everything else needs the
+ * backtest paused, cancelled or finished:
+ *  - maxSignatures: the per-address signature limit. Raising it (or removing
+ *    it with 0) puts the addresses that were skipped for being over the old
+ *    limit back in the queue.
+ *  - profileId: re-copies that profile's CURRENT settings into the backtest.
+ *    Every result so far was simulated with the old settings, so the results
+ *    are cleared and every finished address is simulated again - the
+ *    transactions already collected are reused, so it is much faster than
+ *    the first time.
+ * A finished backtest that gets work queued this way is set to "paused" - press
+ * Resume to run it. (A cancelled or paused one stays as it is.)
+ * @param {string} runId
+ * @param {{name?: string, maxSignatures?: number, profileId?: string}} patch
+ */
+export async function updateBacktestRun(runId, { name, maxSignatures, profileId } = {}) {
+  const run = await BacktestRun.findById(runId);
+  if (!run) throw new Error("Backtest not found");
+  const set = {};
+  if (typeof name === "string" && name.trim()) set.name = name.trim();
+
+  const changesSettings = maxSignatures !== undefined || profileId;
+  if (changesSettings && ACTIVE_STATUSES.includes(run.status)) throw new Error("Pause the backtest before editing its settings");
+
+  let requeuedSkipped = 0;
+  let resimulated = false;
+
+  if (maxSignatures !== undefined) {
+    if (!Number.isFinite(maxSignatures) || maxSignatures < 0) throw new Error("The signature limit must be 0 (no limit) or a positive number");
+    const next = Math.floor(maxSignatures);
+    const prev = run.maxSignatures || 0;
+    set.maxSignatures = next;
+    // Skipped addresses only make sense to retry when the limit got looser.
+    if (prev > 0 && (next === 0 || next > prev)) requeuedSkipped = await requeueAddresses(runId, "skipped");
+  }
+
+  if (profileId) {
+    const profile = await Profile.findById(profileId).lean();
+    if (!profile) throw new Error("Profile not found");
+    set.profileId = profile._id;
+    set.profileName = profile.name;
+    set.settings = await snapshotProfileSettings(profile._id);
+    await BacktestPosition.deleteMany({ runId });
+    await BacktestRunTrader.updateMany(
+      { runId, stage: { $in: ["done", "simulating"] } },
+      { $set: { stage: "pending", error: null, claimedBy: null, leaseUntil: null, finishedAt: null, ...FRESH_SIM } }
+    );
+    resimulated = true;
+  }
+
+  if ((requeuedSkipped > 0 || resimulated) && (run.status === "completed" || run.status === "failed")) {
+    set.status = "paused";
+    set.control = "run";
+    set.finishedAt = null;
+    set.error = null;
+  }
+  if (Object.keys(set).length > 0) await BacktestRun.updateOne({ _id: runId }, { $set: set });
+  return { run: await BacktestRun.findById(runId).lean(), requeuedSkipped, resimulated };
 }
 
 export async function deleteBacktestRun(runId) {

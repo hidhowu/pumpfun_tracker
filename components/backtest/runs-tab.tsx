@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowUpRight, FlaskConical, Trash2 } from "lucide-react";
+import { ArrowUpRight, FlaskConical, Loader2, Pencil, PlayCircle, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,10 +17,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { deleteBacktestRun, listBacktestRuns } from "@/lib/backtest-api";
+import { controlBacktestRun, deleteBacktestRun, listBacktestRuns } from "@/lib/backtest-api";
 import { formatUsd } from "@/lib/format";
 import type { BacktestRunSummary } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
+import { EditRunDialog } from "./edit-run-dialog";
 import { ProgressBar, RunStatusBadge, formatDate, formatDuration, formatSignedPercent, pnlTone } from "./shared";
 
 const ACTIVE = new Set(["queued", "running"]);
@@ -38,6 +39,8 @@ function Stat({ label, value, className }: { label: string; value: React.ReactNo
 export function RunsTab() {
   const [runs, setRuns] = useState<BacktestRunSummary[] | null>(null);
   const [toDelete, setToDelete] = useState<BacktestRunSummary | null>(null);
+  const [toEdit, setToEdit] = useState<BacktestRunSummary | null>(null);
+  const [resuming, setResuming] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -55,6 +58,19 @@ export function RunsTab() {
     const interval = setInterval(refresh, anyActive ? 4000 : 20000);
     return () => clearInterval(interval);
   }, [refresh, anyActive]);
+
+  async function resume(run: BacktestRunSummary) {
+    setResuming(run._id);
+    try {
+      await controlBacktestRun(run._id, "resume");
+      toast.success(`"${run.name}" resumed`);
+      refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to resume");
+    } finally {
+      setResuming(null);
+    }
+  }
 
   async function confirmDelete() {
     if (!toDelete) return;
@@ -109,6 +125,15 @@ export function RunsTab() {
                     </span>
                   </Link>
                   <RunStatusBadge status={run.status} control={run.control} />
+                  {(run.status === "paused" || run.status === "cancelled") && (
+                    <Button variant="outline" size="sm" className="gap-1" disabled={resuming === run._id} onClick={() => resume(run)}>
+                      {resuming === run._id ? <Loader2 className="size-4 animate-spin" /> : <PlayCircle className="size-4" />}
+                      Resume
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setToEdit(run)} aria-label="Edit backtest">
+                    <Pencil className="size-4" />
+                  </Button>
                   {!active && (
                     <Button variant="ghost" size="sm" className="-mr-2 text-muted-foreground hover:text-negative" onClick={() => setToDelete(run)} aria-label="Delete backtest">
                       <Trash2 className="size-4" />
@@ -122,6 +147,7 @@ export function RunsTab() {
                     <span>
                       {run.progress.percent.toFixed(run.progress.percent >= 99.95 || run.progress.percent === 0 ? 0 : 1)}% · {run.progress.addressesDone}/{run.progress.addressesTotal} addresses done
                       {run.progress.addressesFailed > 0 ? ` · ${run.progress.addressesFailed} failed` : ""}
+                      {run.progress.addressesSkipped > 0 ? ` · ${run.progress.addressesSkipped} skipped` : ""}
                     </span>
                     {active && <span>{run.progress.etaMs != null ? `about ${formatDuration(run.progress.etaMs)} left` : "estimating time left…"}</span>}
                   </div>
@@ -138,6 +164,8 @@ export function RunsTab() {
           );
         })}
       </div>
+
+      {toEdit && <EditRunDialog run={toEdit} open onOpenChange={(open) => !open && setToEdit(null)} onSaved={refresh} />}
 
       <AlertDialog open={!!toDelete} onOpenChange={(open) => !open && setToDelete(null)}>
         <AlertDialogContent>

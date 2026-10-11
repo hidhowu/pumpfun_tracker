@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, CalendarDays, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, RotateCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, XCircle } from "lucide-react";
+import { ArrowLeft, CalendarDays, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, Pencil, RotateCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -28,6 +28,7 @@ import { PositionsTable } from "./positions-table";
 import { RunTradersTable } from "./run-traders-table";
 import { WorkerStatus } from "./worker-status";
 import { BlacklistDialog } from "./blacklist-dialog";
+import { EditRunDialog } from "./edit-run-dialog";
 import { ProgressBar, RunStatusBadge, StrategyChips, formatDate, formatDuration, formatSignedPercent } from "./shared";
 
 const ACTIVE = new Set(["queued", "running"]);
@@ -45,6 +46,7 @@ export function RunDashboard({ runId }: { runId: string }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [blacklistOpen, setBlacklistOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const lastStatus = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -72,7 +74,7 @@ export function RunDashboard({ runId }: { runId: string }) {
     return () => clearInterval(interval);
   }, [refresh, active]);
 
-  async function act(action: "pause" | "resume" | "cancel" | "retry_failed") {
+  async function act(action: "pause" | "resume" | "cancel" | "retry_failed" | "retry_skipped") {
     setBusy(action);
     try {
       await controlBacktestRun(runId, action);
@@ -153,7 +155,8 @@ export function RunDashboard({ runId }: { runId: string }) {
   const { run, progress, stats, traders } = detail;
   const running = ACTIVE.has(run.status);
   const canPause = running && run.control === "run";
-  const canResume = run.status === "paused";
+  // A cancelled backtest keeps everything it finished and the addresses it had not reached, so it can be resumed just like a paused one.
+  const canResume = run.status === "paused" || run.status === "cancelled";
   const canCancel = (running && run.control === "run") || run.status === "paused";
   const failedCount = progress.addressesFailed;
   const settled = !running && run.status !== "paused";
@@ -189,6 +192,14 @@ export function RunDashboard({ runId }: { runId: string }) {
               <PlayCircle className="size-4" /> Resume
             </Button>
           )}
+          {(run.status === "completed" || run.status === "failed") && progress.addressesSkipped > 0 && (
+            <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => act("retry_skipped")}>
+              <RotateCcw className="size-4" /> Retry {progress.addressesSkipped} skipped
+            </Button>
+          )}
+          <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => setEditOpen(true)}>
+            <Pencil className="size-4" /> Edit
+          </Button>
           {settled && failedCount > 0 && (
             <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => act("retry_failed")}>
               <RotateCcw className="size-4" /> Retry {failedCount} failed
@@ -221,6 +232,7 @@ export function RunDashboard({ runId }: { runId: string }) {
           <span>Worked for {formatDuration(run.activeMs)}</span>
           {running && <span>{progress.etaMs != null ? `About ${formatDuration(progress.etaMs)} left` : "Estimating time left…"}</span>}
           {run.status === "paused" && <span>Paused - resume to continue where it stopped</span>}
+          {run.status === "cancelled" && <span>Cancelled - resume to continue with the addresses that are not finished</span>}
           {run.error && <span className="text-negative">{run.error}</span>}
         </div>
         <p className="text-xs text-muted-foreground">Results below update as trades finish - you can leave this page and come back, the backtest keeps running.</p>
@@ -297,6 +309,8 @@ export function RunDashboard({ runId }: { runId: string }) {
         </TabsContent>
       </Tabs>
 
+      <EditRunDialog run={run} open={editOpen} onOpenChange={setEditOpen} onSaved={refresh} />
+
       <BlacklistDialog
         open={blacklistOpen}
         onOpenChange={setBlacklistOpen}
@@ -316,7 +330,7 @@ export function RunDashboard({ runId }: { runId: string }) {
               {confirm === "remove-addresses" && `Remove ${selected.size} address${selected.size === 1 ? "" : "es"} from the backtest list?`}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {confirm === "cancel" && "It stops now. Everything simulated so far stays visible, but it can't be resumed."}
+              {confirm === "cancel" && "It stops now. Everything finished so far stays visible, and you can resume it later to carry on with the addresses that are not done."}
               {confirm === "delete" && "Its results are removed. The transaction history already collected is kept, so a new backtest on the same addresses starts faster."}
               {confirm === "remove-addresses" && "They leave the backtest list only. This backtest keeps their results, and live Traders are untouched."}
             </AlertDialogDescription>

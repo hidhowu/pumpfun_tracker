@@ -55,8 +55,16 @@ export function getBacktestRun(id: string): Promise<BacktestRunDetail> {
   return request(`/api/backtest/runs/${id}`);
 }
 
-export function controlBacktestRun(id: string, action: "pause" | "resume" | "cancel" | "retry_failed"): Promise<{ run: BacktestRunSummary }> {
+export function controlBacktestRun(id: string, action: "pause" | "resume" | "cancel" | "retry_failed" | "retry_skipped"): Promise<{ run: BacktestRunSummary }> {
   return request(`/api/backtest/runs/${id}`, { method: "PATCH", body: JSON.stringify({ action }) });
+}
+
+/** Edits a backtest - see updateBacktestRun in db/backtest/service.js for what each field does. */
+export function updateBacktestRun(
+  id: string,
+  update: { name?: string; maxSignatures?: number; profileId?: string }
+): Promise<{ run: BacktestRunSummary; requeuedSkipped: number; resimulated: boolean }> {
+  return request(`/api/backtest/runs/${id}`, { method: "PATCH", body: JSON.stringify({ update }) });
 }
 
 export function deleteBacktestRun(id: string): Promise<{ deleted: true }> {
