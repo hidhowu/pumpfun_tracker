@@ -7,6 +7,7 @@ import { SlotPool, sleep } from "./slotPool.js";
 const execFileAsync = promisify(execFile);
 
 const BASE = () => process.env.PUMP_SWAP_API_BASE || "https://swap-api.pump.fun";
+const FRONTEND_BASE = () => process.env.PUMP_FRONTEND_API_BASE || "https://frontend-api-v3.pump.fun";
 const MARKER = "\n__PUMPCLIENT__";
 const REFRESH_MS = 15_000;
 const MAX_ATTEMPTS = 10;
@@ -14,6 +15,10 @@ const PAGE_LIMIT = 100; // the API's maximum
 // Tuple (timestamp, slotIndexId) is the keyset: a huge id with timestamp T means "everything up to and including second T".
 const MAX_ID = "9".repeat(22);
 const DIRECT_ID = "direct";
+// The user-trades endpoint now and then answers 200 with an empty page in the middle of a history (same cursor handed back);
+// asking again gets the real page, so an empty page with an unchanged cursor is retried this many times before giving up.
+const EMPTY_PAGE_RETRIES = 8;
+const USER_TRADES_PAGE = 100;
 
 /** Normalises one API trade: numbers instead of decimal strings, seconds instead of ISO. */
 function normalizeTrade(t) {
@@ -35,6 +40,21 @@ function normalizeTrade(t) {
   };
 }
 
+/** One user-trades row (a wallet's own swap), with numbers and seconds instead of strings. */
+function normalizeUserTrade(t) {
+  return {
+    tx: t.tx,
+    isBuy: !!t.isBuy,
+    ts: Math.floor(Date.parse(t.timestamp) / 1000),
+    mint: t.mint,
+    amountSol: t.amountSol == null ? null : Number(t.amountSol),
+    amountUsd: t.amountUsd == null ? null : Number(t.amountUsd),
+    tokenAmount: t.baseAmount == null ? null : Number(t.baseAmount),
+    slotIndexId: t.slotIndexId ?? null,
+    kind: t.kind,
+  };
+}
+
 const byTime = (a, b) => (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /**
@@ -46,7 +66,9 @@ const byTime = (a, b) => (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 
  * configured at all it goes direct at the (low) configured direct rate.
  */
 export class PumpTradesClient {
-  constructor() {
+  /** @param {{rpsSetting?: "proxyRps"|"userTradesRps"}} [opts] which configured rate each proxy is paced at */
+  constructor({ rpsSetting = "proxyRps" } = {}) {
+    this.rpsSetting = rpsSetting;
     this.slots = new SlotPool();
     this.refreshedAt = 0;
     this.refreshing = null;
@@ -63,7 +85,7 @@ export class PumpTradesClient {
       this.settings = effective;
       this.slots.sync(
         proxies.length > 0
-          ? proxies.map((p) => ({ id: String(p._id), rps: effective.proxyRps, data: { proxy: p } }))
+          ? proxies.map((p) => ({ id: String(p._id), rps: effective[this.rpsSetting] ?? effective.proxyRps, data: { proxy: p } }))
           : [{ id: DIRECT_ID, rps: effective.directRps, data: { proxy: null } }]
       );
       this.refreshedAt = Date.now();
@@ -92,10 +114,13 @@ export class PumpTradesClient {
     return { status: Number(status) || 0, retryAfter: Number(retryAfter) || 0, body };
   }
 
-  /** One page of history: trades strictly before `cursor`, newest first. */
-  async fetchPage(mint, cursor) {
+  /**
+   * GET `url` through the proxy pool, round-robin: a refused or unreachable proxy rests
+   * and the request moves to the next one. Returns { status, body } for a 200 or a 404;
+   * throws once every try is used up.
+   */
+  async #send(url) {
     await this.refresh();
-    const url = this.#url(mint, cursor);
     const tried = new Set();
     let lastError;
 
@@ -133,16 +158,14 @@ export class PumpTradesClient {
           continue;
         }
         if (proxy) this.#recordOk(proxy._id);
-        if (status === 404) return { trades: [], nextCursor: null, hasMore: false };
+        if (status === 404) return { status, body: "" };
         if (status >= 500) {
           lastError = new Error(`pump.fun HTTP ${status}`);
           await sleep(500 * (attempt + 1));
           continue;
         }
         if (status !== 200) throw new Error(`pump.fun HTTP ${status}`);
-        const json = JSON.parse(body);
-        const trades = (json.trades || []).map(normalizeTrade);
-        return { trades, nextCursor: json.pagination?.nextCursor ?? null, hasMore: !!json.pagination?.hasMore };
+        return { status, body };
       } catch (err) {
         this.stats.failures += 1;
         lastError = new Error(redactCredentials(err.message));
@@ -152,6 +175,42 @@ export class PumpTradesClient {
       }
     }
     throw lastError || new Error("pump.fun request failed");
+  }
+
+  /** One page of history: trades strictly before `cursor`, newest first. */
+  async fetchPage(mint, cursor) {
+    await this.refresh();
+    const { status, body } = await this.#send(this.#url(mint, cursor));
+    if (status === 404) return { trades: [], nextCursor: null, hasMore: false };
+    const json = JSON.parse(body);
+    const trades = (json.trades || []).map(normalizeTrade);
+    return { trades, nextCursor: json.pagination?.nextCursor ?? null, hasMore: !!json.pagination?.hasMore };
+  }
+
+  /**
+   * One page of a wallet's own swaps from pump.fun's user-trades API, newest first.
+   * `cursor` is "<unix microseconds>:<uuid>" - the page holds trades strictly older
+   * than it (omit for the newest). Returns the cursor for the next page, or null at the
+   * end of the history. Only real swaps are requested (types=trades), not token transfers.
+   * @returns {Promise<{trades: object[], nextCursor: string|null}>}
+   */
+  async fetchUserTrades(userId, cursor) {
+    await this.refresh();
+    const qs = new URLSearchParams({ types: "trades", limit: String(USER_TRADES_PAGE) });
+    if (cursor) qs.set("cursor", cursor);
+    const url = `${FRONTEND_BASE()}/user-trades/${encodeURIComponent(userId)}?${qs}`;
+
+    for (let attempt = 0; attempt < EMPTY_PAGE_RETRIES; attempt++) {
+      const { status, body } = await this.#send(url);
+      if (status === 404) return { trades: [], nextCursor: null };
+      const json = JSON.parse(body);
+      const trades = (json.trades || []).map(normalizeUserTrade);
+      const next = json.nextCursor || null;
+      // Empty page that hands back the very cursor it was asked for = the glitch, not the end of the history.
+      if (trades.length === 0 && next && next === cursor) continue;
+      return { trades, nextCursor: next };
+    }
+    throw new Error("pump.fun keeps returning an empty page for this wallet's trades - try again later");
   }
 
   #recordOk(proxyId) {

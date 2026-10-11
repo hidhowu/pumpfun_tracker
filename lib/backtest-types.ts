@@ -7,6 +7,8 @@ export type BacktestAddressView = {
   address: string;
   label: string;
   notes: string;
+  // pump.fun user id - with it the address's trades are read from pump.fun directly (fast); without it, over RPC (slow).
+  userId?: string;
   source: "manual" | "traders" | "list" | "import";
   addedAt: string;
   // The span of this address's history already cached from earlier backtests - a new backtest only fetches what is missing outside it.
@@ -95,6 +97,7 @@ export type BacktestRunTraderView = {
   progressPercent: number;
   collect: {
     done: boolean;
+    source?: "api" | "rpc" | null;
     listing: boolean;
     signaturesFound: number;
     signaturesToProcess: number;
@@ -174,6 +177,7 @@ export type BacktestEffectiveSettings = {
   rpcRpsPerEndpoint: number;
   sharedRpcFraction: number;
   proxyRps: number;
+  userTradesRps: number;
   directRps: number;
   minSolAmount: number;
   program: string;
@@ -189,6 +193,7 @@ export type BacktestStoredSettings = {
   rpcRpsPerEndpoint: number | null;
   proxyRps: number | null;
   sharedRpcFraction: number;
+  userTradesRps: number;
   directRps: number;
   minSolAmount: number;
   program: string;

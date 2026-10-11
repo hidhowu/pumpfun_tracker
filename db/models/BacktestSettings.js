@@ -24,6 +24,8 @@ const BacktestSettingsSchema = new Schema({
   sharedRpcFraction: { type: Number, default: 0.3 },
   // Max pump.fun trade-history calls per second through ONE proxy (null = auto).
   proxyRps: { type: Number, default: null },
+  // Max pump.fun user-trades calls (the fast trade-history source) per second through ONE proxy. That endpoint allows far more than the pool-price one.
+  userTradesRps: { type: Number, default: 4 },
   // Rate used when no proxies are configured and requests go out directly.
   directRps: { type: Number, default: 0.7 },
 

@@ -13,13 +13,14 @@ import type {
   BacktestStoredSettings,
 } from "./backtest-types";
 
-type AddResult = { added: string[]; skipped: string[]; blacklisted?: string[]; invalid: string[] };
+type AddResult = { added: string[]; updated?: string[]; skipped: string[]; blacklisted?: string[]; invalid: string[] };
+export type AddressEntry = string | { address: string; label?: string; userId?: string };
 
 export function listBacktestAddresses(): Promise<{ addresses: BacktestAddressView[] }> {
   return request(`/api/backtest/addresses`);
 }
 
-export function addBacktestAddresses(entries: Array<string | { address: string; label?: string }>): Promise<AddResult> {
+export function addBacktestAddresses(entries: AddressEntry[]): Promise<AddResult> {
   return request(`/api/backtest/addresses`, { method: "POST", body: JSON.stringify({ entries }) });
 }
 

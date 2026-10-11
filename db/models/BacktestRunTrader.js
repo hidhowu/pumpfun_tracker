@@ -16,9 +16,12 @@ const BacktestRunTraderSchema = new Schema({
 
   stage: { type: String, enum: ["pending", "collecting", "simulating", "done", "failed", "skipped"], default: "pending" },
   error: { type: String, default: null },
+  // The pump.fun user id this address was collected with (copied from the backtest list when the run was created); "" = collect over RPC.
+  userId: { type: String, default: "" },
 
   collect: {
     done: { type: Boolean, default: false },
+    source: { type: String, enum: ["api", "rpc", null], default: null }, // where the trades are being read from
     listing: { type: Boolean, default: false }, // still paging signature lists (total not known yet)
     signaturesFound: { type: Number, default: 0 }, // successful signatures inside the window
     signaturesToProcess: { type: Number, default: 0 }, // of those, not already cached from an earlier run

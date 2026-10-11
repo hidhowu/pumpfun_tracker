@@ -3,12 +3,14 @@ import { BacktestRun } from "../models/BacktestRun.js";
 import { BacktestRunTrader } from "../models/BacktestRunTrader.js";
 import { BacktestPosition } from "../models/BacktestPosition.js";
 import { BacktestTx } from "../models/BacktestTx.js";
+import { BacktestAddress } from "../models/BacktestAddress.js";
 import { BacktestSettings } from "../models/BacktestSettings.js";
 import { logEvent } from "../systemLog.js";
 import { resolveBacktestSettings } from "./settings.js";
 import { BacktestRpcPool } from "./rpcPool.js";
 import { PumpTradesClient } from "./pumpTradesClient.js";
 import { collectAddress, StopRequested, SignatureLimitExceeded } from "./collector.js";
+import { collectAddressViaApi } from "./apiCollector.js";
 import { groupTradesByMint, listSignals, findTraderSell } from "./signals.js";
 import { simulatePosition, UnresolvedError } from "./simulator.js";
 import { sleep } from "./slotPool.js";
@@ -75,6 +77,7 @@ export class BacktestWorker {
     this.id = `${os.hostname()}:${process.pid}`;
     this.rpcPool = new BacktestRpcPool();
     this.pump = new PumpTradesClient();
+    this.userTrades = new PumpTradesClient({ rpsSetting: "userTradesRps" }); // same proxies, paced for the user-trades endpoint
     this.memo = new UsdPerSolMemo();
     this.active = new Map(); // `${runId}:${address}` -> promise
     this.runControl = new Map(); // runId -> "run" | "pause" | "cancel"
@@ -218,16 +221,19 @@ export class BacktestWorker {
     try {
       if (!rt.collect?.done) {
         await BacktestRunTrader.updateOne({ _id: rt._id }, { $set: { stage: "collecting", error: null } });
-        const { failed } = await collectAddress({
+        // With a pump.fun user id the trades come straight from pump.fun (fast); without one the chain has to be read over RPC.
+        const userId = rt.userId || (await BacktestAddress.findOne({ address: rt.address }, { userId: 1 }).lean())?.userId || "";
+        const common = {
           address: rt.address,
           windowStartSec,
           windowEndSec,
-          rpcPool: this.rpcPool,
-          txConcurrency: settings.txParallelismPerAddress,
           shouldStop,
           progress: (patch) => writer.set(patch),
           maxSignatures: run.maxSignatures || 0,
-        });
+        };
+        const { failed } = userId
+          ? await collectAddressViaApi({ ...common, userId, client: this.userTrades })
+          : await collectAddress({ ...common, rpcPool: this.rpcPool, txConcurrency: settings.txParallelismPerAddress });
         await writer.flush();
         await BacktestRunTrader.updateOne(
           { _id: rt._id },
@@ -276,7 +282,7 @@ export class BacktestWorker {
 
     const txs = await BacktestTx.find(
       { address, blockTime: { $gte: windowStartSec, $lte: windowEndSec } },
-      { signature: 1, blockTime: 1, slot: 1, trades: 1 }
+      { signature: 1, blockTime: 1, slot: 1, ix: 1, trades: 1 }
     ).lean();
     const byMint = groupTradesByMint(txs);
     const signals = listSignals(byMint);

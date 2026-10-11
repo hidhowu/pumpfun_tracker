@@ -12,6 +12,9 @@ const BacktestAddressSchema = new Schema({
   address: { type: String, required: true, unique: true, index: true },
   label: { type: String, default: "" },
   notes: { type: String, default: "" },
+  // pump.fun user id of this wallet. With it, the address's trades come straight from pump.fun's user-trades API (fast);
+  // without it the backtest has to read the chain over RPC (slow). Everything else (blacklist, filters...) keys on `address`.
+  userId: { type: String, default: "" },
   source: { type: String, enum: ["manual", "traders", "list", "import"], default: "manual" },
   addedAt: { type: Date, default: Date.now },
 });

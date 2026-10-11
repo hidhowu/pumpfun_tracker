@@ -11,6 +11,7 @@ const CLOSING_OUT_FRACTION_PERCENT = 95;
 /** Chain order: slot first (a block time only has 1s resolution), then signature as a stable tiebreak. */
 function chainOrder(a, b) {
   if (a.slot != null && b.slot != null && a.slot !== b.slot) return a.slot - b.slot;
+  if (a.slot != null && a.slot === b.slot && a.ix && b.ix && a.ix !== b.ix) return a.ix < b.ix ? -1 : 1;
   if (a.blockTime !== b.blockTime) return a.blockTime - b.blockTime;
   return a.signature < b.signature ? -1 : a.signature > b.signature ? 1 : 0;
 }
@@ -18,6 +19,7 @@ function chainOrder(a, b) {
 /** True if `a` happened strictly before `b` on chain. */
 function isBefore(a, b) {
   if (a.signature === b.signature) return false;
+  if (a.slot != null && b.slot != null && a.slot === b.slot && a.ix && b.ix) return a.ix < b.ix;
   if (a.slot != null && b.slot != null) return a.slot < b.slot;
   return a.blockTime < b.blockTime;
 }
@@ -38,6 +40,7 @@ export function groupTradesByMint(txs) {
         signature: tx.signature,
         blockTime: tx.blockTime,
         slot: tx.slot ?? null,
+        ix: tx.ix ?? null,
         tokenAmount: t.tokenAmount,
         solAmount: t.solAmount,
         isNativeSolQuote: t.isNativeSolQuote !== false,

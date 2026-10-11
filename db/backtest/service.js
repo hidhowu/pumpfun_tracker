@@ -11,6 +11,7 @@ import { traderProgressPercent, runProgressPercent, estimateRemainingMs } from "
 import { getRunAddress as getRunAddressDetail } from "./addressView.js";
 
 const DAY_MS = 86_400_000;
+const USER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const MAX_BACKTEST_DAYS = 120;
 export const DEFAULT_MAX_SIGNATURES = 50_000;
 const ACTIVE_STATUSES = ["queued", "running"];
@@ -21,18 +22,24 @@ const ACTIVE_STATUSES = ["queued", "running"];
  * Bulk add to the backtest list. Same conventions as the live trader list:
  * duplicates are skipped (and reported), malformed addresses are rejected
  * into `invalid`, and one bad entry never stops the rest.
- * @param {Array<string|{address: string, label?: string}>} entries
+ * An entry may carry the wallet's pump.fun `userId` (what makes collection fast); `walletAddress` is accepted as the address key too.
+ * @param {Array<string|{address?: string, walletAddress?: string, label?: string, userId?: string}>} entries
  */
 export async function addBacktestAddresses(entries, { source = "manual" } = {}) {
   const normalized = entries
-    .map((e) => (typeof e === "string" ? { address: e.trim(), label: "" } : { address: e.address?.trim(), label: e.label || "" }))
+    .map((e) =>
+      typeof e === "string"
+        ? { address: e.trim(), label: "", userId: "" }
+        : { address: (e.address ?? e.walletAddress)?.trim(), label: e.label || "", userId: typeof e.userId === "string" ? e.userId.trim() : "" }
+    )
     .filter((e) => e.address);
 
-  const invalid = normalized.filter((e) => !isValidSolanaAddress(e.address)).map((e) => e.address);
+  const invalid = normalized.filter((e) => !isValidSolanaAddress(e.address) || (e.userId && !USER_ID.test(e.userId))).map((e) => e.address);
+  const invalidSet = new Set(invalid);
   const seen = new Set();
   const valid = [];
   for (const e of normalized) {
-    if (!isValidSolanaAddress(e.address) || seen.has(e.address)) continue;
+    if (invalidSet.has(e.address) || seen.has(e.address)) continue;
     seen.add(e.address);
     valid.push(e);
   }
@@ -43,16 +50,29 @@ export async function addBacktestAddresses(entries, { source = "manual" } = {}) 
   const blacklisted = valid.filter((e) => blacklistedSet.has(e.address)).map((e) => e.address);
   const addable = valid.filter((e) => !blacklistedSet.has(e.address));
 
-  const existing = await BacktestAddress.find({ address: { $in: addable.map((e) => e.address) } }, { address: 1 }).lean();
-  const existingSet = new Set(existing.map((d) => d.address));
-  const toInsert = addable.filter((e) => !existingSet.has(e.address));
-  const skipped = addable.filter((e) => existingSet.has(e.address)).map((e) => e.address);
+  const existing = await BacktestAddress.find({ address: { $in: addable.map((e) => e.address) } }, { address: 1, userId: 1 }).lean();
+  const existingBy = new Map(existing.map((d) => [d.address, d]));
+  const toInsert = addable.filter((e) => !existingBy.has(e.address));
+
+  // Pasting an address that is already listed together with a user id gives it (or corrects) that id - so the list can be upgraded to the fast source in place.
+  const updated = [];
+  const skipped = [];
+  for (const e of addable) {
+    const have = existingBy.get(e.address);
+    if (!have) continue;
+    if (e.userId && e.userId !== (have.userId || "")) {
+      await BacktestAddress.updateOne({ address: e.address }, { $set: { userId: e.userId } });
+      updated.push(e.address);
+    } else {
+      skipped.push(e.address);
+    }
+  }
 
   let added = [];
   if (toInsert.length > 0) {
     try {
       const docs = await BacktestAddress.insertMany(
-        toInsert.map((e) => ({ address: e.address, label: e.label, source })),
+        toInsert.map((e) => ({ address: e.address, label: e.label, userId: e.userId, source })),
         { ordered: false }
       );
       added = docs.map((d) => d.address);
@@ -63,7 +83,7 @@ export async function addBacktestAddresses(entries, { source = "manual" } = {}) 
       skipped.push(...toInsert.filter((e) => !inserted.has(e.address)).map((e) => e.address));
     }
   }
-  return { added, skipped, blacklisted, invalid };
+  return { added, updated, skipped, blacklisted, invalid };
 }
 
 /** Copies live traders (optionally just one list's) onto the backtest list. The live Trader documents are untouched. */
@@ -187,8 +207,9 @@ export async function createBacktestRun({ name, days, profileId, addresses, maxS
   if (!profile) throw new Error("Profile not found");
 
   // Only addresses actually on the backtest list can be run.
-  const known = await BacktestAddress.find({ address: { $in: unique } }, { address: 1 }).lean();
+  const known = await BacktestAddress.find({ address: { $in: unique } }, { address: 1, userId: 1 }).lean();
   const knownSet = new Set(known.map((k) => k.address));
+  const userIdBy = new Map(known.map((k) => [k.address, k.userId || ""]));
   const runAddresses = unique.filter((a) => knownSet.has(a));
   if (runAddresses.length === 0) throw new Error("None of the selected addresses are on the backtest list");
 
@@ -205,7 +226,7 @@ export async function createBacktestRun({ name, days, profileId, addresses, maxS
     maxSignatures: Math.floor(maxSignatures),
     status: "queued",
   });
-  await BacktestRunTrader.insertMany(runAddresses.map((address) => ({ runId: run._id, address })));
+  await BacktestRunTrader.insertMany(runAddresses.map((address) => ({ runId: run._id, address, userId: userIdBy.get(address) || "" })));
   return run;
 }
 

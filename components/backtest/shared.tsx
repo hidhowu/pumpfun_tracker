@@ -99,7 +99,7 @@ export function ProgressBar({
 
 const STAGE_LABEL: Record<BacktestStage, string> = {
   pending: "Waiting",
-  collecting: "Collecting transactions",
+  collecting: "Collecting trades",
   simulating: "Simulating trades",
   done: "Done",
   failed: "Failed",
@@ -109,7 +109,7 @@ const STAGE_LABEL: Record<BacktestStage, string> = {
 /** One line saying where an address is, with the numbers that matter for that stage. */
 export function stageDescription(t: BacktestRunTraderView): string {
   if (t.stage === "collecting") {
-    if (t.collect.listing) return `Listing signatures… ${t.collect.signaturesFound.toLocaleString()} found`;
+    if (t.collect.listing) return t.collect.source === "api" ? `Fetching trades… ${t.collect.signaturesFound.toLocaleString()} found` : `Listing signatures… ${t.collect.signaturesFound.toLocaleString()} found`;
     if (t.collect.signaturesToProcess === 0) return "Collecting transactions";
     return `Transactions ${t.collect.signaturesProcessed.toLocaleString()} / ${t.collect.signaturesToProcess.toLocaleString()}`;
   }

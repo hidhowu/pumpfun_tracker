@@ -77,8 +77,13 @@ export function AddressStrategyPanel({ detail }: { detail: BacktestAddressDetail
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Row label="Transactions found" value={trader.collect.signaturesFound.toLocaleString()} />
-          <Row label="Transactions read" value={`${trader.collect.signaturesProcessed.toLocaleString()} / ${trader.collect.signaturesToProcess.toLocaleString()}`} />
+          <Row label="Read from" value={trader.collect.source === "api" ? "pump.fun user-trades (fast)" : trader.collect.source === "rpc" ? "the chain, over RPC" : "—"} />
+          {trader.collect.source !== "api" && (
+            <>
+              <Row label="Transactions found" value={trader.collect.signaturesFound.toLocaleString()} />
+              <Row label="Transactions read" value={`${trader.collect.signaturesProcessed.toLocaleString()} / ${trader.collect.signaturesToProcess.toLocaleString()}`} />
+            </>
+          )}
           {trader.collect.signaturesFailed > 0 && <Row label="Couldn't be fetched" value={<span className="text-amber-500">{trader.collect.signaturesFailed.toLocaleString()}</span>} />}
           <Row label="pump.fun trades found" value={trader.collect.tradesFound.toLocaleString()} />
           <Row label="Tokens simulated" value={`${trader.sim.signalsDone.toLocaleString()} / ${trader.sim.signalsTotal.toLocaleString()}`} />

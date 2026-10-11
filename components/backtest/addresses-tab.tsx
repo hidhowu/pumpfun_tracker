@@ -278,7 +278,18 @@ export function AddressesTab() {
                     </TableCell>
                     <TableCell className="max-w-3xs sm:max-w-xs">
                       <div className="flex min-w-0 flex-col gap-0.5">
-                        <span className="truncate font-medium">{a.label || "Unlabeled"}</span>
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate font-medium">{a.label || "Unlabeled"}</span>
+                          {a.userId ? (
+                            <Badge variant="outline" className="border-positive/30 px-1.5 py-0 text-[10px] font-normal text-positive" title="Has a pump.fun user ID - trades are read from pump.fun directly (fast)">
+                              API
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="border-amber-500/30 px-1.5 py-0 text-[10px] font-normal text-amber-500" title="No pump.fun user ID - the chain is read over RPC (slow). Add the address again with its user ID to speed it up.">
+                              RPC
+                            </Badge>
+                          )}
+                        </span>
                         <span className="truncate font-mono text-xs text-muted-foreground" title={a.address}>
                           <span className="sm:hidden">{formatAddress(a.address, 6)}</span>
                           <span className="hidden sm:inline">{a.address}</span>
@@ -322,6 +333,7 @@ export function AddressesTab() {
         onOpenChange={setRunDialogOpen}
         selected={selectedList}
         allAddresses={(addresses ?? []).map((a) => a.address)}
+        noUserIdAddresses={new Set((addresses ?? []).filter((a) => !a.userId).map((a) => a.address))}
         onCreated={(id) => router.push(`/backtest/${id}`)}
       />
 

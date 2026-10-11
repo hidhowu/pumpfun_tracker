@@ -11,8 +11,8 @@ export class StopRequested extends Error {}
 
 /** The address has more signatures in the window than the backtest allows - it is skipped rather than collected. */
 export class SignatureLimitExceeded extends Error {
-  constructor(found, limit) {
-    super(`Skipped: more than ${limit.toLocaleString("en-US")} signatures in the window (found ${found.toLocaleString("en-US")}+)`);
+  constructor(found, limit, noun = "signatures") {
+    super(`Skipped: more than ${limit.toLocaleString("en-US")} ${noun} in the window (found ${found.toLocaleString("en-US")}+)`);
     this.found = found;
     this.limit = limit;
   }
@@ -89,7 +89,8 @@ async function filterUncached(address, rows) {
  * @param {(patch: object) => void} p.progress  merges counters into the run-trader document (throttled by the caller)
  */
 export async function collectAddress({ address, windowStartSec, windowEndSec, rpcPool, txConcurrency, shouldStop, progress, maxSignatures = 0 }) {
-  const scan = await BacktestScan.findOne({ address }).lean();
+  const found = await BacktestScan.findOne({ address }).lean();
+  const scan = found && found.coverFrom != null && found.coverTo != null ? found : null; // a record holding only API coverage says nothing about RPC coverage
   const need = [];
   if (!scan) {
     need.push({ minTime: windowStartSec });
