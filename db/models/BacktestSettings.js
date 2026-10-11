@@ -26,6 +26,9 @@ const BacktestSettingsSchema = new Schema({
   proxyRps: { type: Number, default: null },
   // Max pump.fun user-trades calls (the fast trade-history source) per second through ONE proxy. That endpoint allows far more than the pool-price one.
   userTradesRps: { type: Number, default: 4 },
+  // Seconds between a trader's trade landing on chain and the tracker acting on it (noticing it, then the executor picking it up), ON TOP of the profile's execution delay.
+  // Live measures about 3s; the backtest adds it to every copied buy and sell so its fills land where live's do.
+  fillLatencySeconds: { type: Number, default: 3 },
   // Rate used when no proxies are configured and requests go out directly.
   directRps: { type: Number, default: 0.7 },
 

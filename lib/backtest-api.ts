@@ -48,7 +48,9 @@ export function listBacktestRuns(): Promise<{ runs: BacktestRunSummary[] }> {
   return request(`/api/backtest/runs`);
 }
 
-export function createBacktestRun(body: { name?: string; days: number; profileId: string; addresses: string[]; maxSignatures?: number }): Promise<{ run: BacktestRunSummary }> {
+export type TimingOverrides = { executionDelaySeconds?: number; riskCheckIntervalSeconds?: number; fillLatencySeconds?: number };
+
+export function createBacktestRun(body: { name?: string; days: number; profileId: string; addresses: string[]; maxSignatures?: number; overrides?: TimingOverrides }): Promise<{ run: BacktestRunSummary }> {
   return request(`/api/backtest/runs`, { method: "POST", body: JSON.stringify(body) });
 }
 
@@ -63,7 +65,7 @@ export function controlBacktestRun(id: string, action: "pause" | "resume" | "can
 /** Edits a backtest - see updateBacktestRun in db/backtest/service.js for what each field does. */
 export function updateBacktestRun(
   id: string,
-  update: { name?: string; maxSignatures?: number; profileId?: string }
+  update: { name?: string; maxSignatures?: number; profileId?: string; overrides?: TimingOverrides }
 ): Promise<{ run: BacktestRunSummary; requeuedSkipped: number; resimulated: boolean }> {
   return request(`/api/backtest/runs/${id}`, { method: "PATCH", body: JSON.stringify({ update }) });
 }

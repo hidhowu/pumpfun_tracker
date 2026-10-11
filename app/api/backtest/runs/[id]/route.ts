@@ -17,7 +17,7 @@ export async function GET(_request: NextRequest, { params }: Params) {
 
 /**
  * Body: { action: "pause" | "resume" | "cancel" | "retry_failed" | "retry_skipped" }
- *    or { update: { name?: string, maxSignatures?: number, profileId?: string } } - see updateBacktestRun.
+ *    or { update: { name?: string, maxSignatures?: number, profileId?: string, overrides?: { executionDelaySeconds?, riskCheckIntervalSeconds?, fillLatencySeconds? } } } - see updateBacktestRun.
  */
 export async function PATCH(request: NextRequest, { params }: Params) {
   const denied = await requireApiSession();
@@ -32,6 +32,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
         name: typeof u.name === "string" ? u.name : undefined,
         maxSignatures: u.maxSignatures !== undefined ? Number(u.maxSignatures) : undefined,
         profileId: typeof u.profileId === "string" && u.profileId ? u.profileId : undefined,
+        overrides: u.overrides && typeof u.overrides === "object" ? u.overrides : undefined,
       });
       return NextResponse.json(JSON.parse(JSON.stringify(result)));
     }

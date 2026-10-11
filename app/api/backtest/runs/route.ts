@@ -11,7 +11,7 @@ export async function GET() {
   return NextResponse.json({ runs: JSON.parse(JSON.stringify(runs)) });
 }
 
-/** Body: { name?: string, days: number, profileId: string, addresses: string[], maxSignatures?: number (0 = no limit, default 50,000) } */
+/** Body: { name?: string, days: number, profileId: string, addresses: string[], maxSignatures?: number (0 = no limit, default 50,000), overrides?: { executionDelaySeconds?, riskCheckIntervalSeconds?, fillLatencySeconds? } } */
 export async function POST(request: NextRequest) {
   const denied = await requireApiSession();
   if (denied) return denied;
@@ -24,6 +24,7 @@ export async function POST(request: NextRequest) {
       profileId: String(body.profileId || ""),
       addresses: Array.isArray(body.addresses) ? body.addresses.filter((a: unknown) => typeof a === "string") : [],
       ...(body.maxSignatures !== undefined ? { maxSignatures: Number(body.maxSignatures) } : {}),
+      ...(body.overrides && typeof body.overrides === "object" ? { overrides: body.overrides } : {}),
     });
     return NextResponse.json({ run: JSON.parse(JSON.stringify(run)) });
   } catch (err) {

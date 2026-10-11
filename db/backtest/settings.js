@@ -70,6 +70,7 @@ export async function resolveBacktestSettings() {
       sharedRpcFraction: sharedFraction,
       proxyRps,
       userTradesRps: s.userTradesRps ?? 4,
+      fillLatencySeconds: s.fillLatencySeconds ?? 3,
       directRps: s.directRps,
       minSolAmount: s.minSolAmount,
       program: s.program ?? "",
@@ -95,6 +96,7 @@ const NUMERIC_FIELDS = [
   "sharedRpcFraction",
   "proxyRps",
   "userTradesRps",
+  "fillLatencySeconds",
   "directRps",
   "minSolAmount",
   "initialWindowSeconds",
@@ -108,9 +110,9 @@ export async function updateBacktestSettings(patch) {
     if (!(field in patch)) continue;
     const v = patch[field];
     if (v === null) {
-      if (["sharedRpcFraction", "userTradesRps", "directRps", "minSolAmount", "initialWindowSeconds", "maxPagesPerPosition"].includes(field)) continue; // these always have a value
+      if (["sharedRpcFraction", "userTradesRps", "fillLatencySeconds", "directRps", "minSolAmount", "initialWindowSeconds", "maxPagesPerPosition"].includes(field)) continue; // these always have a value
       doc[field] = null;
-    } else if (typeof v === "number" && Number.isFinite(v) && (v > 0 || (field === "minSolAmount" && v === 0))) {
+    } else if (typeof v === "number" && Number.isFinite(v) && (v > 0 || ((field === "minSolAmount" || field === "fillLatencySeconds") && v === 0))) {
       doc[field] = field.endsWith("Parallelism") || field === "maxPagesPerPosition" || field === "initialWindowSeconds" ? Math.round(v) : v;
     }
   }

@@ -22,7 +22,7 @@ import { getBacktestSettings, updateBacktestSettings } from "@/lib/backtest-api"
 import type { BacktestSettingsView, BacktestStoredSettings } from "@/lib/backtest-types";
 
 type AutoField = "addressParallelism" | "txParallelismPerAddress" | "positionParallelism" | "rpcRpsPerEndpoint" | "proxyRps";
-type FixedField = "sharedRpcFraction" | "userTradesRps" | "directRps" | "minSolAmount" | "initialWindowSeconds" | "maxPagesPerPosition";
+type FixedField = "sharedRpcFraction" | "userTradesRps" | "fillLatencySeconds" | "directRps" | "minSolAmount" | "initialWindowSeconds" | "maxPagesPerPosition";
 
 const AUTO_FIELDS: Array<{ key: AutoField; label: string; help: string }> = [
   { key: "addressParallelism", label: "Addresses at the same time", help: "How many addresses are worked on in parallel." },
@@ -35,6 +35,7 @@ const AUTO_FIELDS: Array<{ key: AutoField; label: string; help: string }> = [
 const FIXED_FIELDS: Array<{ key: FixedField; label: string; help: string; step?: string }> = [
   { key: "sharedRpcFraction", label: "Share of speed on live RPCs (0.05 – 1)", help: "RPCs set to \"Live + backtests\" run at this fraction of the rate above, so live trading is never starved.", step: "0.05" },
   { key: "userTradesRps", label: "Trade-history requests / second, per proxy", help: "Reading an address's own trades (the fast source) goes through the same proxies. pump.fun allows about 10/s per IP on that endpoint.", step: "0.5" },
+  { key: "fillLatencySeconds", label: "Extra reaction time on every copied trade (seconds)", help: "Default for new backtests: how long live takes, on top of the profile's delay, to notice a trader's trade and act on it (about 3s measured). It can be changed per backtest when creating one. 0 = react instantly.", step: "0.5" },
   { key: "directRps", label: "Requests / second with no proxies", help: "Used only when no proxy is configured - direct requests from this machine's own IP.", step: "0.1" },
   { key: "minSolAmount", label: "Ignore pool trades under (SOL)", help: "pump.fun's minSolAmount filter. Smaller trades barely move the price and make histories much longer.", step: "0.01" },
   { key: "initialWindowSeconds", label: "First look-ahead window (seconds)", help: "Trade history is read in windows of this size, then resized to how busy the token is." },
@@ -92,7 +93,7 @@ export function BacktestSettingsDialog() {
     }
     for (const { key, label } of FIXED_FIELDS) {
       const n = Number(form.values[key]);
-      if (!Number.isFinite(n) || n < 0 || (key !== "minSolAmount" && n === 0)) return void toast.error(`${label}: enter a valid number`);
+      if (!Number.isFinite(n) || n < 0 || (key !== "minSolAmount" && key !== "fillLatencySeconds" && n === 0)) return void toast.error(`${label}: enter a valid number`);
       if (key === "sharedRpcFraction" && (n < 0.05 || n > 1)) return void toast.error("Share of speed on live RPCs must be between 0.05 and 1");
       patch[key] = n;
     }

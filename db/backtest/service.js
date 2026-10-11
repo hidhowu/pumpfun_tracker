@@ -6,6 +6,8 @@ import { BacktestScan } from "../models/BacktestScan.js";
 import { Trader } from "../models/Trader.js";
 import { Profile } from "../models/Profile.js";
 import { getGlobalSettings } from "../models/GlobalSettings.js";
+import { getSystemSettings } from "../models/SystemSettings.js";
+import { resolveBacktestSettings } from "./settings.js";
 import { addTradersBulk, isValidSolanaAddress, setBlacklisted } from "../traderService.js";
 import { traderProgressPercent, runProgressPercent, estimateRemainingMs } from "./progress.js";
 import { getRunAddress as getRunAddressDetail } from "./addressView.js";
@@ -181,6 +183,7 @@ export async function listBacktestAddresses() {
 /** The profile's settings as the strategy a backtest follows - frozen into the run. */
 export async function snapshotProfileSettings(profileId) {
   const g = (await getGlobalSettings(profileId)).toObject();
+  const [system, backtest] = await Promise.all([getSystemSettings(), resolveBacktestSettings()]);
   return {
     allocationUsd: g.defaultAllocationUsd,
     tradeSizeUsd: g.defaultTradeSizeUsd,
@@ -192,15 +195,35 @@ export async function snapshotProfileSettings(profileId) {
     trailingStops: (g.defaultTrailingStops || []).map((r) => ({ _id: String(r._id), armPercent: r.armPercent, exitPercent: r.exitPercent })),
     allowNegativeBalance: g.defaultAllowNegativeBalance !== false,
     executionDelaySeconds: g.defaultExecutionDelaySeconds ?? 2,
+    // How often live looks at open positions (stop-loss / take-profit / trailing / max hold are only ever decided on those looks) - one system-wide setting today.
+    riskCheckIntervalSeconds: system.riskCheckIntervalSeconds ?? 7,
+    // Extra seconds between a trader's trade and our order, measured from live (see BacktestSettings.fillLatencySeconds).
+    fillLatencySeconds: backtest.effective.fillLatencySeconds,
     pumpFeePercent: g.defaultPumpFeePercent ?? 1.25,
     jitoFeeUsd: g.defaultJitoFeeUsd ?? 0,
   };
 }
 
-/** @param {{name: string, days: number, profileId: string, addresses: string[], maxSignatures?: number}} p  maxSignatures: skip an address with more signatures than this in the window (0 = no limit) */
-export async function createBacktestRun({ name, days, profileId, addresses, maxSignatures = DEFAULT_MAX_SIGNATURES }) {
+/** The timing settings that may be overridden per backtest. Anything else comes from the profile. [min, max] in seconds; 0 on the interval = look at every pool trade. */
+const TIMING_LIMITS = { executionDelaySeconds: [0, 60], riskCheckIntervalSeconds: [0, 3600], fillLatencySeconds: [0, 60] };
+
+/** Keeps only valid timing overrides. Throws on a value that is present but unusable, so a typo is never silently ignored. */
+function cleanTiming(overrides) {
+  const out = {};
+  for (const [key, [lo, hi]] of Object.entries(TIMING_LIMITS)) {
+    const v = overrides?.[key];
+    if (v === undefined || v === null || v === "") continue;
+    if (typeof v !== "number" || !Number.isFinite(v) || v < lo || v > hi) throw new Error(`${key} must be a number between ${lo} and ${hi}`);
+    out[key] = v;
+  }
+  return out;
+}
+
+/** @param {{name: string, days: number, profileId: string, addresses: string[], maxSignatures?: number, overrides?: object}} p  maxSignatures: skip an address with more signatures than this in the window (0 = no limit); overrides: timing values (see TIMING_LIMITS) that replace the profile's */
+export async function createBacktestRun({ name, days, profileId, addresses, maxSignatures = DEFAULT_MAX_SIGNATURES, overrides }) {
   if (!Number.isFinite(days) || days < 1 || days > MAX_BACKTEST_DAYS) throw new Error(`days must be between 1 and ${MAX_BACKTEST_DAYS}`);
   if (!Number.isFinite(maxSignatures) || maxSignatures < 0) throw new Error("The signature limit must be 0 (no limit) or a positive number");
+  const timing = cleanTiming(overrides);
   const unique = [...new Set(addresses)];
   if (unique.length === 0) throw new Error("Select at least one address");
   const profile = await Profile.findById(profileId).lean();
@@ -221,7 +244,7 @@ export async function createBacktestRun({ name, days, profileId, addresses, maxS
     windowEnd: new Date(now),
     profileId: profile._id,
     profileName: profile.name,
-    settings: await snapshotProfileSettings(profile._id),
+    settings: { ...(await snapshotProfileSettings(profile._id)), ...timing },
     addresses: runAddresses,
     maxSignatures: Math.floor(maxSignatures),
     status: "queued",
@@ -245,6 +268,15 @@ async function requeueAddresses(runId, stage) {
     { $set: { stage: "pending", error: null, claimedBy: null, leaseUntil: null, finishedAt: null, "collect.listing": false } }
   );
   return res.modifiedCount || 0;
+}
+
+/** Throws away a run's simulated trades and puts its finished addresses back to "simulating" work - what a settings change needs. Collected transactions are kept. */
+async function resetSimulation(runId) {
+  await BacktestPosition.deleteMany({ runId });
+  await BacktestRunTrader.updateMany(
+    { runId, stage: { $in: ["done", "simulating"] } },
+    { $set: { stage: "pending", error: null, claimedBy: null, leaseUntil: null, finishedAt: null, ...FRESH_SIM } }
+  );
 }
 
 /** pause | resume | cancel | retry_failed | retry_skipped */
@@ -292,18 +324,21 @@ export async function controlBacktestRun(runId, action) {
  *    are cleared and every finished address is simulated again - the
  *    transactions already collected are reused, so it is much faster than
  *    the first time.
+ *  - overrides: timing values (executionDelaySeconds, riskCheckIntervalSeconds, fillLatencySeconds). A changed value clears and re-simulates the results too.
  * A finished backtest that gets work queued this way is set to "paused" - press
  * Resume to run it. (A cancelled or paused one stays as it is.)
  * @param {string} runId
- * @param {{name?: string, maxSignatures?: number, profileId?: string}} patch
+ * @param {{name?: string, maxSignatures?: number, profileId?: string, overrides?: object}} patch
  */
-export async function updateBacktestRun(runId, { name, maxSignatures, profileId } = {}) {
+export async function updateBacktestRun(runId, { name, maxSignatures, profileId, overrides } = {}) {
   const run = await BacktestRun.findById(runId);
   if (!run) throw new Error("Backtest not found");
   const set = {};
   if (typeof name === "string" && name.trim()) set.name = name.trim();
 
-  const changesSettings = maxSignatures !== undefined || profileId;
+  const timing = cleanTiming(overrides);
+  const changesTiming = Object.keys(timing).some((k) => run.settings?.[k] !== timing[k]);
+  const changesSettings = maxSignatures !== undefined || profileId || changesTiming;
   if (changesSettings && ACTIVE_STATUSES.includes(run.status)) throw new Error("Pause the backtest before editing its settings");
 
   let requeuedSkipped = 0;
@@ -323,12 +358,12 @@ export async function updateBacktestRun(runId, { name, maxSignatures, profileId 
     if (!profile) throw new Error("Profile not found");
     set.profileId = profile._id;
     set.profileName = profile.name;
-    set.settings = await snapshotProfileSettings(profile._id);
-    await BacktestPosition.deleteMany({ runId });
-    await BacktestRunTrader.updateMany(
-      { runId, stage: { $in: ["done", "simulating"] } },
-      { $set: { stage: "pending", error: null, claimedBy: null, leaseUntil: null, finishedAt: null, ...FRESH_SIM } }
-    );
+    set.settings = { ...(await snapshotProfileSettings(profile._id)), ...timing };
+    await resetSimulation(runId);
+    resimulated = true;
+  } else if (changesTiming) {
+    set.settings = { ...run.settings, ...timing };
+    await resetSimulation(runId);
     resimulated = true;
   }
 

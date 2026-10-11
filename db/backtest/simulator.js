@@ -6,10 +6,15 @@ import { computeTradeFees } from "../fees.js";
  * toSec)` (see PumpTradesClient), so this is testable with a fake.
  *
  * Timeline, mirroring the live engine:
- *   trader buys at Tb  -> our buy fills at Te = Tb + delay, at the pool price at Te
- *   every pool price change after that is checked against the strategy:
- *     stop-loss, take-profit, trailing stops   (decided at that trade's time)
- *   or the trader's own sell at Ts, or max hold time (Te + maxTradeTimeSeconds)
+ *   trader buys at Tb  -> the tracker notices it `latency` seconds later, waits the
+ *                         profile's `delay`, and our buy fills at Te = Tb + latency + delay,
+ *                         at the pool price at Te
+ *   the position is then checked against the strategy the way live checks it:
+ *     every `riskCheckIntervalSeconds` (the live sweep) the pool price at that
+ *     moment is read - stop-loss, take-profit, max hold time, trailing stops are
+ *     decided on THOSE samples only, so a spike between two sweeps is never seen,
+ *     exactly as live. Without an interval (0/unset) every pool trade is a sample.
+ *   or the trader's own sell at Ts, noticed at Ts + latency
  *   the exit fills `delay` seconds after it was decided, at the pool price then.
  *
  * "Pool price at time T" = the pre-trade price (`priceUsd`) of the first trade
@@ -76,6 +81,17 @@ class TradeStream {
 const r = (n) => (Number.isFinite(n) ? n : null);
 
 /**
+ * Where in the sweep cycle a position opens. The live sweep runs on its own clock, so the first
+ * check after a fill comes somewhere between 1 and `interval` seconds later; derived from the
+ * trade so the same backtest always gives the same answer.
+ */
+function sweepPhase(key, interval) {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return 1 + (h % interval);
+}
+
+/**
  * @param {object} p
  * @param {string} p.mint
  * @param {{signature:string, blockTime:number, solAmount:number|null}} p.buy       the trader's first valid buy
@@ -90,7 +106,9 @@ const r = (n) => (Number.isFinite(n) ? n : null);
  */
 export async function simulatePosition({ mint, buy, traderSell, settings, windowEndSec, api, initialWindow, onUsdPerSol, canOpen }) {
   const delay = Math.max(0, settings.executionDelaySeconds ?? 2);
-  const te = buy.blockTime + delay;
+  const latency = Math.max(0, settings.fillLatencySeconds ?? 0); // the tracker noticing a trade, on top of the profile's delay
+  const interval = settings.riskCheckIntervalSeconds > 0 ? Math.round(settings.riskCheckIntervalSeconds) : 0; // 0 = look at every pool trade
+  const te = buy.blockTime + latency + delay;
   if (te > windowEndSec) return { outcome: "skipped", reason: "no_data" }; // the fill would land after the backtest window
 
   const stream = new TradeStream({ mint, fromSec: te, limitSec: windowEndSec, api, initialWindow });
@@ -139,11 +157,12 @@ export async function simulatePosition({ mint, buy, traderSell, settings, window
   const trailingStops = settings.trailingStops || [];
   const hasRisk = (stopLoss != null) || (takeProfit != null) || maxHold > 0 || trailingStops.length > 0;
 
-  const traderSellTime = traderSell ? traderSell.blockTime : null;
+  // When we learn of the trader's sell, and so when our exit is decided.
+  const traderSellTime = traderSell ? traderSell.blockTime + latency : null;
   // Scanning needs to go no further than the earliest time-based exit.
   let scanLimit = windowEndSec;
   if (traderSellTime != null) scanLimit = Math.min(scanLimit, traderSellTime);
-  if (maxHold > 0) scanLimit = Math.min(scanLimit, te + maxHold);
+  if (maxHold > 0 && interval === 0) scanLimit = Math.min(scanLimit, te + maxHold);
 
   let maxU = unrealizedPct(spendUsd);
   let minU = maxU;
@@ -151,13 +170,15 @@ export async function simulatePosition({ mint, buy, traderSell, settings, window
   const armed = new Set();
   let risk = null; // { at, reason }
 
-  const evaluate = (ts, price) => {
+  // Same order as the live sweep: stop-loss, take-profit, max hold time, trailing stops.
+  const evaluate = (price, holdExpired) => {
     const value = tokenAmount * price;
     const u = unrealizedPct(value);
     if (u > maxU) maxU = u;
     if (u < minU) minU = u;
     if (stopLoss != null && u <= -Math.abs(stopLoss)) return "stop_loss";
     if (takeProfit != null && u >= Math.abs(takeProfit)) return "take_profit";
+    if (holdExpired) return "max_hold_time";
     for (const rule of trailingStops) {
       const id = String(rule._id);
       if (!armed.has(id)) {
@@ -169,7 +190,27 @@ export async function simulatePosition({ mint, buy, traderSell, settings, window
     return null;
   };
 
-  if (hasRisk) {
+  if (hasRisk && interval > 0) {
+    // Sampled like live: the pool price at each sweep moment (the state after whatever traded before it).
+    let j = 0; // sweeps only move forward, so the read position does too
+    const stateAt = async (sec) => {
+      for (;;) {
+        while (j < stream.trades.length && stream.trades[j].ts < sec) j += 1;
+        if (j < stream.trades.length) return stream.trades[j].priceUsd;
+        if (stream.exhausted) return stream.trades.at(-1)?.fillPriceUsd ?? stream.prior?.fillPriceUsd ?? buyPriceUsd;
+        await stream.extend();
+      }
+    };
+    const holdAt = maxHold > 0 ? te + maxHold : Infinity;
+    for (let at = te + sweepPhase(`${mint}:${buy.signature}`, interval); at <= scanLimit; at += interval) {
+      scanned += 1;
+      const reason = evaluate(await stateAt(at), at >= holdAt);
+      if (reason) {
+        risk = { at, reason };
+        break;
+      }
+    }
+  } else if (hasRisk) {
     // Walk every pool price from the entry trade onward, in order, extending the read as needed.
     let idx = entryTrade ? 0 : stream.trades.length;
     scan: for (;;) {
@@ -177,7 +218,7 @@ export async function simulatePosition({ mint, buy, traderSell, settings, window
         const t = stream.trades[idx++];
         if (t.ts > scanLimit) break scan;
         scanned += 1;
-        const reason = evaluate(t.ts, t.priceUsd);
+        const reason = evaluate(t.priceUsd, false);
         if (reason) {
           risk = { at: t.ts, reason };
           break scan;
@@ -192,7 +233,7 @@ export async function simulatePosition({ mint, buy, traderSell, settings, window
   const candidates = [];
   if (risk) candidates.push({ at: risk.at, prio: 0, reason: risk.reason });
   if (traderSellTime != null) candidates.push({ at: traderSellTime, prio: 1, reason: "trader_sell" });
-  if (maxHold > 0) candidates.push({ at: te + maxHold, prio: 2, reason: "max_hold_time" });
+  if (maxHold > 0 && interval === 0) candidates.push({ at: te + maxHold, prio: 2, reason: "max_hold_time" }); // sampled runs find it on a sweep instead
   candidates.sort((a, b) => a.at - b.at || a.prio - b.prio);
   const exit = candidates[0] ?? null;
 

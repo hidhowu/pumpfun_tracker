@@ -12,11 +12,12 @@ import { updateBacktestRun } from "@/lib/backtest-api";
 import { useProfile } from "@/lib/profile-context";
 import type { BacktestRunDefinition } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
+import { TimingFields, parseTiming, toTimingValues, type TimingValues } from "./timing-fields";
 
 const KEEP = "keep";
 
 type Props = {
-  run: Pick<BacktestRunDefinition, "_id" | "name" | "status" | "maxSignatures" | "profileName">;
+  run: Pick<BacktestRunDefinition, "_id" | "name" | "status" | "maxSignatures" | "profileName" | "settings">;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
@@ -31,6 +32,7 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
   const [name, setName] = useState(run.name);
   const [maxSignatures, setMaxSignatures] = useState(String(run.maxSignatures ?? 0));
   const [profileId, setProfileId] = useState(KEEP);
+  const [timing, setTiming] = useState<TimingValues>(() => toTimingValues(run.settings));
   const [saving, setSaving] = useState(false);
 
   const locked = run.status === "queued" || run.status === "running";
@@ -41,7 +43,8 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
     setName(run.name);
     setMaxSignatures(String(run.maxSignatures ?? 0));
     setProfileId(KEEP);
-  }, [open, run.name, run.maxSignatures]);
+    setTiming(toTimingValues(run.settings));
+  }, [open, run.name, run.maxSignatures, run.settings]);
 
   const limitNumber = maxSignatures === "" ? 0 : Number(maxSignatures);
   const limitValid = Number.isInteger(limitNumber) && limitNumber >= 0;
@@ -49,16 +52,24 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
   const looser = limitChanged && (run.maxSignatures ?? 0) > 0 && (limitNumber === 0 || limitNumber > (run.maxSignatures ?? 0));
   const nameChanged = name.trim() !== run.name && name.trim() !== "";
   const recopy = profileId !== KEEP;
-  const dirty = nameChanged || (!locked && (limitChanged || recopy));
+  const timingNumbers = parseTiming(timing);
+  const before = toTimingValues(run.settings);
+  const timingChanged = (Object.keys(before) as Array<keyof TimingValues>).some((k) => Number(before[k]) !== Number(timing[k]));
+  const dirty = nameChanged || (!locked && (limitChanged || recopy || timingChanged));
 
   async function save() {
     if (!limitValid) {
       toast.error("The signature limit must be a whole number (0 = no limit)");
       return;
     }
+    if (!timingNumbers) {
+      toast.error("Check the timing settings - each must be a number in range");
+      return;
+    }
     setSaving(true);
     try {
       const res = await updateBacktestRun(run._id, {
+        ...(!locked && timingChanged ? { overrides: timingNumbers } : {}),
         ...(nameChanged ? { name: name.trim() } : {}),
         ...(!locked && limitChanged ? { maxSignatures: limitNumber } : {}),
         ...(!locked && recopy ? { profileId } : {}),
@@ -133,11 +144,22 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
           </div>
         </div>
 
+        <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+          <p className="text-sm font-medium">Timing</p>
+          <TimingFields values={timing} onChange={setTiming} disabled={locked} />
+          {timingChanged && !recopy && (
+            <p className="flex items-start gap-1.5 text-xs text-amber-500">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              Changing the timing clears the results so far and every address is simulated again (collected transactions are reused).
+            </p>
+          )}
+        </div>
+
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
-          <Button onClick={save} disabled={saving || !dirty || !limitValid}>
+          <Button onClick={save} disabled={saving || !dirty || !limitValid || !timingNumbers}>
             {saving && <Loader2 className="size-4 animate-spin" />}
             Save
           </Button>

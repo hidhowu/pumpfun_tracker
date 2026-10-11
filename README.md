@@ -141,14 +141,26 @@ Per address, in two stages (both resumable, progress and partial P&L visible liv
    The per-backtest "skip addresses with more than N signatures" limit counts
    signatures on the RPC path and trades on the API path.
 2. **Simulate** - per token: the first non-dust buy and the first non-dust sell
-   after it (same dust rules as live). Our fill is `executionDelaySeconds` after
-   the trader's buy, at the pool price then (`priceUsd` of the first trade at or
-   after that second, from `swap-api.pump.fun`). Every pool price change after
-   that is checked against stop-loss / take-profit / trailing stops; the exit is
-   the earliest of those, the trader's sell, or max hold time, and also fills
-   after the delay. Trade history is read in gap-free windows (cursor =
+   after it (same dust rules as live). Timing follows live, and all three values
+   are copied from the profile / live settings when the backtest starts and can be
+   edited in the New backtest dialog (or later, while paused):
+   - **Execution delay** (`executionDelaySeconds`, from the profile) plus an
+     **extra reaction time** (`fillLatencySeconds`, default 3s - what live loses
+     noticing a trade and queueing the order; Backtest -> Backtest settings). Our
+     buy fills that long after the trader's buy, at the pool price then (`priceUsd`
+     of the first trade at or after that second, from `swap-api.pump.fun`).
+   - **Price checks** (`riskCheckIntervalSeconds`, from the live Settings page):
+     open trades are looked at only every N seconds, at the pool price of that
+     moment, exactly like the live risk sweep - stop-loss, take-profit, max hold
+     time and trailing stops are decided on those looks only, so a spike between
+     two looks is missed in both. `0` = look at every pool trade (the old behaviour).
+   - The exit is the earliest of those decisions or the trader's sell (noticed after
+     the same reaction time), and fills after the execution delay.
+
+   Trade history is read in gap-free windows (cursor =
    `slotIndexId-timestampMs`, newest first, 100 per page), resized to how busy
-   the token is.
+   the token is. A backtest made before these settings existed has none of them
+   and keeps looking at every pool trade with no extra reaction time.
 
 Speed is set by proxies (pump.fun allows ~1 request/s per IP; requests are
 round-robined with a per-proxy rate limit and `Retry-After` cooldowns) and RPCs

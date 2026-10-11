@@ -8,11 +8,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { createBacktestRun } from "@/lib/backtest-api";
+import { createBacktestRun, getBacktestSettings } from "@/lib/backtest-api";
 import { getSettings } from "@/lib/api";
 import { useProfile } from "@/lib/profile-context";
 import type { BacktestStrategy } from "@/lib/backtest-types";
 import { StrategyChips } from "./shared";
+import { TimingFields, parseTiming, toTimingValues, type TimingValues } from "./timing-fields";
 import { cn } from "@/lib/utils";
 
 const PRESET_DAYS = [3, 7, 12, 30];
@@ -43,6 +44,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, noUse
   const [scope, setScope] = useState<"selected" | "all">("selected");
   const [submitting, setSubmitting] = useState(false);
   const [strategy, setStrategy] = useState<BacktestStrategy | null>(null);
+  const [timing, setTiming] = useState<TimingValues | null>(null);
 
   // Each time the dialog opens: default to the selection if there is one, else everything, and to the profile currently in use.
   useEffect(() => {
@@ -55,9 +57,17 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, noUse
   useEffect(() => {
     if (!open || !profileId) return;
     let cancelled = false;
-    getSettings(profileId)
-      .then(({ settings }) => {
+    // The timing starts from what the profile / live system / backtest settings say, and can then be changed here before starting.
+    Promise.all([getSettings(profileId), getBacktestSettings().catch(() => null)])
+      .then(([{ settings }, backtest]) => {
         if (cancelled) return;
+        setTiming(
+          toTimingValues({
+            executionDelaySeconds: settings.defaultExecutionDelaySeconds ?? 2,
+            riskCheckIntervalSeconds: settings.riskCheckIntervalSeconds ?? 7,
+            fillLatencySeconds: backtest?.effective.fillLatencySeconds ?? 3,
+          })
+        );
         setStrategy({
           allocationUsd: settings.defaultAllocationUsd,
           tradeSizeUsd: settings.defaultTradeSizeUsd,
@@ -73,7 +83,11 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, noUse
           jitoFeeUsd: settings.defaultJitoFeeUsd ?? 0,
         });
       })
-      .catch(() => !cancelled && setStrategy(null));
+      .catch(() => {
+        if (cancelled) return;
+        setStrategy(null);
+        setTiming(null);
+      });
     return () => {
       cancelled = true;
     };
@@ -86,6 +100,8 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, noUse
   // Empty or 0 = no limit.
   const maxSignaturesNumber = maxSignatures === "" ? 0 : Number(maxSignatures);
   const maxSignaturesValid = Number.isInteger(maxSignaturesNumber) && maxSignaturesNumber >= 0;
+
+  const timingNumbers = timing ? parseTiming(timing) : null;
 
   async function handleSubmit() {
     if (!daysValid) {
@@ -100,13 +116,17 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, noUse
       toast.error("Choose a profile to follow");
       return;
     }
+    if (timing && !timingNumbers) {
+      toast.error("Check the timing settings - each must be a number in range");
+      return;
+    }
     if (addresses.length === 0) {
       toast.error("No addresses to backtest");
       return;
     }
     setSubmitting(true);
     try {
-      const { run } = await createBacktestRun({ name: name.trim() || undefined, days: daysNumber, profileId, addresses, maxSignatures: maxSignaturesNumber });
+      const { run } = await createBacktestRun({ name: name.trim() || undefined, days: daysNumber, profileId, addresses, maxSignatures: maxSignaturesNumber, ...(timingNumbers ? { overrides: timingNumbers } : {}) });
       toast.success(`Backtest started on ${addresses.length} address${addresses.length === 1 ? "" : "es"}`);
       onOpenChange(false);
       onCreated(run._id);
@@ -188,6 +208,18 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, noUse
             <p className="text-xs text-muted-foreground">Copied when you start - editing the profile later never changes this backtest.</p>
           </div>
 
+          {timing && (
+            <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+              <div>
+                <p className="text-sm font-medium">Timing</p>
+                <p className="text-xs text-muted-foreground">
+                  Filled in from the profile and live settings so the backtest behaves like a live run. Change them to test a different setup.
+                </p>
+              </div>
+              <TimingFields values={timing} onChange={setTiming} />
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <Label>Addresses</Label>
             <div className="flex flex-wrap gap-2">
@@ -217,7 +249,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, noUse
           <DialogClose asChild>
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
-          <Button onClick={handleSubmit} disabled={submitting || addresses.length === 0 || !daysValid || !maxSignaturesValid}>
+          <Button onClick={handleSubmit} disabled={submitting || addresses.length === 0 || !daysValid || !maxSignaturesValid || (timing !== null && !timingNumbers)}>
             {submitting && <Loader2 className="size-4 animate-spin" />}
             Start backtest
           </Button>

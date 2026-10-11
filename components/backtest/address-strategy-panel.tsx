@@ -65,6 +65,8 @@ export function AddressStrategyPanel({ detail }: { detail: BacktestAddressDetail
           />
           <Row label="Negative balance" value={s.allowNegativeBalance ? "allowed" : "not allowed"} />
           <Row label="Execution delay" value={`${s.executionDelaySeconds}s`} />
+          <Row label="Extra reaction time" value={s.fillLatencySeconds ? `${s.fillLatencySeconds}s` : "none"} />
+          <Row label="Price checks" value={s.riskCheckIntervalSeconds ? `every ${s.riskCheckIntervalSeconds}s` : "every pool trade"} />
           <Row label="Fees" value={`${s.pumpFeePercent}% + ${formatUsd(s.jitoFeeUsd)} per trade`} />
         </CardContent>
       </Card>

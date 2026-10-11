@@ -45,6 +45,9 @@ export type BacktestStrategy = {
   trailingStops: Array<{ _id: string; armPercent: number; exitPercent: number }>;
   allowNegativeBalance: boolean;
   executionDelaySeconds: number;
+  // Absent on backtests made before these existed: they looked at every pool trade with no extra reaction time.
+  riskCheckIntervalSeconds?: number;
+  fillLatencySeconds?: number;
   pumpFeePercent: number;
   jitoFeeUsd: number;
 };
@@ -178,6 +181,7 @@ export type BacktestEffectiveSettings = {
   sharedRpcFraction: number;
   proxyRps: number;
   userTradesRps: number;
+  fillLatencySeconds: number;
   directRps: number;
   minSolAmount: number;
   program: string;
@@ -194,6 +198,7 @@ export type BacktestStoredSettings = {
   proxyRps: number | null;
   sharedRpcFraction: number;
   userTradesRps: number;
+  fillLatencySeconds: number;
   directRps: number;
   minSolAmount: number;
   program: string;

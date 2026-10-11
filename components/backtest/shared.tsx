@@ -148,6 +148,8 @@ export function StrategyChips({ settings }: { settings: BacktestStrategy }) {
     settings.maxTradeTimeSeconds > 0 ? `Max hold ${formatDuration(settings.maxTradeTimeSeconds * 1000)}` : "No max hold",
     ...settings.trailingStops.map((r) => `Trail arm +${r.armPercent}% → exit ${r.exitPercent}%`),
     `Delay ${settings.executionDelaySeconds}s`,
+    settings.riskCheckIntervalSeconds ? `Checks every ${settings.riskCheckIntervalSeconds}s` : "Checks every trade",
+    ...(settings.fillLatencySeconds ? [`+${settings.fillLatencySeconds}s reaction`] : []),
     `Fees ${settings.pumpFeePercent}% + ${formatUsd(settings.jitoFeeUsd)}`,
   ];
   return (
