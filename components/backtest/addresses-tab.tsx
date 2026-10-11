@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ChevronDown, Download, FlaskConical, Loader2, Pencil, Search, Trash2 } from "lucide-react";
+import { ChevronDown, Download, FlaskConical, Loader2, Pencil, Search, ShieldBan, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ import { formatAddress } from "@/lib/format";
 import type { BacktestAddressView } from "@/lib/backtest-types";
 import type { TraderListView } from "@/lib/types";
 import { AddAddressesDialog } from "./add-addresses-dialog";
+import { BlacklistDialog } from "./blacklist-dialog";
 import { NewRunDialog } from "./new-run-dialog";
 import { formatDate } from "./shared";
 import { useRouter } from "next/navigation";
@@ -90,6 +91,7 @@ export function AddressesTab() {
   const [deleting, setDeleting] = useState(false);
   const [editing, setEditing] = useState<BacktestAddressView | null>(null);
   const [runDialogOpen, setRunDialogOpen] = useState(false);
+  const [blacklistOpen, setBlacklistOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -143,8 +145,8 @@ export function AddressesTab() {
   async function handleImport(listId?: string) {
     setImporting(true);
     try {
-      const { added, skipped } = await importTradersToBacktest(listId);
-      toast.success(`${added.length} added${skipped.length ? `, ${skipped.length} already on the list` : ""}`);
+      const { added, skipped, blacklisted = [] } = await importTradersToBacktest(listId);
+      toast.success(`${added.length} added${skipped.length ? `, ${skipped.length} already on the list` : ""}${blacklisted.length ? `, ${blacklisted.length} blacklisted (not added)` : ""}`);
       await refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Import failed");
@@ -206,6 +208,10 @@ export function AddressesTab() {
             <Button size="sm" className="gap-1.5" onClick={() => setRunDialogOpen(true)}>
               <FlaskConical className="size-4" />
               Start backtest
+            </Button>
+            <Button size="sm" variant="outline" className="gap-1.5 text-negative hover:text-negative" onClick={() => setBlacklistOpen(true)}>
+              <ShieldBan className="size-4" />
+              Blacklist
             </Button>
             <Button size="sm" variant="outline" className="gap-1.5 text-negative hover:text-negative" onClick={() => setConfirmDelete(true)}>
               <Trash2 className="size-4" />
@@ -317,6 +323,16 @@ export function AddressesTab() {
         selected={selectedList}
         allAddresses={(addresses ?? []).map((a) => a.address)}
         onCreated={(id) => router.push(`/backtest/${id}`)}
+      />
+
+      <BlacklistDialog
+        open={blacklistOpen}
+        onOpenChange={setBlacklistOpen}
+        addresses={selectedList}
+        onDone={() => {
+          setSelected(new Set());
+          refresh();
+        }}
       />
 
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>

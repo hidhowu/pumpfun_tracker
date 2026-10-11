@@ -54,6 +54,7 @@ export type BacktestRunProgress = {
   addressesTotal: number;
   addressesDone: number;
   addressesFailed: number;
+  addressesSkipped: number;
   addressesSettled: number;
   etaMs: number | null;
 };
@@ -68,6 +69,8 @@ export type BacktestRunDefinition = {
   profileName: string;
   settings: BacktestStrategy;
   addresses: string[];
+  // An address with more signatures than this in the window is skipped (0 / missing = no limit).
+  maxSignatures?: number;
   status: BacktestStatus;
   control: "run" | "pause" | "cancel";
   error: string | null;
@@ -82,7 +85,7 @@ export type BacktestRunSummary = BacktestRunDefinition & {
   stats: BacktestStats;
 };
 
-export type BacktestStage = "pending" | "collecting" | "simulating" | "done" | "failed";
+export type BacktestStage = "pending" | "collecting" | "simulating" | "done" | "failed" | "skipped";
 
 export type BacktestRunTraderView = {
   address: string;

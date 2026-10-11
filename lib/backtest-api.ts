@@ -13,7 +13,7 @@ import type {
   BacktestStoredSettings,
 } from "./backtest-types";
 
-type AddResult = { added: string[]; skipped: string[]; invalid: string[] };
+type AddResult = { added: string[]; skipped: string[]; blacklisted?: string[]; invalid: string[] };
 
 export function listBacktestAddresses(): Promise<{ addresses: BacktestAddressView[] }> {
   return request(`/api/backtest/addresses`);
@@ -28,6 +28,13 @@ export function importTradersToBacktest(listId?: string): Promise<AddResult> {
   return request(`/api/backtest/addresses/import`, { method: "POST", body: JSON.stringify({ listId }) });
 }
 
+export type BlacklistResult = { blacklisted: string[]; alreadyBlacklisted: string[]; liveBlacklisted: string[]; closingPositions: number };
+
+/** Blacklists addresses on the shared blacklist (blocking them from live trading too), blacklisting any that are live traders, and removes them from the backtest list. */
+export function blacklistBacktestAddresses(addresses: string[]): Promise<BlacklistResult> {
+  return request(`/api/backtest/addresses/blacklist`, { method: "POST", body: JSON.stringify({ addresses }) });
+}
+
 export function deleteBacktestAddresses(addresses: string[]): Promise<{ deletedCount: number }> {
   return request(`/api/backtest/addresses/bulk-delete`, { method: "POST", body: JSON.stringify({ addresses }) });
 }
@@ -40,7 +47,7 @@ export function listBacktestRuns(): Promise<{ runs: BacktestRunSummary[] }> {
   return request(`/api/backtest/runs`);
 }
 
-export function createBacktestRun(body: { name?: string; days: number; profileId: string; addresses: string[] }): Promise<{ run: BacktestRunSummary }> {
+export function createBacktestRun(body: { name?: string; days: number; profileId: string; addresses: string[]; maxSignatures?: number }): Promise<{ run: BacktestRunSummary }> {
   return request(`/api/backtest/runs`, { method: "POST", body: JSON.stringify(body) });
 }
 

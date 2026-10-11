@@ -103,6 +103,7 @@ const STAGE_LABEL: Record<BacktestStage, string> = {
   simulating: "Simulating trades",
   done: "Done",
   failed: "Failed",
+  skipped: "Skipped",
 };
 
 /** One line saying where an address is, with the numbers that matter for that stage. */
@@ -114,6 +115,7 @@ export function stageDescription(t: BacktestRunTraderView): string {
   }
   if (t.stage === "simulating") return `Tokens ${t.sim.signalsDone.toLocaleString()} / ${t.sim.signalsTotal.toLocaleString()}`;
   if (t.stage === "failed") return t.error ? `Failed: ${t.error}` : "Failed";
+  if (t.stage === "skipped") return t.error ?? "Skipped";
   return STAGE_LABEL[t.stage];
 }
 
@@ -123,7 +125,9 @@ export function StageBadge({ stage }: { stage: BacktestStage }) {
       ? "border-positive/30 text-positive"
       : stage === "failed"
         ? "border-negative/30 text-negative"
-        : stage === "pending"
+        : stage === "skipped"
+          ? "border-amber-500/30 text-amber-500"
+          : stage === "pending"
           ? "border-border/60 text-muted-foreground"
           : "border-primary/30 text-primary";
   return (

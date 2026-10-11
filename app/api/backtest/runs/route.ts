@@ -11,7 +11,7 @@ export async function GET() {
   return NextResponse.json({ runs: JSON.parse(JSON.stringify(runs)) });
 }
 
-/** Body: { name?: string, days: number, profileId: string, addresses: string[] } */
+/** Body: { name?: string, days: number, profileId: string, addresses: string[], maxSignatures?: number (0 = no limit, default 50,000) } */
 export async function POST(request: NextRequest) {
   const denied = await requireApiSession();
   if (denied) return denied;
@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
       days: Number(body.days),
       profileId: String(body.profileId || ""),
       addresses: Array.isArray(body.addresses) ? body.addresses.filter((a: unknown) => typeof a === "string") : [],
+      ...(body.maxSignatures !== undefined ? { maxSignatures: Number(body.maxSignatures) } : {}),
     });
     return NextResponse.json({ run: JSON.parse(JSON.stringify(run)) });
   } catch (err) {

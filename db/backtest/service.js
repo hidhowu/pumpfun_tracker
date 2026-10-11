@@ -6,12 +6,13 @@ import { BacktestScan } from "../models/BacktestScan.js";
 import { Trader } from "../models/Trader.js";
 import { Profile } from "../models/Profile.js";
 import { getGlobalSettings } from "../models/GlobalSettings.js";
-import { addTradersBulk, isValidSolanaAddress } from "../traderService.js";
+import { addTradersBulk, isValidSolanaAddress, setBlacklisted } from "../traderService.js";
 import { traderProgressPercent, runProgressPercent, estimateRemainingMs } from "./progress.js";
 import { getRunAddress as getRunAddressDetail } from "./addressView.js";
 
 const DAY_MS = 86_400_000;
 export const MAX_BACKTEST_DAYS = 120;
+export const DEFAULT_MAX_SIGNATURES = 50_000;
 const ACTIVE_STATUSES = ["queued", "running"];
 
 // ------------------------------------------------------------ addresses
@@ -36,10 +37,16 @@ export async function addBacktestAddresses(entries, { source = "manual" } = {}) 
     valid.push(e);
   }
 
-  const existing = await BacktestAddress.find({ address: { $in: valid.map((e) => e.address) } }, { address: 1 }).lean();
+  // An address blacklisted from a past backtest (or from live trading) is never put back on the list - same rule as adding live traders.
+  const blacklistedDocs = await Trader.find({ address: { $in: valid.map((e) => e.address) }, status: "blacklisted" }, { address: 1 }).lean();
+  const blacklistedSet = new Set(blacklistedDocs.map((d) => d.address));
+  const blacklisted = valid.filter((e) => blacklistedSet.has(e.address)).map((e) => e.address);
+  const addable = valid.filter((e) => !blacklistedSet.has(e.address));
+
+  const existing = await BacktestAddress.find({ address: { $in: addable.map((e) => e.address) } }, { address: 1 }).lean();
   const existingSet = new Set(existing.map((d) => d.address));
-  const toInsert = valid.filter((e) => !existingSet.has(e.address));
-  const skipped = valid.filter((e) => existingSet.has(e.address)).map((e) => e.address);
+  const toInsert = addable.filter((e) => !existingSet.has(e.address));
+  const skipped = addable.filter((e) => existingSet.has(e.address)).map((e) => e.address);
 
   let added = [];
   if (toInsert.length > 0) {
@@ -56,7 +63,7 @@ export async function addBacktestAddresses(entries, { source = "manual" } = {}) 
       skipped.push(...toInsert.filter((e) => !inserted.has(e.address)).map((e) => e.address));
     }
   }
-  return { added, skipped, invalid };
+  return { added, skipped, blacklisted, invalid };
 }
 
 /** Copies live traders (optionally just one list's) onto the backtest list. The live Trader documents are untouched. */
@@ -74,6 +81,49 @@ export async function importTradersToBacktest({ listId } = {}) {
 export async function removeBacktestAddresses(addresses) {
   const res = await BacktestAddress.deleteMany({ address: { $in: addresses } });
   return res.deletedCount || 0;
+}
+
+/**
+ * Blacklists addresses straight from the backtest list. The blacklist is the
+ * platform's one shared list (the live Blacklisted page), so this:
+ *  - adds an address that was never a live trader as a blacklisted one, so it
+ *    can't be added to live trading - or back onto the backtest list - by
+ *    accident later (both report it as blacklisted);
+ *  - blacklists an address that IS an active live trader too, exactly as the
+ *    live Blacklist button does (tracking stops, its open positions are sold);
+ *  - removes the address from the backtest list. Past runs keep their results.
+ * @param {string[]} addresses
+ */
+export async function blacklistBacktestAddresses(addresses) {
+  const unique = [...new Set(addresses.filter((a) => typeof a === "string" && isValidSolanaAddress(a)))];
+  const [listed, live] = await Promise.all([
+    BacktestAddress.find({ address: { $in: unique } }, { address: 1, label: 1 }).lean(),
+    Trader.find({ address: { $in: unique } }, { address: 1, status: 1 }).lean(),
+  ]);
+  const labelBy = new Map(listed.map((l) => [l.address, l.label || ""]));
+  const liveBy = new Map(live.map((t) => [t.address, t.status]));
+
+  const result = { blacklisted: [], alreadyBlacklisted: [], liveBlacklisted: [], closingPositions: 0 };
+  for (const address of unique) {
+    const status = liveBy.get(address);
+    if (status === "blacklisted") {
+      result.alreadyBlacklisted.push(address);
+    } else if (status === "active") {
+      const { closingPositions } = await setBlacklisted(address, true);
+      result.liveBlacklisted.push(address);
+      result.closingPositions += closingPositions;
+    } else {
+      try {
+        await Trader.create({ address, label: labelBy.get(address) || "", status: "blacklisted", blacklistedAt: new Date() });
+      } catch (err) {
+        if (err?.code !== 11000) throw err; // created by a concurrent request - already blacklisted or tracked; make sure it ends up blacklisted
+        await setBlacklisted(address, true);
+      }
+      result.blacklisted.push(address);
+    }
+  }
+  await BacktestAddress.deleteMany({ address: { $in: unique } });
+  return result;
 }
 
 export async function updateBacktestAddress(address, { label, notes }) {
@@ -127,9 +177,10 @@ export async function snapshotProfileSettings(profileId) {
   };
 }
 
-/** @param {{name: string, days: number, profileId: string, addresses: string[]}} p */
-export async function createBacktestRun({ name, days, profileId, addresses }) {
+/** @param {{name: string, days: number, profileId: string, addresses: string[], maxSignatures?: number}} p  maxSignatures: skip an address with more signatures than this in the window (0 = no limit) */
+export async function createBacktestRun({ name, days, profileId, addresses, maxSignatures = DEFAULT_MAX_SIGNATURES }) {
   if (!Number.isFinite(days) || days < 1 || days > MAX_BACKTEST_DAYS) throw new Error(`days must be between 1 and ${MAX_BACKTEST_DAYS}`);
+  if (!Number.isFinite(maxSignatures) || maxSignatures < 0) throw new Error("The signature limit must be 0 (no limit) or a positive number");
   const unique = [...new Set(addresses)];
   if (unique.length === 0) throw new Error("Select at least one address");
   const profile = await Profile.findById(profileId).lean();
@@ -151,6 +202,7 @@ export async function createBacktestRun({ name, days, profileId, addresses }) {
     profileName: profile.name,
     settings: await snapshotProfileSettings(profile._id),
     addresses: runAddresses,
+    maxSignatures: Math.floor(maxSignatures),
     status: "queued",
   });
   await BacktestRunTrader.insertMany(runAddresses.map((address) => ({ runId: run._id, address })));
@@ -240,12 +292,13 @@ export { getRunAddressPnl } from "./addressView.js";
 
 function runProgress(run, runTraders) {
   const percent = run.status === "completed" ? 100 : runProgressPercent(runTraders);
-  const settled = runTraders.filter((rt) => rt.stage === "done" || rt.stage === "failed").length;
+  const settled = runTraders.filter((rt) => rt.stage === "done" || rt.stage === "failed" || rt.stage === "skipped").length;
   return {
     percent,
     addressesTotal: runTraders.length,
     addressesDone: runTraders.filter((rt) => rt.stage === "done").length,
     addressesFailed: runTraders.filter((rt) => rt.stage === "failed").length,
+    addressesSkipped: runTraders.filter((rt) => rt.stage === "skipped").length,
     addressesSettled: settled,
     etaMs: ACTIVE_STATUSES.includes(run.status) ? estimateRemainingMs(percent, run.activeMs || 0) : null,
   };
@@ -288,7 +341,7 @@ export async function getBacktestRun(runId) {
     label: labelBy.get(rt.address) || "",
     stage: rt.stage,
     error: rt.error,
-    progressPercent: rt.stage === "failed" ? 100 : traderProgressPercent(rt),
+    progressPercent: traderProgressPercent(rt),
     collect: rt.collect,
     sim: rt.sim,
     stats: byAddress.get(rt.address) ?? EMPTY_STATS,
@@ -362,7 +415,7 @@ export async function getRunDaily(runId) {
   }
   const through = {};
   for (const rt of runTraders) {
-    through[rt.address] = rt.stage === "done" || rt.stage === "failed" ? null : rt.sim?.simulatedThrough ? dayKey(rt.sim.simulatedThrough) : "";
+    through[rt.address] = rt.stage === "done" || rt.stage === "failed" || rt.stage === "skipped" ? null : rt.sim?.simulatedThrough ? dayKey(rt.sim.simulatedThrough) : "";
   }
   // `through[address]`: null = fully simulated; "" = nothing simulated yet; "YYYY-MM-DD" = days strictly before it are complete.
   return { days, byAddress, through };

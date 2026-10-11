@@ -123,7 +123,7 @@ export function toTraderView(rt, label, stats) {
     label: label || "",
     stage: rt.stage,
     error: rt.error,
-    progressPercent: rt.stage === "failed" ? 100 : traderProgressPercent(rt),
+    progressPercent: traderProgressPercent(rt),
     collect: rt.collect,
     sim: rt.sim,
     stats,
@@ -273,7 +273,7 @@ export async function getRunAddressPnl(runId, address, { period = "week", date }
   const losses = dailyBreakdown.reduce((n, d) => n + d.losses, 0);
   const periodStart = valueBefore(firstKey);
   const periodEnd = dailyBreakdown.at(-1)?.valueUsd ?? periodStart;
-  const through = rt.stage === "done" || rt.stage === "failed" ? null : rt.sim?.simulatedThrough ? dayKey(rt.sim.simulatedThrough) : "";
+  const through = rt.stage === "done" || rt.stage === "failed" || rt.stage === "skipped" ? null : rt.sim?.simulatedThrough ? dayKey(rt.sim.simulatedThrough) : "";
 
   return {
     period,

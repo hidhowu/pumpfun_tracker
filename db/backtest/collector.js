@@ -9,6 +9,15 @@ const WRITE_BATCH = 25;
 
 export class StopRequested extends Error {}
 
+/** The address has more signatures in the window than the backtest allows - it is skipped rather than collected. */
+export class SignatureLimitExceeded extends Error {
+  constructor(found, limit) {
+    super(`Skipped: more than ${limit.toLocaleString("en-US")} signatures in the window (found ${found.toLocaleString("en-US")}+)`);
+    this.found = found;
+    this.limit = limit;
+  }
+}
+
 /** Resolves the work pool: runs `worker` over `items` with at most `concurrency` in flight; stops scheduling once `shouldStop()`. */
 async function mapPool(items, concurrency, worker, shouldStop) {
   let next = 0;
@@ -79,7 +88,7 @@ async function filterUncached(address, rows) {
  * @param {import("./rpcPool.js").BacktestRpcPool} p.rpcPool
  * @param {(patch: object) => void} p.progress  merges counters into the run-trader document (throttled by the caller)
  */
-export async function collectAddress({ address, windowStartSec, windowEndSec, rpcPool, txConcurrency, shouldStop, progress }) {
+export async function collectAddress({ address, windowStartSec, windowEndSec, rpcPool, txConcurrency, shouldStop, progress, maxSignatures = 0 }) {
   const scan = await BacktestScan.findOne({ address }).lean();
   const need = [];
   if (!scan) {
@@ -90,6 +99,8 @@ export async function collectAddress({ address, windowStartSec, windowEndSec, rp
   }
 
   progress({ "collect.listing": true });
+  // Signatures already cached from earlier runs count toward the limit too - it is about how busy the address is, not what is left to fetch.
+  const alreadyCached = maxSignatures > 0 && scan ? await BacktestTx.countDocuments({ address, blockTime: { $gte: windowStartSec, $lte: windowEndSec } }) : 0;
   let listed = [];
   for (const plan of need) {
     const rows = await listSignatures(rpcPool, address, {
@@ -98,7 +109,11 @@ export async function collectAddress({ address, windowStartSec, windowEndSec, rp
       minTime: plan.minTime,
       maxTime: windowEndSec,
       shouldStop,
-      onPage: (count) => progress({ "collect.signaturesFound": listed.length + count }),
+      onPage: (count) => {
+        const found = alreadyCached + listed.length + count;
+        progress({ "collect.signaturesFound": found });
+        if (maxSignatures > 0 && found > maxSignatures) throw new SignatureLimitExceeded(found, maxSignatures);
+      },
     });
     listed = listed.concat(rows);
   }

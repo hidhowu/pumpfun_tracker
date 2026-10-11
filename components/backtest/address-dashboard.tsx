@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft, Check, Copy, History, LineChart, Loader2, Pencil, SlidersHorizontal, Layers, UserPlus } from "lucide-react";
+import { ArrowLeft, Check, Copy, History, LineChart, Loader2, Pencil, SlidersHorizontal, Layers, ShieldBan, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getBacktestAddress, promoteBacktestAddresses, updateBacktestAddress } from "@/lib/backtest-api";
 import type { BacktestAddressDetail } from "@/lib/backtest-types";
+import { BlacklistDialog } from "./blacklist-dialog";
 import { AddressOpenPositions } from "./address-open-positions";
 import { AddressPnlPanel } from "./address-pnl-panel";
 import { AddressStrategyPanel } from "./address-strategy-panel";
@@ -34,6 +35,7 @@ export function AddressDashboard({ runId, address }: { runId: string; address: s
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState("");
   const [promoting, setPromoting] = useState(false);
+  const [blacklistOpen, setBlacklistOpen] = useState(false);
   const loaded = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -49,7 +51,7 @@ export function AddressDashboard({ runId, address }: { runId: string; address: s
     }
   }, [runId, address]);
 
-  const active = detail ? ACTIVE.has(detail.run.status) || detail.run.control !== "run" || (detail.trader.stage !== "done" && detail.trader.stage !== "failed") : true;
+  const active = detail ? ACTIVE.has(detail.run.status) || detail.run.control !== "run" || (detail.trader.stage !== "done" && detail.trader.stage !== "failed" && detail.trader.stage !== "skipped") : true;
 
   useEffect(() => {
     refresh();
@@ -124,7 +126,7 @@ export function AddressDashboard({ runId, address }: { runId: string; address: s
   }
 
   const { run, trader, wallet } = detail;
-  const settled = trader.stage === "done" || trader.stage === "failed";
+  const settled = trader.stage === "done" || trader.stage === "failed" || trader.stage === "skipped";
 
   return (
     <div className="flex flex-col gap-6">
@@ -172,10 +174,15 @@ export function AddressDashboard({ runId, address }: { runId: string; address: s
               </div>
             </div>
 
-            <Button variant="outline" size="sm" className="gap-1.5" disabled={promoting} onClick={promote}>
-              {promoting ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
-              Add to live Traders
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" className="gap-1.5" disabled={promoting} onClick={promote}>
+                {promoting ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
+                Add to live Traders
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1.5 text-negative hover:text-negative" onClick={() => setBlacklistOpen(true)}>
+                <ShieldBan className="size-4" /> Blacklist
+              </Button>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
@@ -202,6 +209,8 @@ export function AddressDashboard({ runId, address }: { runId: string; address: s
           )}
         </CardContent>
       </Card>
+
+      <BlacklistDialog open={blacklistOpen} onOpenChange={setBlacklistOpen} addresses={[address]} onDone={() => {}} />
 
       <AddressWalletCard wallet={wallet} />
 

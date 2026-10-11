@@ -27,14 +27,14 @@ export function simFraction(rt) {
 
 /** 0-100 for one address. */
 export function traderProgressPercent(rt) {
-  if (rt.stage === "done") return 100;
+  if (rt.stage === "done" || rt.stage === "failed" || rt.stage === "skipped") return 100;
   return 100 * (COLLECT_WEIGHT * collectFraction(rt) + (1 - COLLECT_WEIGHT) * simFraction(rt));
 }
 
-/** Mean of the addresses' progress, 0-100 (a finished/failed address counts as complete). */
+/** Mean of the addresses' progress, 0-100 (a finished, failed or skipped address counts as complete). */
 export function runProgressPercent(runTraders) {
   if (runTraders.length === 0) return 0;
-  const sum = runTraders.reduce((acc, rt) => acc + (rt.stage === "failed" ? 100 : traderProgressPercent(rt)), 0);
+  const sum = runTraders.reduce((acc, rt) => acc + traderProgressPercent(rt), 0);
   return sum / runTraders.length;
 }
 

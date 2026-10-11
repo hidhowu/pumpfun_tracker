@@ -16,6 +16,7 @@ import { StrategyChips } from "./shared";
 import { cn } from "@/lib/utils";
 
 const PRESET_DAYS = [3, 7, 12, 30];
+const DEFAULT_MAX_SIGNATURES = 50_000;
 const MAX_DAYS = 120;
 
 type Props = {
@@ -35,6 +36,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
   const { profiles, currentProfileId } = useProfile();
   const [name, setName] = useState("");
   const [days, setDays] = useState("7");
+  const [maxSignatures, setMaxSignatures] = useState(String(DEFAULT_MAX_SIGNATURES));
   const [profileId, setProfileId] = useState<string>("");
   const [scope, setScope] = useState<"selected" | "all">("selected");
   const [submitting, setSubmitting] = useState(false);
@@ -78,10 +80,17 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
   const addresses = scope === "selected" ? selected : allAddresses;
   const daysNumber = Number(days);
   const daysValid = Number.isInteger(daysNumber) && daysNumber >= 1 && daysNumber <= MAX_DAYS;
+  // Empty or 0 = no limit.
+  const maxSignaturesNumber = maxSignatures === "" ? 0 : Number(maxSignatures);
+  const maxSignaturesValid = Number.isInteger(maxSignaturesNumber) && maxSignaturesNumber >= 0;
 
   async function handleSubmit() {
     if (!daysValid) {
       toast.error(`Days must be a whole number between 1 and ${MAX_DAYS}`);
+      return;
+    }
+    if (!maxSignaturesValid) {
+      toast.error("The signature limit must be a whole number (0 = no limit)");
       return;
     }
     if (!profileId) {
@@ -94,7 +103,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
     }
     setSubmitting(true);
     try {
-      const { run } = await createBacktestRun({ name: name.trim() || undefined, days: daysNumber, profileId, addresses });
+      const { run } = await createBacktestRun({ name: name.trim() || undefined, days: daysNumber, profileId, addresses, maxSignatures: maxSignaturesNumber });
       toast.success(`Backtest started on ${addresses.length} address${addresses.length === 1 ? "" : "es"}`);
       onOpenChange(false);
       onCreated(run._id);
@@ -143,6 +152,21 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
           </div>
 
           <div className="space-y-1.5">
+            <Label htmlFor="bt-max-signatures">Skip addresses with more signatures than</Label>
+            <Input
+              id="bt-max-signatures"
+              inputMode="numeric"
+              value={maxSignatures}
+              onChange={(e) => setMaxSignatures(e.target.value.replace(/[^0-9]/g, ""))}
+              className={cn("w-32", !maxSignaturesValid && "border-negative")}
+              aria-invalid={!maxSignaturesValid}
+            />
+            <p className="text-xs text-muted-foreground">
+              Reading every transaction of a very busy address takes very long, so one with more signatures than this inside the window is stopped and marked Skipped. 0 = no limit.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
             <Label htmlFor="bt-profile">Follow the settings of</Label>
             <Select value={profileId} onValueChange={setProfileId}>
               <SelectTrigger id="bt-profile" className="w-full">
@@ -184,7 +208,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
           <DialogClose asChild>
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
-          <Button onClick={handleSubmit} disabled={submitting || addresses.length === 0 || !daysValid}>
+          <Button onClick={handleSubmit} disabled={submitting || addresses.length === 0 || !daysValid || !maxSignaturesValid}>
             {submitting && <Loader2 className="size-4 animate-spin" />}
             Start backtest
           </Button>

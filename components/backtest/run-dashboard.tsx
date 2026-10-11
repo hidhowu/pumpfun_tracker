@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, CalendarDays, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, RotateCcw, Target, Trash2, TrendingUp, UserPlus, Users, XCircle } from "lucide-react";
+import { ArrowLeft, CalendarDays, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, RotateCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -27,6 +27,7 @@ import { EquityChart } from "./equity-chart";
 import { PositionsTable } from "./positions-table";
 import { RunTradersTable } from "./run-traders-table";
 import { WorkerStatus } from "./worker-status";
+import { BlacklistDialog } from "./blacklist-dialog";
 import { ProgressBar, RunStatusBadge, StrategyChips, formatDate, formatDuration, formatSignedPercent } from "./shared";
 
 const ACTIVE = new Set(["queued", "running"]);
@@ -43,6 +44,7 @@ export function RunDashboard({ runId }: { runId: string }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
+  const [blacklistOpen, setBlacklistOpen] = useState(false);
   const lastStatus = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -211,7 +213,7 @@ export function RunDashboard({ runId }: { runId: string }) {
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <span className="text-2xl font-semibold tabular-nums tracking-tight">{pct.toFixed(pct >= 99.95 || pct === 0 ? 0 : 1)}%</span>
           <span className="text-sm text-muted-foreground">
-            {progress.addressesDone}/{progress.addressesTotal} addresses done{failedCount > 0 ? ` · ${failedCount} failed` : ""}
+            {progress.addressesDone}/{progress.addressesTotal} addresses done{failedCount > 0 ? ` · ${failedCount} failed` : ""}{progress.addressesSkipped > 0 ? ` · ${progress.addressesSkipped} skipped` : ""}
           </span>
         </div>
         <ProgressBar percent={pct} tone={run.status === "failed" ? "negative" : run.status === "completed" ? "positive" : "primary"} className="h-2" />
@@ -236,6 +238,9 @@ export function RunDashboard({ runId }: { runId: string }) {
           <Clock className="size-3.5" /> Strategy followed (frozen when this backtest started)
         </span>
         <StrategyChips settings={run.settings} />
+        {run.maxSignatures ? (
+          <p className="text-xs text-muted-foreground">Addresses with more than {run.maxSignatures.toLocaleString()} signatures in the window are skipped.</p>
+        ) : null}
       </div>
 
       <Tabs defaultValue="addresses" className="flex flex-col gap-4">
@@ -263,6 +268,9 @@ export function RunDashboard({ runId }: { runId: string }) {
                   {busy === "promote" ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
                   Add to live Traders
                 </Button>
+                <Button size="sm" variant="outline" className="gap-1.5 text-negative hover:text-negative" disabled={busy !== null} onClick={() => setBlacklistOpen(true)}>
+                  <ShieldBan className="size-4" /> Blacklist
+                </Button>
                 <Button size="sm" variant="outline" className="gap-1.5 text-negative hover:text-negative" disabled={busy !== null} onClick={() => setConfirm("remove-addresses")}>
                   <Trash2 className="size-4" /> Remove from backtest list
                 </Button>
@@ -272,7 +280,7 @@ export function RunDashboard({ runId }: { runId: string }) {
               </div>
             </div>
           )}
-          <RunTradersTable traders={traders} selected={selected} onSelectedChange={setSelected} onOpen={(address) => router.push(`/backtest/${runId}/${address}`)} />
+          <RunTradersTable traders={traders} selected={selected} onSelectedChange={setSelected} onOpen={(address) => window.open(`/backtest/${runId}/${address}`, "_blank", "noopener,noreferrer")} />
         </TabsContent>
 
         <TabsContent value="daily">
@@ -288,6 +296,16 @@ export function RunDashboard({ runId }: { runId: string }) {
           <PositionsTable runId={runId} refreshKey={refreshKey} />
         </TabsContent>
       </Tabs>
+
+      <BlacklistDialog
+        open={blacklistOpen}
+        onOpenChange={setBlacklistOpen}
+        addresses={[...selected]}
+        onDone={() => {
+          setSelected(new Set());
+          refresh();
+        }}
+      />
 
       <AlertDialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
         <AlertDialogContent>

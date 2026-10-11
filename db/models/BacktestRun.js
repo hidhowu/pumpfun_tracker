@@ -24,6 +24,8 @@ const BacktestRunSchema = new Schema({
   settings: { type: Schema.Types.Mixed, required: true },
 
   addresses: { type: [String], default: [] },
+  // An address with more signatures than this inside the window is skipped instead of collected (0 / missing = no limit).
+  maxSignatures: { type: Number, default: 0 },
 
   status: { type: String, enum: ["queued", "running", "paused", "completed", "cancelled", "failed"], default: "queued", index: true },
   control: { type: String, enum: ["run", "pause", "cancel"], default: "run" },

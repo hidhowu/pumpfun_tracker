@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { ProgressBar, StageBadge, formatSignedPercent, pnlTone, stageDescription } from "./shared";
 
 type SortKey = "pnl" | "combined" | "winRate" | "trades" | "progress";
-type Filter = "all" | "profitable" | "losing" | "running" | "failed";
+type Filter = "all" | "profitable" | "losing" | "running" | "failed" | "skipped";
 
 const FILTERS: Array<{ value: Filter; label: string }> = [
   { value: "all", label: "All" },
@@ -18,6 +18,7 @@ const FILTERS: Array<{ value: Filter; label: string }> = [
   { value: "losing", label: "Losing" },
   { value: "running", label: "In progress" },
   { value: "failed", label: "Failed" },
+  { value: "skipped", label: "Skipped" },
 ];
 
 const sortValue: Record<SortKey, (t: BacktestRunTraderView) => number> = {
@@ -60,7 +61,7 @@ type Props = {
   onOpen: (address: string) => void;
 };
 
-/** Every address in the run with its own progress and the results it has produced so far. Click a row for the address's full page. */
+/** Every address in the run with its own progress and the results it has produced so far. Click a row to open the address's full page in a new tab. */
 export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "pnl", dir: "desc" });
@@ -69,8 +70,9 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
     const filtered = traders.filter((t) => {
       if (filter === "profitable") return t.stats.closed > 0 && t.stats.realizedPnlUsd > 0;
       if (filter === "losing") return t.stats.closed > 0 && t.stats.realizedPnlUsd < 0;
-      if (filter === "running") return t.stage !== "done" && t.stage !== "failed";
+      if (filter === "running") return t.stage !== "done" && t.stage !== "failed" && t.stage !== "skipped";
       if (filter === "failed") return t.stage === "failed";
+      if (filter === "skipped") return t.stage === "skipped";
       return true;
     });
     const value = sortValue[sort.key];
@@ -131,7 +133,7 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
             ) : (
               rows.map((t) => {
                 const s = t.stats;
-                const settled = t.stage === "done" || t.stage === "failed";
+                const settled = t.stage === "done" || t.stage === "failed" || t.stage === "skipped";
                 return (
                   <TableRow
                     key={t.address}
@@ -165,6 +167,7 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
                           </>
                         )}
                         {t.stage === "failed" && t.error && <span className="line-clamp-2 text-[11px] break-words whitespace-normal text-negative">{t.error}</span>}
+                        {t.stage === "skipped" && t.error && <span className="line-clamp-2 text-[11px] break-words whitespace-normal text-amber-500">{t.error}</span>}
                         {t.stage === "done" && t.collect.signaturesFailed > 0 && (
                           <span className="text-[11px] break-words whitespace-normal text-amber-500">{t.collect.signaturesFailed} transaction(s) couldn&apos;t be fetched - results may be incomplete</span>
                         )}

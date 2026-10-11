@@ -8,7 +8,7 @@ import { logEvent } from "../systemLog.js";
 import { resolveBacktestSettings } from "./settings.js";
 import { BacktestRpcPool } from "./rpcPool.js";
 import { PumpTradesClient } from "./pumpTradesClient.js";
-import { collectAddress, StopRequested } from "./collector.js";
+import { collectAddress, StopRequested, SignatureLimitExceeded } from "./collector.js";
 import { groupTradesByMint, listSignals, findTraderSell } from "./signals.js";
 import { simulatePosition, UnresolvedError } from "./simulator.js";
 import { sleep } from "./slotPool.js";
@@ -175,6 +175,7 @@ export class BacktestWorker {
         if (remaining > 0) continue;
         const done = await BacktestRunTrader.countDocuments({ runId: run._id, stage: "done" });
         const failed = await BacktestRunTrader.countDocuments({ runId: run._id, stage: "failed" });
+        const skippedCount = await BacktestRunTrader.countDocuments({ runId: run._id, stage: "skipped" });
         await BacktestRun.updateOne(
           { _id: run._id, status: { $in: ["queued", "running"] } },
           {
@@ -186,7 +187,7 @@ export class BacktestWorker {
             },
           }
         );
-        logEvent("tracker", `[backtest] Backtest "${run.name}" finished (${done} done, ${failed} failed)`);
+        logEvent("tracker", `[backtest] Backtest "${run.name}" finished (${done} done, ${failed} failed, ${skippedCount} skipped)`);
       }
     } finally {
       this.ticking = false;
@@ -225,6 +226,7 @@ export class BacktestWorker {
           txConcurrency: settings.txParallelismPerAddress,
           shouldStop,
           progress: (patch) => writer.set(patch),
+          maxSignatures: run.maxSignatures || 0,
         });
         await writer.flush();
         await BacktestRunTrader.updateOne(
@@ -248,6 +250,15 @@ export class BacktestWorker {
       if (err instanceof StopRequested) {
         // Paused/cancelled/shutting down - give the address back untouched; progress made so far is kept.
         await BacktestRunTrader.updateOne({ _id: rt._id }, { $set: { claimedBy: null, leaseUntil: null } });
+        return;
+      }
+      if (err instanceof SignatureLimitExceeded) {
+        // Too busy an address for this backtest's limit - a deliberate skip, not a failure.
+        logEvent("tracker", `[backtest] Backtest address ${rt.address} skipped: ${err.message}`, { meta: { runId, address: rt.address } });
+        await BacktestRunTrader.updateOne(
+          { _id: rt._id },
+          { $set: { stage: "skipped", error: err.message, finishedAt: new Date(), claimedBy: null, leaseUntil: null } }
+        );
         return;
       }
       const message = (err && err.message) || String(err);

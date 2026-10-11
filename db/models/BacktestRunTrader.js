@@ -14,7 +14,7 @@ const BacktestRunTraderSchema = new Schema({
   runId: { type: Schema.Types.ObjectId, required: true, index: true },
   address: { type: String, required: true },
 
-  stage: { type: String, enum: ["pending", "collecting", "simulating", "done", "failed"], default: "pending" },
+  stage: { type: String, enum: ["pending", "collecting", "simulating", "done", "failed", "skipped"], default: "pending" },
   error: { type: String, default: null },
 
   collect: {

@@ -112,8 +112,19 @@ export class PumpTradesClient {
         if (status === 429) {
           this.stats.rateLimited += 1;
           this.slots.cool(member.id, Math.min(120, Math.max(5, retryAfter || 15)) * 1000);
+          this.slots.throttle(member.id, 0.85);
           tried.add(member.id);
           lastError = new Error("pump.fun rate limit (429)");
+          continue;
+        }
+        if (status === 403) {
+          // Forbidden is usually the same "too fast" signal in another form (or a blocked proxy): slow this proxy down, rest it, try another.
+          this.stats.rateLimited += 1;
+          if (proxy) recordProxyResult(proxy._id, false, "HTTP 403 through proxy").catch(() => {});
+          this.slots.cool(member.id, Math.min(60, 5 * 2 ** Math.min(attempt, 4)) * 1000);
+          this.slots.throttle(member.id, 0.75);
+          tried.add(member.id);
+          lastError = new Error(`pump.fun refused the request (HTTP 403) ${attempt + 1} times in a row, slowing down each time`);
           continue;
         }
         if (!status || (proxy && PROXY_BROKEN_HTTP_STATUSES.has(status))) {
@@ -124,6 +135,7 @@ export class PumpTradesClient {
           continue;
         }
         if (proxy) this.#recordOk(proxy._id);
+        if (status === 200) this.slots.recover(member.id);
         if (status === 404) return { trades: [], nextCursor: null, hasMore: false };
         if (status >= 500) {
           lastError = new Error(`pump.fun HTTP ${status}`);

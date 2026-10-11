@@ -54,15 +54,16 @@ export function AddAddressesDialog({ onAdded }: { onAdded: () => void }) {
     }
     setSubmitting(true);
     try {
-      const { added, skipped, invalid } = await addBacktestAddresses(entries);
+      const { added, skipped, blacklisted = [], invalid } = await addBacktestAddresses(entries);
       const parts: string[] = [];
       if (added.length) parts.push(`${added.length} added`);
       if (skipped.length) parts.push(`${skipped.length} already on the list`);
+      if (blacklisted.length) parts.push(`${blacklisted.length} blacklisted (not added)`);
       if (invalid.length) parts.push(`${invalid.length} invalid`);
       if (added.length > 0) toast.success(parts.join(", "));
       else toast.error(parts.join(", ") || "Nothing added");
       if (invalid.length > 0) toast.error(`Not valid Solana addresses: ${invalid.slice(0, 3).join(", ")}${invalid.length > 3 ? "…" : ""}`);
-      if (added.length > 0 || skipped.length > 0) {
+      if (added.length > 0 || skipped.length > 0 || blacklisted.length > 0) {
         setText("");
         setOpen(false);
         onAdded();
