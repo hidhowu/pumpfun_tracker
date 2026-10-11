@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowRightLeft, Coins, Layers, Loader2, Plus, Star, Trash2 } from "lucide-react";
+import { ArrowRightLeft, Coins, Layers, Loader2, Plus, SlidersHorizontal, Star, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -127,7 +128,9 @@ export default function ProfilesPage() {
               <Card key={profile._id} className={cn("border-border/60", isCurrent && "border-primary/50")}>
                 <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
                   <CardTitle className="flex min-w-0 items-center gap-2 text-base">
-                    <span className="truncate">{profile.name}</span>
+                    <Link href={`/profiles/${profile._id}`} className="truncate hover:text-primary hover:underline">
+                      {profile.name}
+                    </Link>
                     {profile.isDefault && (
                       <Badge className="gap-1 border-primary/30 bg-primary/15 text-primary">
                         <Star className="size-3" /> Default
@@ -158,6 +161,11 @@ export default function ProfilesPage() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
+                    <Button variant="outline" size="sm" className="gap-1.5" asChild>
+                      <Link href={`/profiles/${profile._id}`}>
+                        <SlidersHorizontal className="size-3.5" /> Settings
+                      </Link>
+                    </Button>
                     {!isCurrent && (
                       <Button variant="outline" size="sm" onClick={() => setCurrentProfileId(profile._id)}>
                         Switch to
