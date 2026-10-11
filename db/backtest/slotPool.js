@@ -67,4 +67,38 @@ export class SlotPool {
   }
 }
 
+/** Counting semaphore with a limit that can change while work is waiting. */
+export class Semaphore {
+  constructor(limit = 1) {
+    this.limit = Math.max(1, limit);
+    this.active = 0;
+    this.queue = [];
+  }
+
+  setLimit(limit) {
+    this.limit = Math.max(1, limit);
+    this.#drain();
+  }
+
+  async acquire() {
+    if (this.active < this.limit) {
+      this.active += 1;
+      return;
+    }
+    await new Promise((resolve) => this.queue.push(resolve));
+  }
+
+  release() {
+    this.active -= 1;
+    this.#drain();
+  }
+
+  #drain() {
+    while (this.queue.length > 0 && this.active < this.limit) {
+      this.active += 1;
+      this.queue.shift()();
+    }
+  }
+}
+
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

@@ -27,7 +27,7 @@ type FixedField = "sharedRpcFraction" | "userTradesRps" | "fillLatencySeconds" |
 const AUTO_FIELDS: Array<{ key: AutoField; label: string; help: string }> = [
   { key: "addressParallelism", label: "Addresses at the same time", help: "How many addresses are worked on in parallel." },
   { key: "txParallelismPerAddress", label: "Transactions at once, per address", help: "Parallel transaction fetches for one address while collecting." },
-  { key: "positionParallelism", label: "Trades at once, per address", help: "Parallel trade simulations for one address (always 1 if the profile forbids a negative balance)." },
+  { key: "positionParallelism", label: "Trades at once (all addresses)", help: "How many trades are simulated at the same time, shared by every address - auto is one per proxy. An address whose profile forbids a negative balance works through its own trades one by one." },
   { key: "rpcRpsPerEndpoint", label: "RPC requests / second, per endpoint", help: "Rate cap on each backtest-only RPC. Set it to what your provider allows." },
   { key: "proxyRps", label: "pump.fun requests / second, per proxy", help: "Each proxy is a separate IP with its own limit - about 1/s is sustainable." },
 ];

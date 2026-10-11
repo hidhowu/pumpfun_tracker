@@ -169,6 +169,14 @@ only** so slow providers never serve live trading; endpoints shared with live
 run at a fraction of the rate. Concurrency defaults are derived from the number
 of proxies/RPCs (Backtest -> Backtest settings).
 
+Every proxy is used at once: the pump.fun client keeps one request in flight per
+proxy (73 proxies = 73 at a time) while each proxy is still paced individually, and a
+proxy that is refused rests while the request goes straight to another. Reading one
+address's history is split into time slices read in parallel (the newest page tells
+how busy the wallet is, so quiet wallets stay at one page), and "Trades at once" is
+one shared pool across all addresses (auto = one per proxy), so a single address can
+use the whole pool.
+
 ## A note on pump.fun's API and Node's `fetch`
 
 `db/pumpFunApi.js` shells out to `curl` instead of using Node's native

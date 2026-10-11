@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { getActiveProxyPool, recordProxyResult, redactCredentials, PROXY_BROKEN_HTTP_STATUSES } from "../proxyService.js";
 import { resolveBacktestSettings } from "./settings.js";
-import { SlotPool, sleep } from "./slotPool.js";
+import { SlotPool, Semaphore, sleep } from "./slotPool.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -70,6 +70,7 @@ export class PumpTradesClient {
   constructor({ rpsSetting = "proxyRps" } = {}) {
     this.rpsSetting = rpsSetting;
     this.slots = new SlotPool();
+    this.gate = new Semaphore(1); // requests in flight at once = one per proxy, set on refresh
     this.refreshedAt = 0;
     this.refreshing = null;
     this.settings = null;
@@ -88,11 +89,17 @@ export class PumpTradesClient {
           ? proxies.map((p) => ({ id: String(p._id), rps: effective[this.rpsSetting] ?? effective.proxyRps, data: { proxy: p } }))
           : [{ id: DIRECT_ID, rps: effective.directRps, data: { proxy: null } }]
       );
+      this.gate.setLimit(this.slots.size);
       this.refreshedAt = Date.now();
     })().finally(() => {
       this.refreshing = null;
     });
     return this.refreshing;
+  }
+
+  /** How many requests can usefully run at once: one per proxy (1 when going direct). Valid after refresh(). */
+  get lanes() {
+    return Math.max(1, this.slots.size);
   }
 
   #url(mint, cursor) {
@@ -125,53 +132,58 @@ export class PumpTradesClient {
     let lastError;
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const reservation = this.slots.reserve({ exclude: tried.size < this.slots.size ? tried : undefined });
-      if (!reservation) throw new Error("No proxies or direct slot available");
-      const { member, waitMs } = reservation;
-      if (waitMs > 0) await sleep(waitMs);
-      const proxy = member.data.proxy;
-      this.stats.requests += 1;
-
+      await this.gate.acquire();
       try {
-        const { status, retryAfter, body } = await this.#curl(url, proxy?.url ?? null);
-        if (status === 429) {
-          this.stats.rateLimited += 1;
-          this.slots.cool(member.id, Math.min(120, Math.max(5, retryAfter || 15)) * 1000);
+        const reservation = this.slots.reserve({ exclude: tried.size < this.slots.size ? tried : undefined });
+        if (!reservation) throw new Error("No proxies or direct slot available");
+        const { member, waitMs } = reservation;
+        if (waitMs > 0) await sleep(waitMs);
+        const proxy = member.data.proxy;
+        this.stats.requests += 1;
+
+        try {
+          const { status, retryAfter, body } = await this.#curl(url, proxy?.url ?? null);
+          if (status === 429) {
+            this.stats.rateLimited += 1;
+            this.slots.cool(member.id, Math.min(120, Math.max(5, retryAfter || 15)) * 1000);
+            tried.add(member.id);
+            lastError = new Error("pump.fun rate limit (429)");
+            continue;
+          }
+          if (status === 403) {
+            // Forbidden: this proxy sits out a few seconds, the request goes to the next proxy.
+            this.stats.rateLimited += 1;
+            if (proxy) recordProxyResult(proxy._id, false, "HTTP 403 through proxy").catch(() => {});
+            this.slots.cool(member.id, 5000);
+            tried.add(member.id);
+            lastError = new Error(`pump.fun refused the request (HTTP 403) ${attempt + 1} times in a row, across the proxies tried`);
+            continue;
+          }
+          if (!status || (proxy && PROXY_BROKEN_HTTP_STATUSES.has(status))) {
+            if (proxy) recordProxyResult(proxy._id, false, `HTTP ${status || "no response"} through proxy`).catch(() => {});
+            this.slots.cool(member.id, 20_000);
+            tried.add(member.id);
+            lastError = new Error(`no usable response${proxy ? " through proxy" : ""} (HTTP ${status || "none"})`);
+            continue;
+          }
+          if (proxy) this.#recordOk(proxy._id);
+          if (status === 404) return { status, body: "" };
+          if (status >= 500) {
+            lastError = new Error(`pump.fun HTTP ${status}`);
+            await sleep(500 * (attempt + 1));
+            continue;
+          }
+          if (status !== 200) throw new Error(`pump.fun HTTP ${status}`);
+          return { status, body };
+        } catch (err) {
+          this.stats.failures += 1;
+          lastError = new Error(redactCredentials(err.message));
           tried.add(member.id);
-          lastError = new Error("pump.fun rate limit (429)");
-          continue;
+          if (proxy) recordProxyResult(proxy._id, false, err.message).catch(() => {});
+          await sleep(300 * (attempt + 1));
         }
-        if (status === 403) {
-          // Forbidden: this proxy sits out a few seconds, the request goes to the next proxy.
-          this.stats.rateLimited += 1;
-          if (proxy) recordProxyResult(proxy._id, false, "HTTP 403 through proxy").catch(() => {});
-          this.slots.cool(member.id, 5000);
-          tried.add(member.id);
-          lastError = new Error(`pump.fun refused the request (HTTP 403) ${attempt + 1} times in a row, across the proxies tried`);
-          continue;
-        }
-        if (!status || (proxy && PROXY_BROKEN_HTTP_STATUSES.has(status))) {
-          if (proxy) recordProxyResult(proxy._id, false, `HTTP ${status || "no response"} through proxy`).catch(() => {});
-          this.slots.cool(member.id, 20_000);
-          tried.add(member.id);
-          lastError = new Error(`no usable response${proxy ? " through proxy" : ""} (HTTP ${status || "none"})`);
-          continue;
-        }
-        if (proxy) this.#recordOk(proxy._id);
-        if (status === 404) return { status, body: "" };
-        if (status >= 500) {
-          lastError = new Error(`pump.fun HTTP ${status}`);
-          await sleep(500 * (attempt + 1));
-          continue;
-        }
-        if (status !== 200) throw new Error(`pump.fun HTTP ${status}`);
-        return { status, body };
-      } catch (err) {
-        this.stats.failures += 1;
-        lastError = new Error(redactCredentials(err.message));
-        tried.add(member.id);
-        if (proxy) recordProxyResult(proxy._id, false, err.message).catch(() => {});
-        await sleep(300 * (attempt + 1));
+      } finally {
+        this.gate.release();
       }
     }
     throw lastError || new Error("pump.fun request failed");

@@ -58,7 +58,8 @@ export async function resolveBacktestSettings() {
   // The slower of the two stages sets the pace; parallelism just has to keep both pipelines full.
   const addressParallelism = s.addressParallelism ?? clamp(Math.ceil(Math.max(pumpCapacityRps, rpcCapacityRps / 4)), 2, 40);
   const txParallelismPerAddress = s.txParallelismPerAddress ?? clamp(Math.ceil((rpcCapacityRps * 0.8) / addressParallelism), 2, 10);
-  const positionParallelism = s.positionParallelism ?? clamp(Math.ceil(pumpCapacityRps / addressParallelism), 1, 4);
+  // Shared by every address: one trade per proxy keeps all proxies busy (the per-proxy pacing in SlotPool sets the actual rate).
+  const positionParallelism = s.positionParallelism ?? clamp(proxyCount > 0 ? proxyCount : 2, 1, 100);
 
   return {
     stored: s,

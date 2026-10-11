@@ -9,6 +9,7 @@ import { logEvent } from "../systemLog.js";
 import { resolveBacktestSettings } from "./settings.js";
 import { BacktestRpcPool } from "./rpcPool.js";
 import { PumpTradesClient } from "./pumpTradesClient.js";
+import { Semaphore } from "./slotPool.js";
 import { collectAddress, StopRequested, SignatureLimitExceeded } from "./collector.js";
 import { collectAddressViaApi } from "./apiCollector.js";
 import { groupTradesByMint, listSignals, findTraderSell } from "./signals.js";
@@ -79,6 +80,7 @@ export class BacktestWorker {
     this.pump = new PumpTradesClient();
     this.userTrades = new PumpTradesClient({ rpsSetting: "userTradesRps" }); // same proxies, paced for the user-trades endpoint
     this.memo = new UsdPerSolMemo();
+    this.positionGate = new Semaphore(1); // positions being simulated at once, across ALL addresses (limit = settings.positionParallelism)
     this.active = new Map(); // `${runId}:${address}` -> promise
     this.runControl = new Map(); // runId -> "run" | "pause" | "cancel"
     this.settingsCache = { at: 0, value: null };
@@ -373,11 +375,17 @@ export class BacktestWorker {
     };
 
     const concurrency = enforceBalance ? 1 : settings.positionParallelism;
+    this.positionGate.setLimit(settings.positionParallelism);
     let next = 0;
     const lanes = Array.from({ length: Math.max(1, Math.min(concurrency, signals.length)) }, async () => {
       while (next < signals.length) {
         const index = next++;
-        await processSignal(index);
+        await this.positionGate.acquire();
+        try {
+          await processSignal(index);
+        } finally {
+          this.positionGate.release();
+        }
       }
     });
     await Promise.all(lanes);
