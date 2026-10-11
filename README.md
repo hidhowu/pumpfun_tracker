@@ -124,19 +124,26 @@ Per address, in two stages (both resumable, progress and partial P&L visible liv
 1. **Collect** - the address's buys and sells for the window, cached per address
    (`BacktestTx`, coverage in `BacktestScan`), so a later, longer backtest only
    fetches the missing days. Two sources:
-   - **pump.fun user-trades API (fast, preferred)** - for an address added with
-     its pump.fun `userId`, the swaps come ready-made from
+   - **pump.fun user-trades API (fast, preferred)** - the swaps come ready-made
+     from
      `frontend-api-v3.pump.fun/user-trades/<userId>?types=trades&limit=100`,
      paged by cursor (`<unix microseconds>:<uuid>`, newest first) through the
      proxy pool: a few dozen requests instead of listing and parsing thousands
-     of transactions. Quirk handled: the endpoint now and then returns an empty
-     200 page with the same cursor mid-history; that is retried, a missing
-     `nextCursor` is the real end. Quote assets (wSOL, USDC, USDT) are ignored.
-     Add addresses as JSON (`[{ "walletAddress": "...", "userId": "..." }]`, a
-     single object works too); re-pasting a listed address with an id upgrades it.
-   - **RPC (slow fallback)** - an address with no `userId`: `getSignaturesForAddress`
-     back to the window start, then each successful transaction through
-     `parseTransaction`/`extractPumpTrades`.
+     of transactions. The endpoint takes the wallet address in place of the
+     `userId`, so an address added without one works too. Quirk handled: the
+     endpoint now and then returns an empty 200 page with the same cursor
+     mid-history (a missing `nextCursor` is the real end). That page is retried
+     10 times through different proxies; if it persists, the previous page is
+     read again for a fresh cursor and the next page asked for again (3 rounds);
+     if that fails the whole address restarts with the wallet address in place of
+     the `userId` (or vice versa), then once more allowed to rebuild the cursor a
+     little further back (can skip a short gap). Quote assets (wSOL, USDC, USDT)
+     are ignored. Add addresses as JSON (`[{ "walletAddress": "...", "userId":
+     "..." }]`, a single object works too); re-pasting a listed address with an id
+     upgrades it.
+   - **RPC (slow fallback)** - only if the API still gives blank pages after all
+     of that: `getSignaturesForAddress` back to the window start, then each
+     successful transaction through `parseTransaction`/`extractPumpTrades`.
 
    The per-backtest "skip addresses with more than N signatures" limit counts
    signatures on the RPC path and trades on the API path.

@@ -17,13 +17,21 @@ const MAX_ID = "9".repeat(22);
 const DIRECT_ID = "direct";
 // The user-trades endpoint now and then answers 200 with an empty page in the middle of a history (same cursor handed back);
 // asking again gets the real page, so an empty page with an unchanged cursor is retried this many times before giving up.
-const EMPTY_PAGE_RETRIES = 6;
-// If the same cursor keeps coming back empty, the cursor is rebuilt a little further back in time and the read carries on from
+const EMPTY_PAGE_RETRIES = 10; // each retry goes out through the next proxy in the rotation
+// Last resort (only when asked for, see fetchUserTrades `nudge`): rebuild the cursor a little further back in time and carry on from
 // there instead of giving up: first the same instant with a neutral id (loses nothing), then 1s, 5s, 30s, 2min older (can skip
-// the trades inside that gap, which is far better than stopping the whole address).
+// the trades inside that gap, which is better than stopping the whole address).
 const CURSOR_NUDGES_SEC = [0, 1, 5, 30, 120];
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 const USER_TRADES_PAGE = 100;
+
+/** The user-trades endpoint kept answering with an empty page for a cursor that has more history behind it. */
+export class EmptyPageError extends Error {
+  constructor(message = "pump.fun keeps returning an empty page for this wallet's trades") {
+    super(message);
+    this.name = "EmptyPageError";
+  }
+}
 
 /** Normalises one API trade: numbers instead of decimal strings, seconds instead of ISO. */
 function normalizeTrade(t) {
@@ -211,7 +219,7 @@ export class PumpTradesClient {
    * end of the history. Only real swaps are requested (types=trades), not token transfers.
    * @returns {Promise<{trades: object[], nextCursor: string|null}>}
    */
-  async fetchUserTrades(userId, cursor) {
+  async fetchUserTrades(userId, cursor, { nudge = false } = {}) {
     await this.refresh();
     const urlFor = (c) => {
       const qs = new URLSearchParams({ types: "trades", limit: String(USER_TRADES_PAGE) });
@@ -240,7 +248,7 @@ export class PumpTradesClient {
 
     const direct = await tryCursor(cursor);
     if (direct) return direct;
-    if (!(micros > 0)) throw new Error("pump.fun keeps returning an empty page for this wallet's trades - try again later");
+    if (!nudge || !(micros > 0)) throw new EmptyPageError();
 
     for (const back of CURSOR_NUDGES_SEC) {
       const nudged = `${Math.max(0, micros - back * 1_000_000)}:${ZERO_UUID}`;
@@ -250,7 +258,7 @@ export class PumpTradesClient {
         return page;
       }
     }
-    throw new Error("pump.fun keeps returning an empty page for this wallet's trades - try again later");
+    throw new EmptyPageError();
   }
 
   #recordOk(proxyId) {

@@ -285,8 +285,8 @@ export function AddressesTab() {
                               API
                             </Badge>
                           ) : (
-                            <Badge variant="outline" className="border-amber-500/30 px-1.5 py-0 text-[10px] font-normal text-amber-500" title="No pump.fun user ID - the chain is read over RPC (slow). Add the address again with its user ID to speed it up.">
-                              RPC
+                            <Badge variant="outline" className="border-amber-500/30 px-1.5 py-0 text-[10px] font-normal text-amber-500" title="No pump.fun user ID - the wallet address is used in its place (also fast). Add the address again with its user ID to give the endpoint a second identifier to try.">
+                              Address
                             </Badge>
                           )}
                         </span>
@@ -333,7 +333,6 @@ export function AddressesTab() {
         onOpenChange={setRunDialogOpen}
         selected={selectedList}
         allAddresses={(addresses ?? []).map((a) => a.address)}
-        noUserIdAddresses={new Set((addresses ?? []).filter((a) => !a.userId).map((a) => a.address))}
         onCreated={(id) => router.push(`/backtest/${id}`)}
       />
 

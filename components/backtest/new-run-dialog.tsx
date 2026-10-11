@@ -25,8 +25,6 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   selected: string[];
   allAddresses: string[];
-  // Addresses on the list that have no pump.fun user ID (they are collected over RPC, which is much slower).
-  noUserIdAddresses?: Set<string>;
   onCreated: (runId: string) => void;
 };
 
@@ -35,7 +33,7 @@ type Props = {
  * (frozen into the run), and which addresses. The profile's strategy is
  * previewed here so there is no surprise about what will be simulated.
  */
-export function NewRunDialog({ open, onOpenChange, selected, allAddresses, noUserIdAddresses, onCreated }: Props) {
+export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCreated }: Props) {
   const { profiles, currentProfileId } = useProfile();
   const [name, setName] = useState("");
   const [days, setDays] = useState("7");
@@ -94,7 +92,6 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, noUse
   }, [open, profileId]);
 
   const addresses = scope === "selected" ? selected : allAddresses;
-  const slowCount = noUserIdAddresses ? addresses.filter((a) => noUserIdAddresses.has(a)).length : 0;
   const daysNumber = Number(days);
   const daysValid = Number.isInteger(daysNumber) && daysNumber >= 1 && daysNumber <= MAX_DAYS;
   // Empty or 0 = no limit.
@@ -185,7 +182,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, noUse
               aria-invalid={!maxSignaturesValid}
             />
             <p className="text-xs text-muted-foreground">
-              A very busy address takes very long to read, so one with more than this inside the window is stopped and marked Skipped. It counts signatures for an address read over RPC and trades for one with a user ID. 0 = no limit.
+              A very busy address takes very long to read, so one with more than this inside the window is stopped and marked Skipped. It counts trades (signatures, if an address ever has to be read from the chain over RPC). 0 = no limit.
             </p>
           </div>
 
@@ -236,12 +233,6 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, noUse
                 All on the list ({allAddresses.length})
               </Button>
             </div>
-            {slowCount > 0 && (
-              <p className="text-xs text-amber-500">
-                {slowCount} of these {slowCount === 1 ? "has" : "have"} no pump.fun user ID, so {slowCount === 1 ? "it is" : "they are"} read from the chain over RPC - much slower. Add {slowCount === 1 ? "it" : "them"} again as JSON with the user ID to
-                speed that up.
-              </p>
-            )}
           </div>
         </div>
 

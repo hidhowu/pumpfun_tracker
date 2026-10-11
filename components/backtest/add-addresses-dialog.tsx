@@ -25,7 +25,7 @@ const ADDRESS_LIKE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
  *  - JSON from pump.fun wallets - `[{ "walletAddress": "...", "userId": "..." }, ...]` (a single object works too). The user id is what makes
  *    collecting an address fast, so this is the preferred format;
  *  - plain text, one address per line, optionally followed by a label ("<address> My label" or "<address>,My label"). A line holding only
- *    addresses (space/comma separated) adds each of them. These have no user id, so they are collected over RPC (slow).
+ *    addresses (space/comma separated) adds each of them. These have no user id, so the wallet address is used in its place.
  * Returns the entries, or `error` when the text looks like JSON but is not valid.
  */
 export function parseAddressInput(text: string): { entries: Array<{ address: string; label: string; userId: string }>; error?: string } {
@@ -117,8 +117,8 @@ export function AddAddressesDialog({ onAdded }: { onAdded: () => void }) {
         <DialogHeader>
           <DialogTitle>Add addresses to backtest</DialogTitle>
           <DialogDescription>
-            Paste JSON with each wallet&apos;s pump.fun user ID - that is what makes a backtest fast, because the trades come straight from pump.fun.
-            Plain addresses (one per line, optionally followed by a label) still work, but they are read from the chain over RPC, which is much slower.
+            Paste JSON with each wallet&apos;s pump.fun user ID if you have it - the trades come straight from pump.fun, and the address is tried as a backup.
+            Plain addresses (one per line, optionally followed by a label) work too: pump.fun accepts the wallet address in place of the user ID.
             Pasting an address that is already listed with a user ID gives it that ID. Adding one never affects your Traders list.
           </DialogDescription>
         </DialogHeader>

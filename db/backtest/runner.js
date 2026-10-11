@@ -8,7 +8,7 @@ import { BacktestSettings } from "../models/BacktestSettings.js";
 import { logEvent } from "../systemLog.js";
 import { resolveBacktestSettings } from "./settings.js";
 import { BacktestRpcPool } from "./rpcPool.js";
-import { PumpTradesClient } from "./pumpTradesClient.js";
+import { PumpTradesClient, EmptyPageError } from "./pumpTradesClient.js";
 import { Semaphore } from "./slotPool.js";
 import { collectAddress, StopRequested, SignatureLimitExceeded } from "./collector.js";
 import { collectAddressViaApi } from "./apiCollector.js";
@@ -223,7 +223,8 @@ export class BacktestWorker {
     try {
       if (!rt.collect?.done) {
         await BacktestRunTrader.updateOne({ _id: rt._id }, { $set: { stage: "collecting", error: null } });
-        // With a pump.fun user id the trades come straight from pump.fun (fast); without one the chain has to be read over RPC.
+        // Trades come straight from pump.fun (fast). The endpoint takes the wallet address when there is no user id, so every address can use it;
+        // reading the chain over RPC (slow) is only the fallback for an address the endpoint keeps answering blank pages for.
         const userId = rt.userId || (await BacktestAddress.findOne({ address: rt.address }, { userId: 1 }).lean())?.userId || "";
         const common = {
           address: rt.address,
@@ -233,9 +234,16 @@ export class BacktestWorker {
           progress: (patch) => writer.set(patch),
           maxSignatures: run.maxSignatures || 0,
         };
-        const { failed } = userId
-          ? await collectAddressViaApi({ ...common, userId, client: this.userTrades })
-          : await collectAddress({ ...common, rpcPool: this.rpcPool, txConcurrency: settings.txParallelismPerAddress });
+        let result;
+        try {
+          result = await collectAddressViaApi({ ...common, userId, client: this.userTrades });
+        } catch (err) {
+          if (!(err instanceof EmptyPageError)) throw err;
+          logEvent("tracker", `[backtest] ${rt.address}: pump.fun kept answering blank pages, reading the chain over RPC instead`, { meta: { runId, address: rt.address } });
+          writer.set({ "collect.source": "rpc" });
+          result = await collectAddress({ ...common, rpcPool: this.rpcPool, txConcurrency: settings.txParallelismPerAddress });
+        }
+        const { failed } = result;
         await writer.flush();
         await BacktestRunTrader.updateOne(
           { _id: rt._id },

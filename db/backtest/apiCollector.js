@@ -1,6 +1,7 @@
 import { BacktestTx } from "../models/BacktestTx.js";
 import { BacktestScan } from "../models/BacktestScan.js";
 import { StopRequested, SignatureLimitExceeded } from "./collector.js";
+import { EmptyPageError } from "./pumpTradesClient.js";
 
 // Quote assets, not tokens: wrapped SOL and the big stablecoins. A swap of one of these isn't a copy-tradable buy/sell.
 const QUOTE_MINTS = new Set([
@@ -9,6 +10,8 @@ const QUOTE_MINTS = new Set([
   "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
 ]);
 const USER_TRADES_PAGE = 100; // page size requested from the API (see PumpTradesClient)
+// Going back to the previous page for a fresh cursor, then trying the next page again: this many rounds before the id is given up on.
+const RESCAN_ROUNDS = 3;
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 
 /** Cursor that returns trades strictly older than the END of second `sec` (so a trade in second `sec` itself is included). */
@@ -60,7 +63,7 @@ function toTxDocs(address, rows) {
  * @param {(patch: object) => void} p.progress
  * @param {number} [p.maxSignatures]  skip the address (SignatureLimitExceeded) when its window holds more trades than this
  */
-export async function collectAddressViaApi({ address, userId, windowStartSec, windowEndSec, client, shouldStop, progress, maxSignatures = 0 }) {
+async function collectWithId({ address, userId, nudge, windowStartSec, windowEndSec, client, shouldStop, progress, maxSignatures = 0 }) {
   const scan = await BacktestScan.findOne({ address }).lean();
   const haveApi = scan && scan.apiCoverFrom != null && scan.apiCoverTo != null;
 
@@ -101,17 +104,43 @@ export async function collectAddressViaApi({ address, userId, windowStartSec, wi
     if (maxSignatures > 0 && found > maxSignatures) throw new SignatureLimitExceeded(found, maxSignatures, "trades");
   };
 
+  /**
+   * One page after `cursor`. The endpoint now and then answers with a blank page for a cursor that has history behind it;
+   * the client already retried that through several proxies. If it still fails, go back to the previous page (`prevCursor`)
+   * to get a fresh cursor from it and ask for the next page again, before the error is let through.
+   */
+  const fetchPage = async (cursor, prevCursor) => {
+    for (let round = 0; ; round++) {
+      try {
+        return await client.fetchUserTrades(userId, cursor, { nudge: nudge && round >= RESCAN_ROUNDS });
+      } catch (err) {
+        if (!(err instanceof EmptyPageError) || round >= RESCAN_ROUNDS) throw err;
+        if (shouldStop()) throw new StopRequested();
+        if (prevCursor) {
+          try {
+            const again = await client.fetchUserTrades(userId, prevCursor);
+            if (again.nextCursor) cursor = again.nextCursor;
+          } catch (err2) {
+            if (!(err2 instanceof EmptyPageError)) throw err2;
+          }
+        }
+      }
+    }
+  };
+
   /** Pages one stretch of time backwards, newest first, until it is read past the start of `span`. */
   const readSlice = async (span, startCursor) => {
     let cursor = startCursor;
+    let prev = null;
     for (;;) {
       if (failed) return;
       if (shouldStop()) throw new StopRequested();
-      const page = await client.fetchUserTrades(userId, cursor);
+      const page = await fetchPage(cursor, prev);
       await store(page, span);
       const oldest = page.trades.length > 0 ? Math.min(...page.trades.map((t) => t.ts)) : null;
       if (!page.nextCursor || (page.trades.length === 0 && page.nextCursor === cursor)) return; // end of the wallet's history
       if (oldest != null && oldest < span.from) return; // read past the start of the span
+      prev = cursor;
       cursor = page.nextCursor;
     }
   };
@@ -122,7 +151,7 @@ export async function collectAddressViaApi({ address, userId, windowStartSec, wi
     // that are read at the same time, spread over the proxies. Sparse wallets stay at one page.
     await client.refresh();
     if (shouldStop()) throw new StopRequested();
-    const first = await client.fetchUserTrades(userId, cursorAfter(span.to));
+    const first = await fetchPage(cursorAfter(span.to), null);
     await store(first, span);
     const oldest = first.trades.length > 0 ? Math.min(...first.trades.map((t) => t.ts)) : null;
     if (!first.nextCursor || first.trades.length === 0) continue;
@@ -163,4 +192,30 @@ export async function collectAddressViaApi({ address, userId, windowStartSec, wi
 
   progress({ "collect.listing": false, "collect.signaturesFound": found, "collect.signaturesToProcess": 0, "collect.signaturesProcessed": 0, "collect.signaturesFailed": 0 });
   return { failed: 0 };
+}
+
+/**
+ * Collects an address's trades from the user-trades API. The endpoint accepts the wallet address in place of the pump.fun
+ * user id, so every address can use it - one added without an id too. Tried in turn, each from the beginning (what is already
+ * saved is simply written again):
+ *   1. the user id, if there is one;
+ *   2. the wallet address;
+ *   3. the same id once more, now also allowed to rebuild a stuck cursor slightly further back (can skip a short gap).
+ * Only a persistent blank page (EmptyPageError) moves on to the next try; any other error ends the collect as before.
+ *
+ * @param {object} p  as collectWithId, with `userId` optional ("" = none) and `address` used as the id when there is none
+ */
+export async function collectAddressViaApi({ userId, ...rest }) {
+  const ids = [...new Set([userId, rest.address].filter(Boolean))];
+  const plan = [...ids.map((id) => ({ id, nudge: false })), { id: ids[ids.length - 1], nudge: true }];
+  let lastError;
+  for (const { id, nudge } of plan) {
+    try {
+      return await collectWithId({ ...rest, userId: id, nudge });
+    } catch (err) {
+      if (!(err instanceof EmptyPageError)) throw err;
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
