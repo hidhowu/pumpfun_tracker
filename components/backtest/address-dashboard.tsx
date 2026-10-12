@@ -17,6 +17,7 @@ import { AddressOpenPositions } from "./address-open-positions";
 import { AddressPnlPanel } from "./address-pnl-panel";
 import { AddressStrategyPanel } from "./address-strategy-panel";
 import { AddressTradeHistory } from "./address-trade-history";
+import { AddressQualityCard } from "./address-quality-card";
 import { AddressWalletCard } from "./address-wallet-card";
 import { ProgressBar, RunStatusBadge, StageBadge, formatDate, stageDescription } from "./shared";
 
@@ -213,6 +214,8 @@ export function AddressDashboard({ runId, address }: { runId: string; address: s
       <BlacklistDialog open={blacklistOpen} onOpenChange={setBlacklistOpen} addresses={[address]} onDone={() => {}} />
 
       <AddressWalletCard wallet={wallet} />
+
+      <AddressQualityCard daily={trader.stats.daily} />
 
       <Tabs defaultValue="simulation" className="flex flex-col gap-4">
         <TabsList className="max-w-full justify-start overflow-x-auto">

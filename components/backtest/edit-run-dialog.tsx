@@ -39,7 +39,8 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
 
   const locked = run.status === "queued" || run.status === "running";
 
-  // Start from the run's current values every time the dialog opens.
+  // Start from the run's current values when the dialog OPENS - and only then. The page re-fetches the run every few seconds, which hands in
+  // fresh `settings` / `earlyStop` objects each time; depending on them here wiped whatever was being typed.
   useEffect(() => {
     if (!open) return;
     setName(run.name);
@@ -47,7 +48,8 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
     setProfileId(KEEP);
     setTiming(toTimingValues(run.settings));
     setScreening(toScreeningValues(run));
-  }, [open, run.name, run.maxSignatures, run.settings, run.earlyStop, run.addressParallelism]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const limitNumber = maxSignatures === "" ? 0 : Number(maxSignatures);
   const limitValid = Number.isInteger(limitNumber) && limitNumber >= 0;

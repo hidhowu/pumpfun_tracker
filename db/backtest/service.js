@@ -11,6 +11,7 @@ import { resolveBacktestSettings } from "./settings.js";
 import { addTradersBulk, isValidSolanaAddress, setBlacklisted } from "../traderService.js";
 import { traderProgressPercent, runProgressPercent, estimateRemainingMs } from "./progress.js";
 import { getRunAddress as getRunAddressDetail } from "./addressView.js";
+import { summariseDays } from "./dayStats.js";
 
 const DAY_MS = 86_400_000;
 const USER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -465,11 +466,30 @@ function finishStats(row) {
   };
 }
 
-const EMPTY_STATS = finishStats(null);
+const EMPTY_STATS = { ...finishStats(null), daily: summariseDays([]) };
 
+/** Per address: the headline stats plus the day-by-day quality figures (loss days, profit margin, without the best day). `runId` must be an ObjectId. */
 async function statsByAddress(runId, address) {
-  const rows = await BacktestPosition.aggregate([{ $match: address ? { runId, address } : { runId } }, { $group: { _id: "$address", ...POSITION_STATS_GROUP } }]);
-  return new Map(rows.map((r) => [r._id, finishStats(r)]));
+  const match = address ? { runId, address } : { runId };
+  const [rows, dayRows] = await Promise.all([
+    BacktestPosition.aggregate([{ $match: match }, { $group: { _id: "$address", ...POSITION_STATS_GROUP } }]),
+    BacktestPosition.aggregate([
+      { $match: { ...match, status: "closed", closedAt: { $ne: null } } },
+      {
+        $group: {
+          _id: { address: "$address", day: { $dateToString: { format: "%Y-%m-%d", date: "$closedAt", timezone: "UTC" } } },
+          pnlUsd: { $sum: "$realizedPnlUsd" },
+          pct: { $sum: "$realizedPnlPercent" },
+        },
+      },
+    ]),
+  ]);
+  const daysBy = new Map();
+  for (const r of dayRows) {
+    if (!daysBy.has(r._id.address)) daysBy.set(r._id.address, []);
+    daysBy.get(r._id.address).push({ date: r._id.day, pnlUsd: r.pnlUsd || 0, pct: r.pct || 0 });
+  }
+  return new Map(rows.map((r) => [r._id, { ...finishStats(r), daily: summariseDays((daysBy.get(r._id) ?? []).sort((a, b) => (a.date < b.date ? -1 : 1))) }]));
 }
 
 /** One address of a run: its progress, stats and simulated wallet - for the address page. */

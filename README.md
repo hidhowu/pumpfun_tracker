@@ -190,6 +190,17 @@ in the queue to be judged again; the results are kept. **Addresses at once** is 
 backtest (empty = automatic; 1 = one address at a time so it gets every proxy) and may
 be changed while it runs.
 
+**Picking steady traders.** Each address in a backtest also shows how its profit is
+spread over the days (a day = a UTC day with a closed trade, using its combined %):
+**Loss days** (days that closed in a loss), **Profit margin** = (profit days - loss
+days) / profit days, e.g. +100% and -20% give 80% (losses took 20% of the profit; near 0
+means the losing days ate almost everything), and **Without best day**: the result if
+the single most profitable day had not happened, flagged "still profit" or "turns loss"
+so one lucky day cannot carry a poor trader to the top. The addresses table sorts by
+all of these (and Trades / Win rate) and filters by minimum win rate, minimum profit
+margin, maximum loss days, minimum trades and "still profitable without best day"; the
+address page has the same figures in a Consistency card.
+
 Speed is set by proxies (pump.fun allows ~1 request/s per IP; requests are
 round-robined with a per-proxy rate limit and `Retry-After` cooldowns) and RPCs
 (per-endpoint rate limit). On the RPC page an endpoint can be set to **Backtests

@@ -18,6 +18,20 @@ export type BacktestAddressView = {
   liveStatus: "active" | "blacklisted" | null;
 };
 
+/** Day-by-day quality of one trader (a day = a UTC day with at least one closed trade; percents are the combined % of that day). See db/backtest/dayStats.js. */
+export type BacktestDaySummary = {
+  tradingDays: number;
+  lossDays: number;
+  profitDays: number;
+  grossProfitPercent: number;
+  grossLossPercent: number;
+  /** (profit - loss) / profit * 100 over the days: how much of the profit is left after the losing days. null = no profitable day. */
+  profitMarginPercent: number | null;
+  bestDay: { date: string; pnlUsd: number; percent: number } | null;
+  /** The same trader with its best day removed. null = no day yet. */
+  withoutBestDay: { combinedPercent: number; pnlUsd: number; lossDays: number; profitMarginPercent: number | null; stillProfitable: boolean } | null;
+};
+
 export type BacktestStats = {
   closed: number;
   open: number;
@@ -31,6 +45,8 @@ export type BacktestStats = {
   bestPercent: number | null;
   worstPercent: number | null;
   unrealizedUsd: number;
+  // Only on a run's addresses (not the run-level totals).
+  daily?: BacktestDaySummary;
 };
 
 /** The profile settings a backtest follows, frozen when it was created. */
