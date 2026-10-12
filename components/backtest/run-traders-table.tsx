@@ -35,6 +35,23 @@ const sortValue: Record<SortKey, (t: BacktestRunTraderView) => number> = {
   progress: (t) => t.progressPercent,
 };
 
+/**
+ * Failed and skipped / stopped-early addresses belong ONLY under their own filter - never under Profitable or Losing, whatever
+ * they made before they ended. An address still being worked on shows under In progress whether it is winning or losing right
+ * now (and also under Profitable / Losing by its results so far).
+ */
+function matchesFilter(t: BacktestRunTraderView, filter: Filter): boolean {
+  const failed = t.stage === "failed";
+  const skipped = t.stage === "skipped";
+  const running = !failed && !skipped && t.stage !== "done";
+  if (filter === "failed") return failed;
+  if (filter === "skipped") return skipped;
+  if (filter === "running") return running;
+  if (filter === "profitable") return !failed && !skipped && t.stats.closed > 0 && t.stats.realizedPnlUsd > 0;
+  if (filter === "losing") return !failed && !skipped && t.stats.closed > 0 && t.stats.realizedPnlUsd < 0;
+  return true;
+}
+
 function SortHead({
   label,
   k,
@@ -74,14 +91,7 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
   const [limits, setLimits] = useState({ minWinRate: "", minMargin: "", maxLossDays: "", minTrades: "", holdsWithoutBest: false });
 
   const rows = useMemo(() => {
-    const filtered = traders.filter((t) => {
-      if (filter === "profitable") return t.stats.closed > 0 && t.stats.realizedPnlUsd > 0;
-      if (filter === "losing") return t.stats.closed > 0 && t.stats.realizedPnlUsd < 0;
-      if (filter === "running") return t.stage !== "done" && t.stage !== "failed" && t.stage !== "skipped";
-      if (filter === "failed") return t.stage === "failed";
-      if (filter === "skipped") return t.stage === "skipped";
-      return true;
-    });
+    const filtered = traders.filter((t) => matchesFilter(t, filter));
     const num = (s: string) => (s.trim() === "" || !Number.isFinite(Number(s)) ? null : Number(s));
     const minWin = num(limits.minWinRate);
     const minMargin = num(limits.minMargin);
@@ -126,7 +136,7 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
       <div className="flex flex-wrap gap-1.5">
         {FILTERS.map((f) => (
           <Button key={f.value} size="sm" variant={filter === f.value ? "default" : "outline"} onClick={() => setFilter(f.value)}>
-            {f.label}
+            {f.label} <span className="ml-1 text-xs opacity-70">{traders.filter((t) => matchesFilter(t, f.value)).length}</span>
           </Button>
         ))}
       </div>
