@@ -16,6 +16,8 @@ const BacktestRunTraderSchema = new Schema({
 
   stage: { type: String, enum: ["pending", "collecting", "simulating", "done", "failed", "skipped"], default: "pending" },
   error: { type: String, default: null },
+  // Set when the address was stopped early as a loss trader (stage "skipped", `error` says why); null for every other skip.
+  stopReason: { type: String, enum: ["loss_days", "day_loss_cap", "negative_balance", "loss_at_progress", null], default: null },
   // The pump.fun user id this address was collected with (copied from the backtest list when the run was created); "" = collect over RPC.
   userId: { type: String, default: "" },
 

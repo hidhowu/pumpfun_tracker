@@ -11,7 +11,7 @@ export async function GET() {
   return NextResponse.json({ runs: JSON.parse(JSON.stringify(runs)) });
 }
 
-/** Body: { name?: string, days: number, profileId: string, addresses: string[], maxSignatures?: number (0 = no limit, default 50,000), overrides?: { executionDelaySeconds?, riskCheckIntervalSeconds?, fillLatencySeconds? } } */
+/** Body: { name?: string, days: number, profileId: string, addresses: string[], maxSignatures?: number (0 = no limit, default 50,000), overrides?: { executionDelaySeconds?, riskCheckIntervalSeconds?, fillLatencySeconds? }, earlyStop?: { lossDays?, dayLossPercent?, negativeBalanceEvents?, lossAtProgressPercent? } (0 = rule off), addressParallelism?: number | null (null = automatic) } */
 export async function POST(request: NextRequest) {
   const denied = await requireApiSession();
   if (denied) return denied;
@@ -25,6 +25,8 @@ export async function POST(request: NextRequest) {
       addresses: Array.isArray(body.addresses) ? body.addresses.filter((a: unknown) => typeof a === "string") : [],
       ...(body.maxSignatures !== undefined ? { maxSignatures: Number(body.maxSignatures) } : {}),
       ...(body.overrides && typeof body.overrides === "object" ? { overrides: body.overrides } : {}),
+      ...(body.earlyStop && typeof body.earlyStop === "object" ? { earlyStop: body.earlyStop } : {}),
+      ...(body.addressParallelism !== undefined ? { addressParallelism: body.addressParallelism === null || body.addressParallelism === "" ? null : Number(body.addressParallelism) } : {}),
     });
     return NextResponse.json({ run: JSON.parse(JSON.stringify(run)) });
   } catch (err) {

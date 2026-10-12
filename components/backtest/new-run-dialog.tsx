@@ -13,6 +13,7 @@ import { getSettings } from "@/lib/api";
 import { useProfile } from "@/lib/profile-context";
 import type { BacktestStrategy } from "@/lib/backtest-types";
 import { StrategyChips } from "./shared";
+import { ScreeningFields, parseScreening, type ScreeningValues } from "./screening-fields";
 import { TimingFields, parseTiming, toTimingValues, type TimingValues } from "./timing-fields";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +44,8 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
   const [submitting, setSubmitting] = useState(false);
   const [strategy, setStrategy] = useState<BacktestStrategy | null>(null);
   const [timing, setTiming] = useState<TimingValues | null>(null);
+  const [screening, setScreening] = useState<ScreeningValues>({ addressParallelism: "", lossDays: "0", dayLossPercent: "0", negativeBalanceEvents: "0", lossAtProgressPercent: "0" });
+  const [autoParallelism, setAutoParallelism] = useState<number | undefined>();
 
   // Each time the dialog opens: default to the selection if there is one, else everything, and to the profile currently in use.
   useEffect(() => {
@@ -59,6 +62,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
     Promise.all([getSettings(profileId), getBacktestSettings().catch(() => null)])
       .then(([{ settings }, backtest]) => {
         if (cancelled) return;
+        setAutoParallelism(backtest?.effective.addressParallelism);
         setTiming(
           toTimingValues({
             executionDelaySeconds: settings.defaultExecutionDelaySeconds ?? 2,
@@ -99,6 +103,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
   const maxSignaturesValid = Number.isInteger(maxSignaturesNumber) && maxSignaturesNumber >= 0;
 
   const timingNumbers = timing ? parseTiming(timing) : null;
+  const screeningNumbers = parseScreening(screening);
 
   async function handleSubmit() {
     if (!daysValid) {
@@ -117,13 +122,17 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
       toast.error("Check the timing settings - each must be a number in range");
       return;
     }
+    if (!screeningNumbers) {
+      toast.error("Check the speed and loss-trader settings - each must be a number in range");
+      return;
+    }
     if (addresses.length === 0) {
       toast.error("No addresses to backtest");
       return;
     }
     setSubmitting(true);
     try {
-      const { run } = await createBacktestRun({ name: name.trim() || undefined, days: daysNumber, profileId, addresses, maxSignatures: maxSignaturesNumber, ...(timingNumbers ? { overrides: timingNumbers } : {}) });
+      const { run } = await createBacktestRun({ name: name.trim() || undefined, days: daysNumber, profileId, addresses, maxSignatures: maxSignaturesNumber, ...(timingNumbers ? { overrides: timingNumbers } : {}), earlyStop: screeningNumbers.earlyStop, addressParallelism: screeningNumbers.addressParallelism });
       toast.success(`Backtest started on ${addresses.length} address${addresses.length === 1 ? "" : "es"}`);
       onOpenChange(false);
       onCreated(run._id);
@@ -217,6 +226,16 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
             </div>
           )}
 
+          <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+            <div>
+              <p className="text-sm font-medium">Speed and loss traders</p>
+              <p className="text-xs text-muted-foreground">
+                Work through a large list faster: choose how many addresses run at once, and drop a trader that is clearly losing instead of simulating every token it bought.
+              </p>
+            </div>
+            <ScreeningFields values={screening} onChange={setScreening} autoParallelism={autoParallelism} />
+          </div>
+
           <div className="space-y-1.5">
             <Label>Addresses</Label>
             <div className="flex flex-wrap gap-2">
@@ -240,7 +259,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
           <DialogClose asChild>
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
-          <Button onClick={handleSubmit} disabled={submitting || addresses.length === 0 || !daysValid || !maxSignaturesValid || (timing !== null && !timingNumbers)}>
+          <Button onClick={handleSubmit} disabled={submitting || addresses.length === 0 || !daysValid || !maxSignaturesValid || !screeningNumbers || (timing !== null && !timingNumbers)}>
             {submitting && <Loader2 className="size-4 animate-spin" />}
             Start backtest
           </Button>

@@ -26,6 +26,15 @@ const BacktestRunSchema = new Schema({
   addresses: { type: [String], default: [] },
   // An address with more signatures than this inside the window is skipped instead of collected (0 / missing = no limit).
   maxSignatures: { type: Number, default: 0 },
+  // Early stop (see db/backtest/earlyStop.js): a trader that is clearly losing is dropped instead of worked to the end. Each rule is off at 0.
+  earlyStop: {
+    lossDays: { type: Number, default: 0 }, // stop after this many full days that closed in a loss
+    dayLossPercent: { type: Number, default: 0 }, // stop when one full day closed at or below minus this percent
+    negativeBalanceEvents: { type: Number, default: 0 }, // stop after this many buys that left the simulated wallet below zero
+    lossAtProgressPercent: { type: Number, default: 0 }, // stop once this percent of the tokens are processed and the P&L is still negative
+  },
+  // How many addresses of THIS run are worked on at once (null = the worker's automatic number, see Backtest settings).
+  addressParallelism: { type: Number, default: null },
 
   status: { type: String, enum: ["queued", "running", "paused", "completed", "cancelled", "failed"], default: "queued", index: true },
   control: { type: String, enum: ["run", "pause", "cancel"], default: "run" },

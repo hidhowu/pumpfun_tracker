@@ -60,6 +60,7 @@ export type BacktestRunProgress = {
   addressesDone: number;
   addressesFailed: number;
   addressesSkipped: number;
+  addressesStoppedEarly?: number; // part of addressesSkipped: dropped as loss traders
   addressesSettled: number;
   etaMs: number | null;
 };
@@ -76,6 +77,9 @@ export type BacktestRunDefinition = {
   addresses: string[];
   // An address with more signatures than this in the window is skipped (0 / missing = no limit).
   maxSignatures?: number;
+  // Loss-trader rules (0 = off) and how many addresses of this backtest run at once (null / missing = automatic). Runs made before these existed have neither.
+  earlyStop?: { lossDays: number; dayLossPercent: number; negativeBalanceEvents?: number; lossAtProgressPercent: number };
+  addressParallelism?: number | null;
   status: BacktestStatus;
   control: "run" | "pause" | "cancel";
   error: string | null;

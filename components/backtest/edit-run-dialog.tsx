@@ -12,12 +12,13 @@ import { updateBacktestRun } from "@/lib/backtest-api";
 import { useProfile } from "@/lib/profile-context";
 import type { BacktestRunDefinition } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
+import { ScreeningFields, parseScreening, toScreeningValues, type ScreeningValues } from "./screening-fields";
 import { TimingFields, parseTiming, toTimingValues, type TimingValues } from "./timing-fields";
 
 const KEEP = "keep";
 
 type Props = {
-  run: Pick<BacktestRunDefinition, "_id" | "name" | "status" | "maxSignatures" | "profileName" | "settings">;
+  run: Pick<BacktestRunDefinition, "_id" | "name" | "status" | "maxSignatures" | "profileName" | "settings" | "earlyStop" | "addressParallelism">;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
@@ -33,6 +34,7 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
   const [maxSignatures, setMaxSignatures] = useState(String(run.maxSignatures ?? 0));
   const [profileId, setProfileId] = useState(KEEP);
   const [timing, setTiming] = useState<TimingValues>(() => toTimingValues(run.settings));
+  const [screening, setScreening] = useState<ScreeningValues>(() => toScreeningValues(run));
   const [saving, setSaving] = useState(false);
 
   const locked = run.status === "queued" || run.status === "running";
@@ -44,7 +46,8 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
     setMaxSignatures(String(run.maxSignatures ?? 0));
     setProfileId(KEEP);
     setTiming(toTimingValues(run.settings));
-  }, [open, run.name, run.maxSignatures, run.settings]);
+    setScreening(toScreeningValues(run));
+  }, [open, run.name, run.maxSignatures, run.settings, run.earlyStop, run.addressParallelism]);
 
   const limitNumber = maxSignatures === "" ? 0 : Number(maxSignatures);
   const limitValid = Number.isInteger(limitNumber) && limitNumber >= 0;
@@ -55,7 +58,11 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
   const timingNumbers = parseTiming(timing);
   const before = toTimingValues(run.settings);
   const timingChanged = (Object.keys(before) as Array<keyof TimingValues>).some((k) => Number(before[k]) !== Number(timing[k]));
-  const dirty = nameChanged || (!locked && (limitChanged || recopy || timingChanged));
+  const screeningNumbers = parseScreening(screening);
+  const screeningBefore = toScreeningValues(run);
+  const stopChanged = (['lossDays', 'dayLossPercent', 'negativeBalanceEvents', 'lossAtProgressPercent'] as const).some((k) => Number(screeningBefore[k]) !== Number(screening[k]));
+  const parallelismChanged = screeningBefore.addressParallelism !== screening.addressParallelism;
+  const dirty = nameChanged || parallelismChanged || (!locked && (limitChanged || recopy || timingChanged || stopChanged));
 
   async function save() {
     if (!limitValid) {
@@ -66,6 +73,10 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
       toast.error("Check the timing settings - each must be a number in range");
       return;
     }
+    if (!screeningNumbers) {
+      toast.error("Check the speed and loss-trader settings - each must be a number in range");
+      return;
+    }
     setSaving(true);
     try {
       const res = await updateBacktestRun(run._id, {
@@ -73,6 +84,8 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
         ...(nameChanged ? { name: name.trim() } : {}),
         ...(!locked && limitChanged ? { maxSignatures: limitNumber } : {}),
         ...(!locked && recopy ? { profileId } : {}),
+        ...(!locked && stopChanged ? { earlyStop: screeningNumbers.earlyStop } : {}),
+        ...(parallelismChanged ? { addressParallelism: screeningNumbers.addressParallelism } : {}),
       });
       const parts = ["Backtest updated"];
       if (res.requeuedSkipped > 0) parts.push(`${res.requeuedSkipped} skipped address${res.requeuedSkipped === 1 ? "" : "es"} queued again`);
@@ -155,11 +168,22 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
           )}
         </div>
 
+        <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+          <p className="text-sm font-medium">Speed and loss traders</p>
+          <ScreeningFields values={screening} onChange={setScreening} disabled={locked} disabledKeys={["addressParallelism"]} />
+          {stopChanged && !locked && (
+            <p className="flex items-start gap-1.5 text-xs text-amber-500">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              Traders already stopped early are queued again and judged on the new rules; results so far are kept.
+            </p>
+          )}
+        </div>
+
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
-          <Button onClick={save} disabled={saving || !dirty || !limitValid || !timingNumbers}>
+          <Button onClick={save} disabled={saving || !dirty || !limitValid || !timingNumbers || !screeningNumbers}>
             {saving && <Loader2 className="size-4 animate-spin" />}
             Save
           </Button>

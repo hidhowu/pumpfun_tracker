@@ -14,6 +14,7 @@ import { collectAddress, StopRequested, SignatureLimitExceeded } from "./collect
 import { collectAddressViaApi } from "./apiCollector.js";
 import { groupTradesByMint, listSignals, findTraderSell } from "./signals.js";
 import { simulatePosition, UnresolvedError } from "./simulator.js";
+import { EarlyStopError, evaluateEarlyStop, hasEarlyStop } from "./earlyStop.js";
 import { sleep } from "./slotPool.js";
 
 const TICK_MS = 2000;
@@ -151,9 +152,14 @@ export class BacktestWorker {
 
       // ---- claim more addresses up to the parallelism limit, oldest run first
       const settings = await this.#settings();
-      let free = settings.addressParallelism - this.active.size;
+      // A run with its own "addresses at once" gets exactly that many; the others share the worker's automatic number.
+      const activeBy = new Map();
+      for (const k of this.active.keys()) activeBy.set(k.split(":")[0], (activeBy.get(k.split(":")[0]) ?? 0) + 1);
+      const ownRuns = new Set(live.filter((r) => r.addressParallelism > 0).map((r) => String(r._id)));
+      let sharedFree = settings.addressParallelism - [...activeBy].filter(([id]) => !ownRuns.has(id)).reduce((n, [, c]) => n + c, 0);
       for (const run of live) {
-        if (free <= 0) break;
+        const own = ownRuns.has(String(run._id));
+        let free = own ? run.addressParallelism - (activeBy.get(String(run._id)) ?? 0) : sharedFree;
         while (free > 0) {
           const rt = await BacktestRunTrader.findOneAndUpdate(
             {
@@ -171,6 +177,7 @@ export class BacktestWorker {
           }
           this.#launch(run, rt);
           free -= 1;
+          if (!own) sharedFree -= 1;
         }
       }
 
@@ -268,6 +275,15 @@ export class BacktestWorker {
         await BacktestRunTrader.updateOne({ _id: rt._id }, { $set: { claimedBy: null, leaseUntil: null } });
         return;
       }
+      if (err instanceof EarlyStopError) {
+        // Assumed a loss trader: stop here and keep what was simulated so far. Shown as skipped, with the reason.
+        logEvent("tracker", `[backtest] Backtest address ${rt.address}: ${err.message}`, { meta: { runId, address: rt.address, reason: err.reason } });
+        await BacktestRunTrader.updateOne(
+          { _id: rt._id },
+          { $set: { stage: "skipped", stopReason: err.reason, error: err.message, finishedAt: new Date(), claimedBy: null, leaseUntil: null } }
+        );
+        return;
+      }
       if (err instanceof SignatureLimitExceeded) {
         // Too busy an address for this backtest's limit - a deliberate skip, not a failure.
         logEvent("tracker", `[backtest] Backtest address ${rt.address} skipped: ${err.message}`, { meta: { runId, address: rt.address } });
@@ -338,22 +354,46 @@ export class BacktestWorker {
       if (settled.has(s.mint)) finished[i] = true;
     });
     let prefix = 0;
+    let throughMs = 0; // everything before this instant is simulated - what the early-stop rules treat as final
     const advance = () => {
       while (prefix < signals.length && finished[prefix]) prefix += 1;
       const through = prefix >= signals.length ? new Date(windowEndSec * 1000) : new Date(signals[prefix].buys[0].blockTime * 1000);
+      throughMs = through.getTime();
       writer.set({ "sim.simulatedThrough": through });
     };
     advance();
 
+    // ---- early stop: a trader that is clearly losing is dropped (see earlyStop.js). Checked before any work and after every position.
+    const rules = run.earlyStop;
+    let halted = null;
+    const stopNow = () => shouldStop() || halted !== null;
+    const checkEarlyStop = () => {
+      if (halted || !hasEarlyStop(rules)) return;
+      const closed = [];
+      const cashEvents = [];
+      for (const p of settled.values()) {
+        if (p.status === "skipped" || !p.openedAt) continue;
+        cashEvents.push({ t: new Date(p.openedAt).getTime(), delta: -((p.costBasisUsd || 0) + (p.buyFeeUsd || 0)), order: 1 });
+        if (p.status === "closed" && p.closedAt) {
+          const t = new Date(p.closedAt).getTime();
+          closed.push({ closedAtMs: t, pnlUsd: p.realizedPnlUsd || 0, pnlPercent: p.realizedPnlPercent || 0 });
+          cashEvents.push({ t, delta: (p.proceedsUsd || 0) - (p.sellFeeUsd || 0), order: 0 });
+        }
+      }
+      const hit = evaluateEarlyStop(rules, { closed, cashEvents, startingUsd: startingBalance, throughMs, signalsDone, signalsTotal: signals.length });
+      if (hit) halted = new EarlyStopError(hit.reason, hit.message);
+    };
+    checkEarlyStop();
+
     const processSignal = async (index) => {
       const sig = signals[index];
       if (settled.has(sig.mint)) return;
-      if (shouldStop()) throw new StopRequested();
+      if (stopNow()) throw new StopRequested();
 
       let doc = null;
       for (let attempt = 1; attempt <= SIGNAL_RETRIES; attempt++) {
         try {
-          doc = await this.#evaluateSignal({ run, sig, settings, strategy, windowEndSec, canOpen: enforceBalance ? canOpen : null, shouldStop });
+          doc = await this.#evaluateSignal({ run, sig, settings, strategy, windowEndSec, canOpen: enforceBalance ? canOpen : null, shouldStop: stopNow });
           break;
         } catch (err) {
           if (err instanceof StopRequested) throw err;
@@ -380,17 +420,21 @@ export class BacktestWorker {
       finished[index] = true;
       publish();
       advance();
+      checkEarlyStop();
     };
 
     const concurrency = enforceBalance ? 1 : settings.positionParallelism;
     this.positionGate.setLimit(settings.positionParallelism);
     let next = 0;
     const lanes = Array.from({ length: Math.max(1, Math.min(concurrency, signals.length)) }, async () => {
-      while (next < signals.length) {
+      while (next < signals.length && !halted) {
         const index = next++;
         await this.positionGate.acquire();
         try {
           await processSignal(index);
+        } catch (err) {
+          if (halted && err instanceof StopRequested) return; // the abort that came from the early stop itself
+          throw err;
         } finally {
           this.positionGate.release();
         }
@@ -398,6 +442,7 @@ export class BacktestWorker {
     });
     await Promise.all(lanes);
     await writer.flush();
+    if (halted && !finished.every(Boolean)) throw halted;
   }
 
   /** Works through a token's buys oldest-first until one is a real (non-dust) buy, and simulates it. Returns a BacktestPosition-shaped object. */

@@ -219,11 +219,39 @@ function cleanTiming(overrides) {
   return out;
 }
 
-/** @param {{name: string, days: number, profileId: string, addresses: string[], maxSignatures?: number, overrides?: object}} p  maxSignatures: skip an address with more signatures than this in the window (0 = no limit); overrides: timing values (see TIMING_LIMITS) that replace the profile's */
-export async function createBacktestRun({ name, days, profileId, addresses, maxSignatures = DEFAULT_MAX_SIGNATURES, overrides }) {
+/** The early-stop rules (see earlyStop.js) with every field present; 0 = rule off. Throws on a value that is present but unusable. */
+const EARLY_STOP_LIMITS = { lossDays: [0, 1000, true], dayLossPercent: [0, 1_000_000, false], negativeBalanceEvents: [0, 100_000, true], lossAtProgressPercent: [0, 100, false] };
+function cleanEarlyStop(input, base = {}) {
+  const out = {};
+  for (const [key, [lo, hi, whole]] of Object.entries(EARLY_STOP_LIMITS)) {
+    const v = input?.[key];
+    if (v === undefined || v === null || v === "") {
+      out[key] = base[key] ?? 0;
+      continue;
+    }
+    if (typeof v !== "number" || !Number.isFinite(v) || v < lo || v > hi || (whole && !Number.isInteger(v))) {
+      throw new Error(`${key} must be ${whole ? "a whole number" : "a number"} between ${lo} and ${hi} (0 = off)`);
+    }
+    out[key] = v;
+  }
+  return out;
+}
+
+/** "Addresses at once" for one run: null / "" / 0 = automatic. */
+function cleanParallelism(v) {
+  if (v === undefined) return undefined;
+  if (v === null || v === "" || v === 0) return null;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 500) throw new Error("Addresses at once must be a whole number between 1 and 500 (empty = automatic)");
+  return v;
+}
+
+/** @param {{name: string, days: number, profileId: string, addresses: string[], maxSignatures?: number, overrides?: object, earlyStop?: object, addressParallelism?: number|null}} p  maxSignatures: skip an address with more signatures than this in the window (0 = no limit); overrides: timing values (see TIMING_LIMITS) that replace the profile's */
+export async function createBacktestRun({ name, days, profileId, addresses, maxSignatures = DEFAULT_MAX_SIGNATURES, overrides, earlyStop, addressParallelism }) {
   if (!Number.isFinite(days) || days < 1 || days > MAX_BACKTEST_DAYS) throw new Error(`days must be between 1 and ${MAX_BACKTEST_DAYS}`);
   if (!Number.isFinite(maxSignatures) || maxSignatures < 0) throw new Error("The signature limit must be 0 (no limit) or a positive number");
   const timing = cleanTiming(overrides);
+  const stopRules = cleanEarlyStop(earlyStop);
+  const parallelism = cleanParallelism(addressParallelism) ?? null;
   const unique = [...new Set(addresses)];
   if (unique.length === 0) throw new Error("Select at least one address");
   const profile = await Profile.findById(profileId).lean();
@@ -247,6 +275,8 @@ export async function createBacktestRun({ name, days, profileId, addresses, maxS
     settings: { ...(await snapshotProfileSettings(profile._id)), ...timing },
     addresses: runAddresses,
     maxSignatures: Math.floor(maxSignatures),
+    earlyStop: stopRules,
+    addressParallelism: parallelism,
     status: "queued",
   });
   await BacktestRunTrader.insertMany(runAddresses.map((address) => ({ runId: run._id, address, userId: userIdBy.get(address) || "" })));
@@ -262,10 +292,10 @@ const FRESH_SIM = {
 };
 
 /** Puts addresses that ended in `stage` back to "pending" so the worker picks them up again. Returns how many. */
-async function requeueAddresses(runId, stage) {
+async function requeueAddresses(runId, stage, extraFilter = {}) {
   const res = await BacktestRunTrader.updateMany(
-    { runId, stage },
-    { $set: { stage: "pending", error: null, claimedBy: null, leaseUntil: null, finishedAt: null, "collect.listing": false } }
+    { runId, stage, ...extraFilter },
+    { $set: { stage: "pending", stopReason: null, error: null, claimedBy: null, leaseUntil: null, finishedAt: null, "collect.listing": false } }
   );
   return res.modifiedCount || 0;
 }
@@ -274,8 +304,8 @@ async function requeueAddresses(runId, stage) {
 async function resetSimulation(runId) {
   await BacktestPosition.deleteMany({ runId });
   await BacktestRunTrader.updateMany(
-    { runId, stage: { $in: ["done", "simulating"] } },
-    { $set: { stage: "pending", error: null, claimedBy: null, leaseUntil: null, finishedAt: null, ...FRESH_SIM } }
+    { runId, $or: [{ stage: { $in: ["done", "simulating"] } }, { stage: "skipped", stopReason: { $ne: null } }] }, // stopped-early traders are judged again on the new numbers
+    { $set: { stage: "pending", stopReason: null, error: null, claimedBy: null, leaseUntil: null, finishedAt: null, ...FRESH_SIM } }
   );
 }
 
@@ -302,7 +332,7 @@ export async function controlBacktestRun(runId, action) {
     if (res.modifiedCount > 0) await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued", finishedAt: null, error: null } });
   } else if (action === "retry_skipped") {
     if (ACTIVE_STATUSES.includes(run.status)) throw new Error("Pause the backtest first");
-    const n = await requeueAddresses(runId, "skipped");
+    const n = await requeueAddresses(runId, "skipped"); // includes the ones stopped early: they continue unless the rules still stop them
     if (n === 0) throw new Error("No skipped addresses to retry");
     if (run.status === "completed" || run.status === "failed") {
       await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued", finishedAt: null, error: null } });
@@ -328,9 +358,11 @@ export async function controlBacktestRun(runId, action) {
  * A finished backtest that gets work queued this way is set to "paused" - press
  * Resume to run it. (A cancelled or paused one stays as it is.)
  * @param {string} runId
- * @param {{name?: string, maxSignatures?: number, profileId?: string, overrides?: object}} patch
+ *  - earlyStop: the loss-trader rules (see earlyStop.js). Needs a pause. Changing them puts the traders already stopped early back in the queue, to be judged on the new rules; results are kept.
+ *  - addressParallelism: how many addresses of this backtest are worked at once (null = automatic). May change while it runs.
+ * @param {{name?: string, maxSignatures?: number, profileId?: string, overrides?: object, earlyStop?: object, addressParallelism?: number|null}} patch
  */
-export async function updateBacktestRun(runId, { name, maxSignatures, profileId, overrides } = {}) {
+export async function updateBacktestRun(runId, { name, maxSignatures, profileId, overrides, earlyStop, addressParallelism } = {}) {
   const run = await BacktestRun.findById(runId);
   if (!run) throw new Error("Backtest not found");
   const set = {};
@@ -338,11 +370,14 @@ export async function updateBacktestRun(runId, { name, maxSignatures, profileId,
 
   const timing = cleanTiming(overrides);
   const changesTiming = Object.keys(timing).some((k) => run.settings?.[k] !== timing[k]);
-  const changesSettings = maxSignatures !== undefined || profileId || changesTiming;
+  const changesSettings = maxSignatures !== undefined || profileId || changesTiming || earlyStop !== undefined;
   if (changesSettings && ACTIVE_STATUSES.includes(run.status)) throw new Error("Pause the backtest before editing its settings");
 
   let requeuedSkipped = 0;
   let resimulated = false;
+  // The number of addresses worked at once is read by the worker every couple of seconds, so it may change while the backtest runs.
+  const parallelism = cleanParallelism(addressParallelism);
+  if (parallelism !== undefined) set.addressParallelism = parallelism;
 
   if (maxSignatures !== undefined) {
     if (!Number.isFinite(maxSignatures) || maxSignatures < 0) throw new Error("The signature limit must be 0 (no limit) or a positive number");
@@ -350,7 +385,18 @@ export async function updateBacktestRun(runId, { name, maxSignatures, profileId,
     const prev = run.maxSignatures || 0;
     set.maxSignatures = next;
     // Skipped addresses only make sense to retry when the limit got looser.
-    if (prev > 0 && (next === 0 || next > prev)) requeuedSkipped = await requeueAddresses(runId, "skipped");
+    if (prev > 0 && (next === 0 || next > prev)) requeuedSkipped = await requeueAddresses(runId, "skipped", { stopReason: null });
+  }
+
+  if (earlyStop !== undefined) {
+    const current = run.toObject().earlyStop ?? {};
+    const next = cleanEarlyStop(earlyStop, current);
+    const prev = cleanEarlyStop(current);
+    if (Object.keys(next).some((k) => next[k] !== prev[k])) {
+      set.earlyStop = next;
+      // Traders already dropped under the old rules get judged again under the new ones.
+      requeuedSkipped += await requeueAddresses(runId, "skipped", { stopReason: { $ne: null } });
+    }
   }
 
   if (profileId) {
@@ -442,6 +488,7 @@ function runProgress(run, runTraders) {
     addressesDone: runTraders.filter((rt) => rt.stage === "done").length,
     addressesFailed: runTraders.filter((rt) => rt.stage === "failed").length,
     addressesSkipped: runTraders.filter((rt) => rt.stage === "skipped").length,
+    addressesStoppedEarly: runTraders.filter((rt) => rt.stage === "skipped" && rt.stopReason).length, // part of addressesSkipped: dropped as loss traders
     addressesSettled: settled,
     etaMs: ACTIVE_STATUSES.includes(run.status) ? estimateRemainingMs(percent, run.activeMs || 0) : null,
   };
@@ -451,7 +498,7 @@ function runProgress(run, runTraders) {
 export async function listBacktestRuns() {
   const [runs, runTraders, totals] = await Promise.all([
     BacktestRun.find({}).sort({ createdAt: -1 }).lean(),
-    BacktestRunTrader.find({}, { runId: 1, stage: 1, collect: 1, sim: 1 }).lean(),
+    BacktestRunTrader.find({}, { runId: 1, stage: 1, stopReason: 1, collect: 1, sim: 1 }).lean(),
     BacktestPosition.aggregate([{ $group: { _id: "$runId", ...POSITION_STATS_GROUP } }]),
   ]);
   const tradersBy = new Map();

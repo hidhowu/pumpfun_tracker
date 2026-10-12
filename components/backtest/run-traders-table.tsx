@@ -18,7 +18,7 @@ const FILTERS: Array<{ value: Filter; label: string }> = [
   { value: "losing", label: "Losing" },
   { value: "running", label: "In progress" },
   { value: "failed", label: "Failed" },
-  { value: "skipped", label: "Skipped" },
+  { value: "skipped", label: "Skipped / stopped early" },
 ];
 
 const sortValue: Record<SortKey, (t: BacktestRunTraderView) => number> = {

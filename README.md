@@ -169,6 +169,27 @@ Per address, in two stages (both resumable, progress and partial P&L visible liv
    the token is. A backtest made before these settings existed has none of them
    and keeps looking at every pool trade with no extra reaction time.
 
+**Loss traders and speed.** For a long list, a backtest can drop a trader that is
+clearly losing instead of simulating every token it bought. Four optional rules,
+each off at 0, set when the backtest is created (or edited while paused); any one
+that fires drops the trader, which shows as "Skipped / stopped early" with the
+reason and keeps the trades simulated so far:
+
+- **Losing days** - this many full UTC days closed in a loss (not necessarily in a row).
+- **Day loss** - one full day closed at or below minus this percent (the combined
+  percent the daily breakdown shows, e.g. 1000 = -1000%).
+- **Negative balance** - the simulated wallet's cash went below zero this many times
+  (the "negative balance events" of the address page; needs a profile that allows a
+  negative balance).
+- **Still losing at N% of tokens** - once N% of its tokens are processed the realized
+  P&L is still negative.
+
+A day only counts once the simulation has fully passed it, so a rule never fires on a
+figure that can still change. Changing the rules puts the traders stopped earlier back
+in the queue to be judged again; the results are kept. **Addresses at once** is set per
+backtest (empty = automatic; 1 = one address at a time so it gets every proxy) and may
+be changed while it runs.
+
 Speed is set by proxies (pump.fun allows ~1 request/s per IP; requests are
 round-robined with a per-proxy rate limit and `Retry-After` cooldowns) and RPCs
 (per-endpoint rate limit). On the RPC page an endpoint can be set to **Backtests

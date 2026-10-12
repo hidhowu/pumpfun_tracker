@@ -253,6 +253,21 @@ export function RunDashboard({ runId }: { runId: string }) {
         {run.maxSignatures ? (
           <p className="text-xs text-muted-foreground">Addresses with more than {run.maxSignatures.toLocaleString()} signatures in the window are skipped.</p>
         ) : null}
+        {run.earlyStop && (run.earlyStop.lossDays > 0 || run.earlyStop.dayLossPercent > 0 || (run.earlyStop.negativeBalanceEvents ?? 0) > 0 || run.earlyStop.lossAtProgressPercent > 0) ? (
+          <p className="text-xs text-muted-foreground">
+            A trader is dropped as a loss trader{" "}
+            {[
+              run.earlyStop.lossDays > 0 ? `after ${run.earlyStop.lossDays} losing day${run.earlyStop.lossDays === 1 ? "" : "s"}` : null,
+              run.earlyStop.dayLossPercent > 0 ? `when one day loses ${run.earlyStop.dayLossPercent}% or more` : null,
+              (run.earlyStop.negativeBalanceEvents ?? 0) > 0 ? `once its balance has gone negative ${run.earlyStop.negativeBalanceEvents} times` : null,
+              run.earlyStop.lossAtProgressPercent > 0 ? `if still in loss after ${run.earlyStop.lossAtProgressPercent}% of its tokens` : null,
+            ]
+              .filter(Boolean)
+              .join(", or ")}
+            {progress.addressesStoppedEarly ? ` (${progress.addressesStoppedEarly} dropped so far)` : ""}.
+          </p>
+        ) : null}
+        {run.addressParallelism ? <p className="text-xs text-muted-foreground">Working on {run.addressParallelism} address{run.addressParallelism === 1 ? "" : "es"} at a time.</p> : null}
       </div>
 
       <Tabs defaultValue="addresses" className="flex flex-col gap-4">
