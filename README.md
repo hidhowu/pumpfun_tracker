@@ -190,6 +190,16 @@ in the queue to be judged again; the results are kept. **Addresses at once** is 
 backtest (empty = automatic; 1 = one address at a time so it gets every proxy) and may
 be changed while it runs.
 
+**Day by day.** One scheduler hands out the "trades at once" slots across all addresses,
+a day at a time: while an address still has a trade of its current day waiting, none of
+its later days start, so the rules above judge a complete day and nothing is simulated for
+a trader that is about to be dropped. When an address has handed out all of its day and
+is only waiting for the last trades, the free slots go to the next address instead (up to
+twice "Addresses at once" are kept in play: that many at the front, as many again on
+standby, older first). Only when no address has a trade of its current day waiting does a
+slot take a trade of the next day, so a proxy never sits idle; it never looks further than
+one day ahead.
+
 **Picking steady traders.** Each address in a backtest also shows how its profit is
 spread over the days (a day = a UTC day with a closed trade, using its combined %):
 **Loss days** (days that closed in a loss), **Profit margin** = (profit days - loss

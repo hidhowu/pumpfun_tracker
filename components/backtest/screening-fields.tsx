@@ -14,7 +14,7 @@ const FIELDS: Field[] = [
   {
     key: "addressParallelism",
     label: "Addresses at once",
-    help: "How many addresses are worked on at the same time. Lower it (1 = one by one) so each address gets every proxy and finishes fast, instead of many crawling together. Empty = automatic.",
+    help: "How many addresses are served first. As many again are kept on standby and take the capacity the front ones leave free while they wait for the last trades of a day (1 = one at a time gets every proxy first). Empty = automatic.",
     max: 500,
     whole: true,
   },

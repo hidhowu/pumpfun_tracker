@@ -36,19 +36,18 @@ const sortValue: Record<SortKey, (t: BacktestRunTraderView) => number> = {
 };
 
 /**
- * Failed and skipped / stopped-early addresses belong ONLY under their own filter - never under Profitable or Losing, whatever
- * they made before they ended. An address still being worked on shows under In progress whether it is winning or losing right
- * now (and also under Profitable / Losing by its results so far).
+ * Every address sits under exactly one status filter. Until a final decision is made it is In progress - winning or losing right
+ * now makes no difference. Only a finished address is Profitable or Losing; failed and skipped / stopped-early ones have their own.
  */
 function matchesFilter(t: BacktestRunTraderView, filter: Filter): boolean {
   const failed = t.stage === "failed";
   const skipped = t.stage === "skipped";
-  const running = !failed && !skipped && t.stage !== "done";
+  const done = t.stage === "done";
   if (filter === "failed") return failed;
   if (filter === "skipped") return skipped;
-  if (filter === "running") return running;
-  if (filter === "profitable") return !failed && !skipped && t.stats.closed > 0 && t.stats.realizedPnlUsd > 0;
-  if (filter === "losing") return !failed && !skipped && t.stats.closed > 0 && t.stats.realizedPnlUsd < 0;
+  if (filter === "running") return !failed && !skipped && !done;
+  if (filter === "profitable") return done && t.stats.closed > 0 && t.stats.realizedPnlUsd > 0;
+  if (filter === "losing") return done && t.stats.closed > 0 && t.stats.realizedPnlUsd < 0;
   return true;
 }
 

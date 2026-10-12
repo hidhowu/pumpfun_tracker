@@ -9,7 +9,7 @@ import { logEvent } from "../systemLog.js";
 import { resolveBacktestSettings } from "./settings.js";
 import { BacktestRpcPool } from "./rpcPool.js";
 import { PumpTradesClient, EmptyPageError } from "./pumpTradesClient.js";
-import { Semaphore } from "./slotPool.js";
+import { PositionScheduler } from "./positionScheduler.js";
 import { collectAddress, StopRequested, SignatureLimitExceeded } from "./collector.js";
 import { collectAddressViaApi } from "./apiCollector.js";
 import { groupTradesByMint, listSignals, findTraderSell } from "./signals.js";
@@ -19,6 +19,9 @@ import { sleep } from "./slotPool.js";
 
 const TICK_MS = 2000;
 const LEASE_MS = 60_000;
+// "Addresses at once" = N means N addresses are served first and N more are collected and started on standby: when the front ones are
+// waiting for their last trades of a day, the freed capacity goes to the standby ones' current day instead of racing ahead to a later day.
+const STANDBY_FACTOR = 2;
 const SIGNAL_RETRIES = 3;
 const MEMO_BUCKET_SECONDS = 900;
 const MEMO_REACH_BUCKETS = 24; // +-6h
@@ -81,7 +84,8 @@ export class BacktestWorker {
     this.pump = new PumpTradesClient();
     this.userTrades = new PumpTradesClient({ rpsSetting: "userTradesRps" }); // same proxies, paced for the user-trades endpoint
     this.memo = new UsdPerSolMemo();
-    this.positionGate = new Semaphore(1); // positions being simulated at once, across ALL addresses (limit = settings.positionParallelism)
+    this.scheduler = new PositionScheduler(); // which position is simulated next, across ALL addresses (slots = settings.positionParallelism)
+    this.launchSeq = 0; // claim order of addresses: the older one gets the free slots first
     this.active = new Map(); // `${runId}:${address}` -> promise
     this.runControl = new Map(); // runId -> "run" | "pause" | "cancel"
     this.settingsCache = { at: 0, value: null };
@@ -152,14 +156,15 @@ export class BacktestWorker {
 
       // ---- claim more addresses up to the parallelism limit, oldest run first
       const settings = await this.#settings();
-      // A run with its own "addresses at once" gets exactly that many; the others share the worker's automatic number.
+      // A run with its own "addresses at once" keeps that many addresses at the front plus as many again on standby (see STANDBY_FACTOR);
+      // the others share the worker's automatic number.
       const activeBy = new Map();
       for (const k of this.active.keys()) activeBy.set(k.split(":")[0], (activeBy.get(k.split(":")[0]) ?? 0) + 1);
       const ownRuns = new Set(live.filter((r) => r.addressParallelism > 0).map((r) => String(r._id)));
       let sharedFree = settings.addressParallelism - [...activeBy].filter(([id]) => !ownRuns.has(id)).reduce((n, [, c]) => n + c, 0);
       for (const run of live) {
         const own = ownRuns.has(String(run._id));
-        let free = own ? run.addressParallelism - (activeBy.get(String(run._id)) ?? 0) : sharedFree;
+        let free = own ? run.addressParallelism * STANDBY_FACTOR - (activeBy.get(String(run._id)) ?? 0) : sharedFree;
         while (free > 0) {
           const rt = await BacktestRunTrader.findOneAndUpdate(
             {
@@ -208,9 +213,14 @@ export class BacktestWorker {
 
   #launch(run, rt) {
     const key = `${run._id}:${rt.address}`;
-    const task = this.#processAddress(run, rt)
+    const order = this.launchSeq++;
+    const task = this.#processAddress(run, rt, order)
       .catch((err) => console.error(`[backtest] ${key} crashed:`, err))
-      .finally(() => this.active.delete(key));
+      .finally(() => {
+        this.active.delete(key);
+        // Take the next address right away instead of leaving the freed place empty until the next tick.
+        this.tick().catch((err) => console.error("[backtest] tick failed:", err.message || err));
+      });
     this.active.set(key, task);
   }
 
@@ -218,7 +228,7 @@ export class BacktestWorker {
     return this.stopping || this.runControl.get(String(runId)) !== "run";
   }
 
-  async #processAddress(run, rt) {
+  async #processAddress(run, rt, order) {
     const runId = String(run._id);
     const shouldStop = () => this.#shouldStop(runId);
     const writer = progressWriter(rt._id);
@@ -260,7 +270,7 @@ export class BacktestWorker {
 
       if (!rt.sim?.done) {
         await BacktestRunTrader.updateOne({ _id: rt._id }, { $set: { stage: "simulating" } });
-        await this.#simulateAddress({ run, rt, settings, windowStartSec, windowEndSec, writer, shouldStop });
+        await this.#simulateAddress({ run, rt, settings, windowStartSec, windowEndSec, writer, shouldStop, order });
         await writer.flush();
       }
 
@@ -302,7 +312,7 @@ export class BacktestWorker {
     }
   }
 
-  async #simulateAddress({ run, rt, settings, windowStartSec, windowEndSec, writer, shouldStop }) {
+  async #simulateAddress({ run, rt, settings, windowStartSec, windowEndSec, writer, shouldStop, order }) {
     const strategy = run.settings;
     const address = rt.address;
 
@@ -423,24 +433,81 @@ export class BacktestWorker {
       checkEarlyStop();
     };
 
-    const concurrency = enforceBalance ? 1 : settings.positionParallelism;
-    this.positionGate.setLimit(settings.positionParallelism);
-    let next = 0;
-    const lanes = Array.from({ length: Math.max(1, Math.min(concurrency, signals.length)) }, async () => {
-      while (next < signals.length && !halted) {
-        const index = next++;
-        await this.positionGate.acquire();
-        try {
-          await processSignal(index);
-        } catch (err) {
-          if (halted && err instanceof StopRequested) return; // the abort that came from the early stop itself
-          throw err;
-        } finally {
-          this.positionGate.release();
-        }
+    // ---- hand the positions to the shared scheduler, one day at a time (see positionScheduler.js).
+    // `dayOf[i]` counts the distinct UTC days that have a position: the position's day is the day of its first buy, the same day the
+    // early-stop rules treat as complete once everything before it is simulated.
+    const dayOf = [];
+    let lastDay = null;
+    let dayNo = -1;
+    for (const s of signals) {
+      const d = Math.floor(s.buys[0].blockTime / 86400);
+      if (d !== lastDay) {
+        lastDay = d;
+        dayNo += 1;
       }
+      dayOf.push(dayNo);
+    }
+
+    const started = signals.map((s) => settled.has(s.mint));
+    const maxInFlight = enforceBalance ? 1 : Infinity; // a profile that forbids a negative balance has to go position by position
+    let cursor = 0; // first position not handed out yet
+    let inFlight = 0;
+    let failure = null;
+    let finishedSource = false;
+    let resolveDone;
+    let rejectDone;
+    const done = new Promise((resolve, reject) => {
+      resolveDone = resolve;
+      rejectDone = reject;
     });
-    await Promise.all(lanes);
+    const nothingLeft = () => {
+      while (cursor < signals.length && started[cursor]) cursor += 1;
+      return cursor >= signals.length;
+    };
+
+    const source = {
+      order,
+      settle: () => {
+        if (finishedSource || inFlight > 0) return;
+        if (failure) {
+          finishedSource = true;
+          rejectDone(failure);
+        } else if (nothingLeft() || halted) {
+          finishedSource = true;
+          resolveDone();
+        } else if (shouldStop()) {
+          finishedSource = true;
+          rejectDone(new StopRequested());
+        }
+      },
+      claim: (lookAhead) => {
+        if (finishedSource || failure || stopNow() || inFlight >= maxInFlight || nothingLeft()) return null;
+        // `prefix` is the first position not finished, so its day is the day being worked on.
+        if (dayOf[cursor] - dayOf[prefix] > (lookAhead ? 1 : 0)) return null;
+        const index = cursor++;
+        started[index] = true;
+        inFlight += 1;
+        return {
+          run: async () => {
+            try {
+              await processSignal(index);
+            } catch (err) {
+              if (!(halted && err instanceof StopRequested) && !failure) failure = err; // the abort that came from the early stop itself is not a failure
+            } finally {
+              inFlight -= 1;
+            }
+          },
+        };
+      },
+    };
+
+    this.scheduler.setLimit(settings.positionParallelism);
+    this.scheduler.add(source);
+    try {
+      await done;
+    } finally {
+      this.scheduler.remove(source);
+    }
     await writer.flush();
     if (halted && !finished.every(Boolean)) throw halted;
   }
