@@ -14,11 +14,12 @@ import type { BacktestRunDefinition } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
 import { ScreeningFields, parseScreening, toScreeningValues, type ScreeningValues } from "./screening-fields";
 import { TimingFields, parseTiming, toTimingValues, type TimingValues } from "./timing-fields";
+import { CombinedFields, parseCombined, toCombinedValues, type CombinedValues } from "./combined-fields";
 
 const KEEP = "keep";
 
 type Props = {
-  run: Pick<BacktestRunDefinition, "_id" | "name" | "status" | "maxSignatures" | "profileName" | "settings" | "earlyStop" | "addressParallelism">;
+  run: Pick<BacktestRunDefinition, "_id" | "name" | "status" | "maxSignatures" | "profileName" | "settings" | "earlyStop" | "addressParallelism" | "daysAtOnce" | "mode" | "combined">;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
@@ -28,6 +29,19 @@ type Props = {
  * Edit one backtest: its name any time; the signature limit and the strategy
  * (re-copied from a profile) while it is paused, cancelled or finished.
  */
+/** The wallet fields of a combined backtest as the form shows them (its trade amount and fees live in the strategy). */
+const combinedValuesOf = (run: Props["run"]): CombinedValues | null =>
+  run.mode === "combined" && run.combined
+    ? toCombinedValues({
+        startingBalanceUsd: run.combined.startingBalanceUsd,
+        tradeSizeUsd: run.settings.tradeSizeUsd,
+        pumpFeePercent: run.settings.pumpFeePercent,
+        jitoFeeUsd: run.settings.jitoFeeUsd,
+        resetDaily: run.combined.resetDaily,
+        allowNegativeBalance: run.combined.allowNegativeBalance,
+      })
+    : null;
+
 export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
   const { profiles } = useProfile();
   const [name, setName] = useState(run.name);
@@ -35,6 +49,7 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
   const [profileId, setProfileId] = useState(KEEP);
   const [timing, setTiming] = useState<TimingValues>(() => toTimingValues(run.settings));
   const [screening, setScreening] = useState<ScreeningValues>(() => toScreeningValues(run));
+  const [combined, setCombined] = useState<CombinedValues | null>(() => combinedValuesOf(run));
   const [saving, setSaving] = useState(false);
 
   const locked = run.status === "queued" || run.status === "running";
@@ -48,6 +63,7 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
     setProfileId(KEEP);
     setTiming(toTimingValues(run.settings));
     setScreening(toScreeningValues(run));
+    setCombined(combinedValuesOf(run));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -62,9 +78,18 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
   const timingChanged = (Object.keys(before) as Array<keyof TimingValues>).some((k) => Number(before[k]) !== Number(timing[k]));
   const screeningNumbers = parseScreening(screening);
   const screeningBefore = toScreeningValues(run);
-  const stopChanged = (['lossDays', 'dayLossPercent', 'negativeBalanceEvents', 'lossAtProgressPercent'] as const).some((k) => Number(screeningBefore[k]) !== Number(screening[k]));
+  const isCombined = run.mode === "combined";
+  const stopChanged = !isCombined && (['lossDays', 'dayLossPercent', 'negativeBalanceEvents', 'lossAtProgressPercent'] as const).some((k) => Number(screeningBefore[k]) !== Number(screening[k]));
   const parallelismChanged = screeningBefore.addressParallelism !== screening.addressParallelism;
-  const dirty = nameChanged || parallelismChanged || (!locked && (limitChanged || recopy || timingChanged || stopChanged));
+  const daysChanged = Number(screeningBefore.daysAtOnce || 0) !== Number(screening.daysAtOnce || 0);
+
+  // Combined wallet: the balance, the daily reset and the negative-balance switch only change how finished trades are added up (allowed while it
+  // runs); the trade amount and the fees change what is simulated (paused only, results cleared like a timing change).
+  const combinedNumbers = combined ? parseCombined(combined) : null;
+  const combinedBefore = combinedValuesOf(run);
+  const walletChanged = !!combined && !!combinedBefore && (Number(combined.startingBalanceUsd) !== Number(combinedBefore.startingBalanceUsd) || combined.resetDaily !== combinedBefore.resetDaily || combined.allowNegativeBalance !== combinedBefore.allowNegativeBalance);
+  const feesChanged = !!combined && !!combinedBefore && (["tradeSizeUsd", "pumpFeePercent", "jitoFeeUsd"] as const).some((k) => Number(combined[k]) !== Number(combinedBefore[k]));
+  const dirty = nameChanged || parallelismChanged || daysChanged || walletChanged || (!locked && (limitChanged || recopy || timingChanged || stopChanged || feesChanged));
 
   async function save() {
     if (!limitValid) {
@@ -79,15 +104,28 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
       toast.error("Check the speed and loss-trader settings - each must be a number in range");
       return;
     }
+    if (combined && !combinedNumbers) {
+      toast.error("Check the combined wallet settings - each must be a number in range");
+      return;
+    }
     setSaving(true);
     try {
+      // The trade amount and the fees are overrides like the timing: they change what is simulated.
+      const overrides = {
+        ...(timingChanged ? timingNumbers : {}),
+        ...(feesChanged && combinedNumbers ? { tradeSizeUsd: combinedNumbers.tradeSizeUsd, pumpFeePercent: combinedNumbers.pumpFeePercent, jitoFeeUsd: combinedNumbers.jitoFeeUsd } : {}),
+      };
       const res = await updateBacktestRun(run._id, {
-        ...(!locked && timingChanged ? { overrides: timingNumbers } : {}),
+        ...(!locked && (timingChanged || feesChanged) ? { overrides } : {}),
+        ...(walletChanged && combinedNumbers
+          ? { combined: { startingBalanceUsd: combinedNumbers.startingBalanceUsd, resetDaily: combinedNumbers.resetDaily, allowNegativeBalance: combinedNumbers.allowNegativeBalance } }
+          : {}),
         ...(nameChanged ? { name: name.trim() } : {}),
         ...(!locked && limitChanged ? { maxSignatures: limitNumber } : {}),
         ...(!locked && recopy ? { profileId } : {}),
         ...(!locked && stopChanged ? { earlyStop: screeningNumbers.earlyStop } : {}),
         ...(parallelismChanged ? { addressParallelism: screeningNumbers.addressParallelism } : {}),
+        ...(daysChanged ? { daysAtOnce: screeningNumbers.daysAtOnce } : {}),
       });
       const parts = ["Backtest updated"];
       if (res.requeuedSkipped > 0) parts.push(`${res.requeuedSkipped} skipped address${res.requeuedSkipped === 1 ? "" : "es"} queued again`);
@@ -159,6 +197,20 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
           </div>
         </div>
 
+        {combined && (
+          <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+            <p className="text-sm font-medium">Combined wallet and fees</p>
+            <CombinedFields values={combined} onChange={setCombined} lockedKeys={locked ? ["tradeSizeUsd", "pumpFeePercent", "jitoFeeUsd"] : []} idPrefix="edit-bt-combined" />
+            {feesChanged && !locked && (
+              <p className="flex items-start gap-1.5 text-xs text-amber-500">
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                Changing the trade amount or the fees clears the results so far and every address is simulated again (collected transactions are reused).
+              </p>
+            )}
+            {walletChanged && !feesChanged && <p className="text-xs text-muted-foreground">The wallet is added up again from the finished trades - nothing is simulated again.</p>}
+          </div>
+        )}
+
         <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
           <p className="text-sm font-medium">Timing</p>
           <TimingFields values={timing} onChange={setTiming} disabled={locked} />
@@ -171,8 +223,8 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
         </div>
 
         <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
-          <p className="text-sm font-medium">Speed and loss traders</p>
-          <ScreeningFields values={screening} onChange={setScreening} disabled={locked} disabledKeys={["addressParallelism"]} />
+          <p className="text-sm font-medium">{isCombined ? "Speed" : "Speed and loss traders"}</p>
+          <ScreeningFields values={screening} onChange={setScreening} disabled={locked} disabledKeys={["addressParallelism", "daysAtOnce"]} speedOnly={isCombined} />
           {stopChanged && !locked && (
             <p className="flex items-start gap-1.5 text-xs text-amber-500">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
@@ -185,7 +237,7 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
           <DialogClose asChild>
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
-          <Button onClick={save} disabled={saving || !dirty || !limitValid || !timingNumbers || !screeningNumbers}>
+          <Button onClick={save} disabled={saving || !dirty || !limitValid || !timingNumbers || !screeningNumbers || (!!combined && !combinedNumbers)}>
             {saving && <Loader2 className="size-4 animate-spin" />}
             Save
           </Button>

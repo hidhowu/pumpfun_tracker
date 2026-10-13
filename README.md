@@ -200,6 +200,14 @@ standby, older first). Only when no address has a trade of its current day waiti
 slot take a trade of the next day, so a proxy never sits idle; it never looks further than
 one day ahead.
 
+**Days at once.** The day-by-day order above is a per-backtest setting, **Days at once** (New backtest,
+or Edit; it may change while the backtest runs). It is how many UTC days of ONE address are worked on
+at the same time: `1` is the behaviour described above (a day is finished before the next starts, the
+next day only takes capacity nothing else wanted), `2` lets two days run side by side (the third only
+on spare capacity), and so on. `0` - the default - is no limit: positions of any day are taken in
+order as soon as a slot is free, which is the fastest choice when the loss-trader rules are off. With
+them on, a small number wastes less work on a trader that is about to be dropped.
+
 **Picking steady traders.** Each address in a backtest also shows how its profit is
 spread over the days (a day = a UTC day with a closed trade, using its combined %):
 **Loss days** (days that closed in a loss), **Profit margin** = (profit days - loss
@@ -210,6 +218,32 @@ so one lucky day cannot carry a poor trader to the top. The addresses table sort
 all of these (and Trades / Win rate) and filters by minimum win rate, minimum profit
 margin, maximum loss days, minimum trades and "still profitable without best day"; the
 address page has the same figures in a Consistency card.
+
+**Combined wallet.** A backtest can be created as *Combined wallet* instead of *Separate wallets*:
+all its addresses then trade as ONE wallet, like a live wallet but for a backtest. It has one
+**starting balance**, one **trade amount** used for every trade (whichever address it comes from),
+the usual number of days, and editable **fees** (pump fee % and Jito fee $ per transaction,
+copied from the profile) to see what lowering or raising them does. Each address's trades are still
+simulated on their own (a trade's result does not depend on the balance); the shared wallet is then
+added up from all the positions in the order things happened (`db/backtest/combined.js`, computed each time
+it is read, so the starting balance, reset and negative-balance switch can change at any moment without
+simulating again - only the trade amount, fees and timing clear the results):
+
+- a buy takes cost + fee out of the balance when our order fills, a sell puts proceeds - fee back when the
+  exit fills (sells settle before buys at the same instant);
+- each buy that leaves the balance below zero is one **negative-balance event** (count, deepest point and the
+  days it happened on are shown). With "allow the balance to go negative" off, a buy the balance cannot pay is
+  not taken instead (and its sell is ignored);
+- **Reset the balance every day**: every UTC day starts again from the starting balance, to test whether the
+  group can hold its balance day after day. A trade counts for the day it was entered, together with the sell
+  that closes it, even after midnight; nothing carries over between days. Without it the balance runs through
+  the whole window and a day's P&L is grouped by when its trades closed;
+- the run page gets a *Combined wallet* tab: final / lowest balance, realized P&L, negative-balance events,
+  loss days, win rate, the balance curve (or each day's P&L when the balance resets) and a day-by-day table
+  (started at, ended at, lowest, P&L, trades, went negative).
+
+A combined backtest has no loss-trader rules (dropping one address would change the wallet the others share).
+The per-address pages still show each address as if it traded alone.
 
 Speed is set by proxies (pump.fun allows ~1 request/s per IP; requests are
 round-robined with a per-proxy rate limit and `Retry-After` cooldowns) and RPCs

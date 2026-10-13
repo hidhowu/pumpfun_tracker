@@ -88,6 +88,7 @@ export class BacktestWorker {
     this.launchSeq = 0; // claim order of addresses: the older one gets the free slots first
     this.active = new Map(); // `${runId}:${address}` -> promise
     this.runControl = new Map(); // runId -> "run" | "pause" | "cancel"
+    this.runDaysAtOnce = new Map(); // runId -> days of one address worked at once (0 = no limit); refreshed every tick so an edit applies while running
     this.settingsCache = { at: 0, value: null };
     this.lastTickAt = Date.now();
     this.timer = null;
@@ -129,6 +130,7 @@ export class BacktestWorker {
 
       const runs = await BacktestRun.find({ status: { $in: ["queued", "running", "paused"] } }).sort({ createdAt: 1 }).lean();
       this.runControl = new Map(runs.map((r) => [String(r._id), r.control]));
+      this.runDaysAtOnce = new Map(runs.map((r) => [String(r._id), r.daysAtOnce || 0]));
 
       // ---- apply pause / cancel / resume requests
       for (const run of runs) {
@@ -315,6 +317,7 @@ export class BacktestWorker {
   async #simulateAddress({ run, rt, settings, windowStartSec, windowEndSec, writer, shouldStop, order }) {
     const strategy = run.settings;
     const address = rt.address;
+    const runId = String(run._id);
 
     const txs = await BacktestTx.find(
       { address, blockTime: { $gte: windowStartSec, $lte: windowEndSec } },
@@ -344,8 +347,10 @@ export class BacktestWorker {
       });
     publish();
 
-    // ---- balance ledger (only enforced when the profile forbids a negative balance)
-    const enforceBalance = strategy.allowNegativeBalance === false;
+    // ---- balance ledger (only enforced when the profile forbids a negative balance). In a combined backtest the wallet is shared by every
+    // address, so no address can judge its own balance: it simulates every trade and the shared wallet is worked out afterwards (combined.js).
+    const combined = run.mode === "combined";
+    const enforceBalance = !combined && strategy.allowNegativeBalance === false;
     const events = []; // { at, delta }
     for (const p of existing) {
       if (p.status === "skipped" || !p.openedAt) continue;
@@ -374,7 +379,7 @@ export class BacktestWorker {
     advance();
 
     // ---- early stop: a trader that is clearly losing is dropped (see earlyStop.js). Checked before any work and after every position.
-    const rules = run.earlyStop;
+    const rules = combined ? null : run.earlyStop; // one address dropping out would change the wallet the others share
     let halted = null;
     const stopNow = () => shouldStop() || halted !== null;
     const checkEarlyStop = () => {
@@ -482,8 +487,10 @@ export class BacktestWorker {
       },
       claim: (lookAhead) => {
         if (finishedSource || failure || stopNow() || inFlight >= maxInFlight || nothingLeft()) return null;
-        // `prefix` is the first position not finished, so its day is the day being worked on.
-        if (dayOf[cursor] - dayOf[prefix] > (lookAhead ? 1 : 0)) return null;
+        // `prefix` is the first position not finished, so its day is the day being worked on. With a limit of N days at once, the first N days
+        // are served normally and the day after them only with capacity nothing else wanted; 0 = no limit.
+        const daysAtOnce = this.runDaysAtOnce.get(runId) ?? run.daysAtOnce ?? 0;
+        if (daysAtOnce > 0 && dayOf[cursor] - dayOf[prefix] > (lookAhead ? daysAtOnce : daysAtOnce - 1)) return null;
         const index = cursor++;
         started[index] = true;
         inFlight += 1;

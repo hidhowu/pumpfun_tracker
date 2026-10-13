@@ -3,6 +3,8 @@ import type {
   BacktestAddressDetail,
   BacktestAddressPnl,
   BacktestAddressView,
+  BacktestCombinedConfig,
+  BacktestCombinedWallet,
   BacktestDaily,
   BacktestEquityPoint,
   BacktestPnlPeriod,
@@ -50,9 +52,24 @@ export function listBacktestRuns(): Promise<{ runs: BacktestRunSummary[] }> {
 
 export type TimingOverrides = { executionDelaySeconds?: number; riskCheckIntervalSeconds?: number; fillLatencySeconds?: number };
 
+/** What a combined backtest may change on top of the timing: the amount of every trade and the fees. */
+export type CombinedOverrides = TimingOverrides & { tradeSizeUsd?: number; pumpFeePercent?: number; jitoFeeUsd?: number };
+
 export type EarlyStopRules = { lossDays: number; dayLossPercent: number; negativeBalanceEvents: number; lossAtProgressPercent: number };
 
-export function createBacktestRun(body: { name?: string; days: number; profileId: string; addresses: string[]; maxSignatures?: number; overrides?: TimingOverrides; earlyStop?: EarlyStopRules; addressParallelism?: number | null }): Promise<{ run: BacktestRunSummary }> {
+export function createBacktestRun(body: {
+  name?: string;
+  days: number;
+  profileId: string;
+  addresses: string[];
+  maxSignatures?: number;
+  overrides?: CombinedOverrides;
+  earlyStop?: EarlyStopRules;
+  addressParallelism?: number | null;
+  daysAtOnce?: number;
+  mode?: "separate" | "combined";
+  combined?: Partial<BacktestCombinedConfig> & { startingBalanceUsd: number };
+}): Promise<{ run: BacktestRunSummary }> {
   return request(`/api/backtest/runs`, { method: "POST", body: JSON.stringify(body) });
 }
 
@@ -67,7 +84,7 @@ export function controlBacktestRun(id: string, action: "pause" | "resume" | "can
 /** Edits a backtest - see updateBacktestRun in db/backtest/service.js for what each field does. */
 export function updateBacktestRun(
   id: string,
-  update: { name?: string; maxSignatures?: number; profileId?: string; overrides?: TimingOverrides; earlyStop?: EarlyStopRules; addressParallelism?: number | null }
+  update: { name?: string; maxSignatures?: number; profileId?: string; overrides?: CombinedOverrides; earlyStop?: EarlyStopRules; addressParallelism?: number | null; daysAtOnce?: number; combined?: Partial<BacktestCombinedConfig> }
 ): Promise<{ run: BacktestRunSummary; requeuedSkipped: number; resimulated: boolean }> {
   return request(`/api/backtest/runs/${id}`, { method: "PATCH", body: JSON.stringify({ update }) });
 }
@@ -90,6 +107,11 @@ export function getBacktestPositions(
 
 export function getBacktestDaily(id: string): Promise<BacktestDaily> {
   return request(`/api/backtest/runs/${id}/daily`);
+}
+
+/** The shared wallet of a combined backtest. */
+export function getBacktestCombined(id: string): Promise<BacktestCombinedWallet> {
+  return request(`/api/backtest/runs/${id}/combined`);
 }
 
 export function getBacktestEquity(id: string, address?: string): Promise<{ points: BacktestEquityPoint[] }> {

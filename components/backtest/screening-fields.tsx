@@ -5,8 +5,8 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import type { EarlyStopRules } from "@/lib/backtest-api";
 
-export type ScreeningValues = { addressParallelism: string; lossDays: string; dayLossPercent: string; negativeBalanceEvents: string; lossAtProgressPercent: string };
-export type ScreeningNumbers = { addressParallelism: number | null; earlyStop: EarlyStopRules };
+export type ScreeningValues = { addressParallelism: string; daysAtOnce: string; lossDays: string; dayLossPercent: string; negativeBalanceEvents: string; lossAtProgressPercent: string };
+export type ScreeningNumbers = { addressParallelism: number | null; daysAtOnce: number; earlyStop: EarlyStopRules };
 
 type Field = { key: keyof ScreeningValues; label: string; help: string; max: number; whole: boolean; placeholder?: string };
 
@@ -16,6 +16,13 @@ const FIELDS: Field[] = [
     label: "Addresses at once",
     help: "How many addresses are served first. As many again are kept on standby and take the capacity the front ones leave free while they wait for the last trades of a day (1 = one at a time gets every proxy first). Empty = automatic.",
     max: 500,
+    whole: true,
+  },
+  {
+    key: "daysAtOnce",
+    label: "Days at once (per address)",
+    help: "How many days of ONE address are worked on at the same time. 1 = a day is finished before the next one starts, so the loss-trader rules below judge a complete day and nothing is simulated for a trader about to be dropped. 0 = no limit: positions of any day are taken as soon as a slot is free, which is faster when you don't use those rules. May be changed while the backtest runs.",
+    max: 1000,
     whole: true,
   },
   {
@@ -48,8 +55,9 @@ const FIELDS: Field[] = [
   },
 ];
 
-export const toScreeningValues = (run: { earlyStop?: Partial<EarlyStopRules>; addressParallelism?: number | null }): ScreeningValues => ({
+export const toScreeningValues = (run: { earlyStop?: Partial<EarlyStopRules>; addressParallelism?: number | null; daysAtOnce?: number }): ScreeningValues => ({
   addressParallelism: run.addressParallelism ? String(run.addressParallelism) : "",
+  daysAtOnce: String(run.daysAtOnce ?? 0),
   lossDays: String(run.earlyStop?.lossDays ?? 0),
   dayLossPercent: String(run.earlyStop?.dayLossPercent ?? 0),
   negativeBalanceEvents: String(run.earlyStop?.negativeBalanceEvents ?? 0),
@@ -57,7 +65,7 @@ export const toScreeningValues = (run: { earlyStop?: Partial<EarlyStopRules>; ad
 });
 
 function invalid(f: Field, raw: string) {
-  if (f.key === "addressParallelism" && raw === "") return false; // automatic
+  if ((f.key === "addressParallelism" || f.key === "daysAtOnce") && raw === "") return false; // automatic / no limit
   const n = Number(raw);
   return raw === "" || !Number.isFinite(n) || n < (f.key === "addressParallelism" ? 1 : 0) || n > f.max || (f.whole && !Number.isInteger(n));
 }
@@ -67,6 +75,7 @@ export function parseScreening(v: ScreeningValues): ScreeningNumbers | null {
   if (FIELDS.some((f) => invalid(f, v[f.key]))) return null;
   return {
     addressParallelism: v.addressParallelism === "" ? null : Number(v.addressParallelism),
+    daysAtOnce: v.daysAtOnce === "" ? 0 : Number(v.daysAtOnce),
     earlyStop: { lossDays: Number(v.lossDays), dayLossPercent: Number(v.dayLossPercent), negativeBalanceEvents: Number(v.negativeBalanceEvents), lossAtProgressPercent: Number(v.lossAtProgressPercent) },
   };
 }
@@ -78,17 +87,20 @@ export function ScreeningFields({
   disabled,
   disabledKeys = [],
   autoParallelism,
+  speedOnly,
 }: {
   values: ScreeningValues;
   onChange: (next: ScreeningValues) => void;
   disabled?: boolean;
-  /** Fields that stay editable while `disabled` is set (the address count can change while a backtest runs). */
+  /** Fields that stay editable while `disabled` is set (the address and day counts can change while a backtest runs). */
   disabledKeys?: Array<keyof ScreeningValues>;
   autoParallelism?: number;
+  /** Only the speed fields ("addresses at once", "days at once") - a combined backtest has no loss-trader rules (dropping one address would change the wallet the others share). */
+  speedOnly?: boolean;
 }) {
   return (
     <div className="space-y-3">
-      {FIELDS.map((f) => {
+      {FIELDS.filter((f) => !speedOnly || f.key === "addressParallelism" || f.key === "daysAtOnce").map((f) => {
         const bad = invalid(f, values[f.key]);
         const locked = disabled && !disabledKeys.includes(f.key);
         return (

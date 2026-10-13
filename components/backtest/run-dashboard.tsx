@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, CalendarDays, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, Pencil, RotateCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, XCircle } from "lucide-react";
+import { ArrowLeft, CalendarDays, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, Pencil, RotateCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, Wallet, XCircle } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -22,6 +23,7 @@ import { StatTile } from "@/components/traders/stat-tile";
 import { controlBacktestRun, deleteBacktestAddresses, deleteBacktestRun, getBacktestRun, promoteBacktestAddresses } from "@/lib/backtest-api";
 import { formatUsd } from "@/lib/format";
 import type { BacktestRunDetail } from "@/lib/backtest-types";
+import { CombinedWalletPanel } from "./combined-wallet-panel";
 import { DailyGrid } from "./daily-grid";
 import { EquityChart } from "./equity-chart";
 import { PositionsTable } from "./positions-table";
@@ -161,6 +163,7 @@ export function RunDashboard({ runId }: { runId: string }) {
   const failedCount = progress.addressesFailed;
   const settled = !running && run.status !== "paused";
   const pct = progress.percent;
+  const isCombined = run.mode === "combined" && !!run.combined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -175,6 +178,11 @@ export function RunDashboard({ runId }: { runId: string }) {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="min-w-0 truncate text-lg font-semibold tracking-tight">{run.name}</h1>
             <RunStatusBadge status={run.status} control={run.control} />
+            {isCombined && (
+              <Badge variant="outline" className="gap-1 border-primary/30 bg-primary/10 font-normal text-primary">
+                <Wallet className="size-3" /> Combined wallet
+              </Badge>
+            )}
           </div>
           <p className="text-sm text-muted-foreground">
             {run.days}-day window ({formatDate(run.windowStart)} – {formatDate(run.windowEnd)}) · following &quot;{run.profileName}&quot; · {run.addresses.length} address
@@ -267,11 +275,17 @@ export function RunDashboard({ runId }: { runId: string }) {
             {progress.addressesStoppedEarly ? ` (${progress.addressesStoppedEarly} dropped so far)` : ""}.
           </p>
         ) : null}
+        {run.daysAtOnce ? <p className="text-xs text-muted-foreground">Working on {run.daysAtOnce} day{run.daysAtOnce === 1 ? "" : "s"} of an address at a time.</p> : null}
         {run.addressParallelism ? <p className="text-xs text-muted-foreground">Working on {run.addressParallelism} address{run.addressParallelism === 1 ? "" : "es"} at a time.</p> : null}
       </div>
 
-      <Tabs defaultValue="addresses" className="flex flex-col gap-4">
+      <Tabs defaultValue={isCombined ? "wallet" : "addresses"} className="flex flex-col gap-4">
         <TabsList>
+          {isCombined && (
+            <TabsTrigger value="wallet" className="gap-1.5">
+              <Wallet className="size-3.5" /> Combined wallet
+            </TabsTrigger>
+          )}
           <TabsTrigger value="addresses" className="gap-1.5">
             <Users className="size-3.5" /> Addresses
           </TabsTrigger>
@@ -285,6 +299,12 @@ export function RunDashboard({ runId }: { runId: string }) {
             <Coins className="size-3.5" /> Trades
           </TabsTrigger>
         </TabsList>
+
+        {isCombined && (
+          <TabsContent value="wallet">
+            <CombinedWalletPanel runId={runId} refreshKey={refreshKey} />
+          </TabsContent>
+        )}
 
         <TabsContent value="addresses" className="flex flex-col gap-3">
           {selected.size > 0 && (

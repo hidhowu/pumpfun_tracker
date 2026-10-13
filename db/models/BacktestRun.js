@@ -24,6 +24,22 @@ const BacktestRunSchema = new Schema({
   settings: { type: Schema.Types.Mixed, required: true },
 
   addresses: { type: [String], default: [] },
+  // "separate": every address is judged on its own wallet. "combined": all addresses trade as ONE wallet with a shared starting balance
+  // (see db/backtest/combined.js) - the trades are still simulated per address, the shared balance is worked out from them in time order.
+  mode: { type: String, enum: ["separate", "combined"], default: "separate" },
+  combined: {
+    type: new Schema(
+      {
+        startingBalanceUsd: { type: Number, required: true },
+        // Every UTC day starts again from the starting balance (a trade belongs to the day it was entered).
+        resetDaily: { type: Boolean, default: false },
+        // false = a buy the balance can't pay is not taken instead of pushing the balance below zero.
+        allowNegativeBalance: { type: Boolean, default: true },
+      },
+      { _id: false }
+    ),
+    default: null,
+  },
   // An address with more signatures than this inside the window is skipped instead of collected (0 / missing = no limit).
   maxSignatures: { type: Number, default: 0 },
   // Early stop (see db/backtest/earlyStop.js): a trader that is clearly losing is dropped instead of worked to the end. Each rule is off at 0.
@@ -35,6 +51,9 @@ const BacktestRunSchema = new Schema({
   },
   // How many addresses of THIS run are worked on at once (null = the worker's automatic number, see Backtest settings).
   addressParallelism: { type: Number, default: null },
+  // How many UTC days of ONE address are worked on at once (see positionScheduler.js). 0 = no limit: positions are handed out in order as fast as slots free up.
+  // 1 = a day is finished before the next one starts (what the loss-trader rules like best). Runs made before this existed have none, which reads as 0.
+  daysAtOnce: { type: Number, default: 0 },
 
   status: { type: String, enum: ["queued", "running", "paused", "completed", "cancelled", "failed"], default: "queued", index: true },
   control: { type: String, enum: ["run", "pause", "cancel"], default: "run" },

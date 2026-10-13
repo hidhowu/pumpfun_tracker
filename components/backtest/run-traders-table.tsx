@@ -10,7 +10,7 @@ import type { BacktestRunTraderView } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
 import { ProgressBar, StageBadge, formatSignedPercent, pnlTone, stageDescription } from "./shared";
 
-type SortKey = "pnl" | "combined" | "winRate" | "trades" | "lossDays" | "margin" | "withoutBest" | "progress";
+type SortKey = "pnl" | "combined" | "avgPnl" | "winRate" | "trades" | "lossDays" | "margin" | "withoutBest" | "progress";
 type Filter = "all" | "profitable" | "losing" | "running" | "failed" | "skipped";
 
 const FILTERS: Array<{ value: Filter; label: string }> = [
@@ -24,9 +24,16 @@ const FILTERS: Array<{ value: Filter; label: string }> = [
 
 const NO_VALUE = -1e9; // sorts "no figure yet" below every real one
 
+/** Realized P&L divided by the closed trades, in dollars. null until a trade has closed. */
+const avgPnlUsd = (t: BacktestRunTraderView): number | null => (t.stats.closed > 0 ? t.stats.realizedPnlUsd / t.stats.closed : null);
+
+type Limits = { minWinRate: string; minMargin: string; maxLossDays: string; minTrades: string; maxTrades: string; minAvgPnl: string; holdsWithoutBest: boolean };
+const NO_LIMITS: Limits = { minWinRate: "", minMargin: "", maxLossDays: "", minTrades: "", maxTrades: "", minAvgPnl: "", holdsWithoutBest: false };
+
 const sortValue: Record<SortKey, (t: BacktestRunTraderView) => number> = {
   pnl: (t) => t.stats.realizedPnlUsd,
   combined: (t) => t.stats.combinedPercent,
+  avgPnl: (t) => avgPnlUsd(t) ?? NO_VALUE,
   winRate: (t) => t.stats.winRatePercent ?? -1,
   trades: (t) => t.stats.closed,
   lossDays: (t) => t.stats.daily?.lossDays ?? 0,
@@ -87,7 +94,7 @@ type Props = {
 export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "pnl", dir: "desc" });
-  const [limits, setLimits] = useState({ minWinRate: "", minMargin: "", maxLossDays: "", minTrades: "", holdsWithoutBest: false });
+  const [limits, setLimits] = useState<Limits>(NO_LIMITS);
 
   const rows = useMemo(() => {
     const filtered = traders.filter((t) => matchesFilter(t, filter));
@@ -96,19 +103,26 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
     const minMargin = num(limits.minMargin);
     const maxLoss = num(limits.maxLossDays);
     const minTrades = num(limits.minTrades);
+    const maxTrades = num(limits.maxTrades);
+    const minAvg = num(limits.minAvgPnl);
     const limited = filtered.filter((t) => {
       const d = t.stats.daily;
       if (minWin != null && (t.stats.winRatePercent == null || t.stats.winRatePercent < minWin)) return false;
       if (minMargin != null && (d?.profitMarginPercent == null || d.profitMarginPercent < minMargin)) return false;
       if (maxLoss != null && (d?.lossDays ?? 0) > maxLoss) return false;
       if (minTrades != null && t.stats.closed < minTrades) return false;
+      if (maxTrades != null && t.stats.closed > maxTrades) return false;
+      if (minAvg != null) {
+        const avg = avgPnlUsd(t);
+        if (avg == null || avg < minAvg) return false;
+      }
       if (limits.holdsWithoutBest && !d?.withoutBestDay?.stillProfitable) return false;
       return true;
     });
     const value = sortValue[sort.key];
     return [...limited].sort((a, b) => (sort.dir === "desc" ? value(b) - value(a) : value(a) - value(b)));
   }, [traders, filter, sort, limits]);
-  const limitsActive = limits.minWinRate !== "" || limits.minMargin !== "" || limits.maxLossDays !== "" || limits.minTrades !== "" || limits.holdsWithoutBest;
+  const limitsActive = JSON.stringify(limits) !== JSON.stringify(NO_LIMITS);
 
   const allSelected = rows.length > 0 && rows.every((t) => selected.has(t.address));
 
@@ -147,6 +161,8 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
             ["minMargin", "Profit margin at least (%)"],
             ["maxLossDays", "Loss days at most"],
             ["minTrades", "Trades at least"],
+            ["maxTrades", "Trades at most"],
+            ["minAvgPnl", "Avg P&L per trade at least ($)"],
           ] as const
         ).map(([key, label]) => (
           <label key={key} className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -154,8 +170,8 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
             <Input
               inputMode="decimal"
               value={limits[key]}
-              onChange={(e) => setLimits((prev) => ({ ...prev, [key]: e.target.value.replace(key === "minMargin" ? /[^0-9.-]/g : /[^0-9.]/g, "") }))}
-              className="h-8 w-36"
+              onChange={(e) => setLimits((prev) => ({ ...prev, [key]: e.target.value.replace(key === "minMargin" || key === "minAvgPnl" ? /[^0-9.-]/g : /[^0-9.]/g, "") }))}
+              className="h-8 w-40"
             />
           </label>
         ))}
@@ -164,7 +180,7 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
           Still profitable without best day
         </label>
         {limitsActive && (
-          <Button size="sm" variant="ghost" onClick={() => setLimits({ minWinRate: "", minMargin: "", maxLossDays: "", minTrades: "", holdsWithoutBest: false })}>
+          <Button size="sm" variant="ghost" onClick={() => setLimits(NO_LIMITS)}>
             Clear
           </Button>
         )}
@@ -183,6 +199,7 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
               <TableHead>Address &amp; progress</TableHead>
               <SortHead label="P&L" k="pnl" sort={sort} onSort={onSort} className="text-right" />
               <SortHead label="Combined" k="combined" sort={sort} onSort={onSort} className="hidden text-right md:table-cell" />
+              <SortHead label="Avg P&L / trade" k="avgPnl" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
               <SortHead label="Win rate" k="winRate" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
               <SortHead label="Loss days" k="lossDays" sort={sort} onSort={onSort} className="hidden text-right xl:table-cell" />
               <SortHead label="Profit margin" k="margin" sort={sort} onSort={onSort} className="hidden text-right xl:table-cell" />
@@ -193,7 +210,7 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={10} className="py-10 text-center text-sm text-muted-foreground">
                   No address matches this filter.
                 </TableCell>
               </TableRow>
@@ -248,6 +265,16 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
                     </TableCell>
                     <TableCell className={cn("hidden text-right tabular-nums md:table-cell", pnlTone(s.combinedPercent))}>
                       {s.closed > 0 ? formatSignedPercent(s.combinedPercent, 0) : "—"}
+                    </TableCell>
+                    <TableCell className="hidden text-right tabular-nums lg:table-cell" title="Realized P&L divided by the closed trades">
+                      {s.closed > 0 ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className={cn("font-medium", pnlTone(s.realizedPnlUsd))}>{formatUsd(s.realizedPnlUsd / s.closed)}</span>
+                          {s.avgPercent != null && <span className={cn("text-[11px]", pnlTone(s.avgPercent))}>{formatSignedPercent(s.avgPercent)}</span>}
+                        </div>
+                      ) : (
+                        "—"
+                      )}
                     </TableCell>
                     <TableCell className="hidden text-right tabular-nums lg:table-cell">
                       {s.winRatePercent != null ? `${s.winRatePercent.toFixed(0)}%` : "—"}

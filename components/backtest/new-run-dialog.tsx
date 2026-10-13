@@ -15,6 +15,7 @@ import type { BacktestStrategy } from "@/lib/backtest-types";
 import { StrategyChips } from "./shared";
 import { ScreeningFields, parseScreening, type ScreeningValues } from "./screening-fields";
 import { TimingFields, parseTiming, toTimingValues, type TimingValues } from "./timing-fields";
+import { CombinedFields, parseCombined, toCombinedValues, type CombinedValues } from "./combined-fields";
 import { cn } from "@/lib/utils";
 
 const PRESET_DAYS = [3, 7, 12, 30];
@@ -44,8 +45,11 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
   const [submitting, setSubmitting] = useState(false);
   const [strategy, setStrategy] = useState<BacktestStrategy | null>(null);
   const [timing, setTiming] = useState<TimingValues | null>(null);
-  const [screening, setScreening] = useState<ScreeningValues>({ addressParallelism: "", lossDays: "0", dayLossPercent: "0", negativeBalanceEvents: "0", lossAtProgressPercent: "0" });
+  const [screening, setScreening] = useState<ScreeningValues>({ addressParallelism: "", daysAtOnce: "0", lossDays: "0", dayLossPercent: "0", negativeBalanceEvents: "0", lossAtProgressPercent: "0" });
   const [autoParallelism, setAutoParallelism] = useState<number | undefined>();
+  // "combined": every address trades as one wallet with one shared balance (see db/backtest/combined.js). Its numbers start from the profile.
+  const [mode, setMode] = useState<"separate" | "combined">("separate");
+  const [combined, setCombined] = useState<CombinedValues | null>(null);
 
   // Each time the dialog opens: default to the selection if there is one, else everything, and to the profile currently in use.
   useEffect(() => {
@@ -70,6 +74,16 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
             fillLatencySeconds: backtest?.effective.fillLatencySeconds ?? 3,
           })
         );
+        setCombined(
+          toCombinedValues({
+            startingBalanceUsd: settings.defaultAllocationUsd,
+            tradeSizeUsd: settings.defaultTradeSizeUsd,
+            pumpFeePercent: settings.defaultPumpFeePercent ?? 1.25,
+            jitoFeeUsd: settings.defaultJitoFeeUsd ?? 0,
+            resetDaily: false,
+            allowNegativeBalance: settings.defaultAllowNegativeBalance !== false,
+          })
+        );
         setStrategy({
           allocationUsd: settings.defaultAllocationUsd,
           tradeSizeUsd: settings.defaultTradeSizeUsd,
@@ -89,6 +103,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
         if (cancelled) return;
         setStrategy(null);
         setTiming(null);
+        setCombined(null);
       });
     return () => {
       cancelled = true;
@@ -104,6 +119,13 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
 
   const timingNumbers = timing ? parseTiming(timing) : null;
   const screeningNumbers = parseScreening(screening);
+  const isCombined = mode === "combined";
+  const combinedNumbers = combined ? parseCombined(combined) : null;
+  // What will really be simulated: the profile's strategy with the wallet's own trade amount and fees on top.
+  const previewStrategy: BacktestStrategy | null =
+    strategy && isCombined && combinedNumbers
+      ? { ...strategy, allocationUsd: combinedNumbers.startingBalanceUsd, tradeSizeUsd: combinedNumbers.tradeSizeUsd, pumpFeePercent: combinedNumbers.pumpFeePercent, jitoFeeUsd: combinedNumbers.jitoFeeUsd }
+      : strategy;
 
   async function handleSubmit() {
     if (!daysValid) {
@@ -126,13 +148,33 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
       toast.error("Check the speed and loss-trader settings - each must be a number in range");
       return;
     }
+    if (isCombined && !combinedNumbers) {
+      toast.error("Check the combined wallet settings - each must be a number in range");
+      return;
+    }
     if (addresses.length === 0) {
       toast.error("No addresses to backtest");
       return;
     }
     setSubmitting(true);
     try {
-      const { run } = await createBacktestRun({ name: name.trim() || undefined, days: daysNumber, profileId, addresses, maxSignatures: maxSignaturesNumber, ...(timingNumbers ? { overrides: timingNumbers } : {}), earlyStop: screeningNumbers.earlyStop, addressParallelism: screeningNumbers.addressParallelism });
+      const { run } = await createBacktestRun({
+        name: name.trim() || undefined,
+        days: daysNumber,
+        profileId,
+        addresses,
+        maxSignatures: maxSignaturesNumber,
+        overrides: {
+          ...(timingNumbers ?? {}),
+          ...(isCombined && combinedNumbers ? { tradeSizeUsd: combinedNumbers.tradeSizeUsd, pumpFeePercent: combinedNumbers.pumpFeePercent, jitoFeeUsd: combinedNumbers.jitoFeeUsd } : {}),
+        },
+        earlyStop: screeningNumbers.earlyStop,
+        addressParallelism: screeningNumbers.addressParallelism,
+        daysAtOnce: screeningNumbers.daysAtOnce,
+        ...(isCombined && combinedNumbers
+          ? { mode: "combined" as const, combined: { startingBalanceUsd: combinedNumbers.startingBalanceUsd, resetDaily: combinedNumbers.resetDaily, allowNegativeBalance: combinedNumbers.allowNegativeBalance } }
+          : {}),
+      });
       toast.success(`Backtest started on ${addresses.length} address${addresses.length === 1 ? "" : "es"}`);
       onOpenChange(false);
       onCreated(run._id);
@@ -155,6 +197,23 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
         </DialogHeader>
 
         <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Backtest style</Label>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant={mode === "separate" ? "default" : "outline"} onClick={() => setMode("separate")}>
+                Separate wallets
+              </Button>
+              <Button type="button" size="sm" variant={mode === "combined" ? "default" : "outline"} onClick={() => setMode("combined")}>
+                Combined wallet
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {mode === "combined"
+                ? "All the addresses trade together as ONE wallet: one starting balance and one trade amount shared by every trade, added up in the order the trades happened. Shows the group's daily P&L and how often the balance went negative."
+                : "Each address is judged on its own wallet, so you can compare the addresses and drop the weak ones."}
+            </p>
+          </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="bt-name">Name (optional)</Label>
             <Input id="bt-name" placeholder={`${daysValid ? daysNumber : "7"}-day backtest`} value={name} onChange={(e) => setName(e.target.value)} />
@@ -210,9 +269,19 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
                 ))}
               </SelectContent>
             </Select>
-            {strategy ? <StrategyChips settings={strategy} /> : <p className="text-xs text-muted-foreground">Loading the profile&apos;s settings…</p>}
+            {previewStrategy ? <StrategyChips settings={previewStrategy} /> : <p className="text-xs text-muted-foreground">Loading the profile&apos;s settings…</p>}
             <p className="text-xs text-muted-foreground">Copied when you start - editing the profile later never changes this backtest.</p>
           </div>
+
+          {isCombined && combined && (
+            <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+              <div>
+                <p className="text-sm font-medium">Combined wallet and fees</p>
+                <p className="text-xs text-muted-foreground">Filled in from the profile. Change the balance, the trade amount or the fees to see what result you would get.</p>
+              </div>
+              <CombinedFields values={combined} onChange={setCombined} />
+            </div>
+          )}
 
           {timing && (
             <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
@@ -228,12 +297,14 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
 
           <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
             <div>
-              <p className="text-sm font-medium">Speed and loss traders</p>
+              <p className="text-sm font-medium">{isCombined ? "Speed" : "Speed and loss traders"}</p>
               <p className="text-xs text-muted-foreground">
-                Work through a large list faster: choose how many addresses run at once, and drop a trader that is clearly losing instead of simulating every token it bought.
+                {isCombined
+                  ? "Choose how many addresses run at once and how many days of one address. There are no loss-trader rules in a combined backtest: dropping one address would change the wallet the others share."
+                  : "Work through a large list faster: choose how many addresses (and how many days of one address) run at once, and drop a trader that is clearly losing instead of simulating every token it bought."}
               </p>
             </div>
-            <ScreeningFields values={screening} onChange={setScreening} autoParallelism={autoParallelism} />
+            <ScreeningFields values={screening} onChange={setScreening} autoParallelism={autoParallelism} speedOnly={isCombined} />
           </div>
 
           <div className="space-y-1.5">
@@ -259,7 +330,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
           <DialogClose asChild>
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
-          <Button onClick={handleSubmit} disabled={submitting || addresses.length === 0 || !daysValid || !maxSignaturesValid || !screeningNumbers || (timing !== null && !timingNumbers)}>
+          <Button onClick={handleSubmit} disabled={submitting || addresses.length === 0 || !daysValid || !maxSignaturesValid || !screeningNumbers || (timing !== null && !timingNumbers) || (isCombined && !combinedNumbers)}>
             {submitting && <Loader2 className="size-4 animate-spin" />}
             Start backtest
           </Button>

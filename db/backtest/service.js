@@ -205,19 +205,45 @@ export async function snapshotProfileSettings(profileId) {
   };
 }
 
-/** The timing settings that may be overridden per backtest. Anything else comes from the profile. [min, max] in seconds; 0 on the interval = look at every pool trade. */
-const TIMING_LIMITS = { executionDelaySeconds: [0, 60], riskCheckIntervalSeconds: [0, 3600], fillLatencySeconds: [0, 60] };
+/**
+ * The settings that may be overridden per backtest instead of coming from the profile: the timing ([min, max] in seconds; 0 on the interval = look at
+ * every pool trade) and, for a combined backtest, the trade amount and the fees. Anything else comes from the profile.
+ */
+const OVERRIDE_LIMITS = {
+  executionDelaySeconds: [0, 60],
+  riskCheckIntervalSeconds: [0, 3600],
+  fillLatencySeconds: [0, 60],
+  tradeSizeUsd: [0.01, 1_000_000_000],
+  pumpFeePercent: [0, 100],
+  jitoFeeUsd: [0, 1000],
+};
 
-/** Keeps only valid timing overrides. Throws on a value that is present but unusable, so a typo is never silently ignored. */
-function cleanTiming(overrides) {
+/** Keeps only valid overrides. Throws on a value that is present but unusable, so a typo is never silently ignored. */
+function cleanOverrides(overrides) {
   const out = {};
-  for (const [key, [lo, hi]] of Object.entries(TIMING_LIMITS)) {
+  for (const [key, [lo, hi]] of Object.entries(OVERRIDE_LIMITS)) {
     const v = overrides?.[key];
     if (v === undefined || v === null || v === "") continue;
     if (typeof v !== "number" || !Number.isFinite(v) || v < lo || v > hi) throw new Error(`${key} must be a number between ${lo} and ${hi}`);
     out[key] = v;
   }
   return out;
+}
+
+/** The shared wallet of a combined backtest. Every field present is checked; with `base` (the current values) missing ones keep theirs. */
+function cleanCombined(input, base) {
+  const startingBalanceUsd = input?.startingBalanceUsd ?? base?.startingBalanceUsd;
+  if (typeof startingBalanceUsd !== "number" || !Number.isFinite(startingBalanceUsd) || startingBalanceUsd <= 0 || startingBalanceUsd > 1_000_000_000) {
+    throw new Error("The starting balance must be a number above 0");
+  }
+  for (const key of ["resetDaily", "allowNegativeBalance"]) {
+    if (input?.[key] !== undefined && typeof input[key] !== "boolean") throw new Error(`${key} must be true or false`);
+  }
+  return {
+    startingBalanceUsd,
+    resetDaily: input?.resetDaily ?? base?.resetDaily ?? false,
+    allowNegativeBalance: input?.allowNegativeBalance ?? base?.allowNegativeBalance ?? true,
+  };
 }
 
 /** The early-stop rules (see earlyStop.js) with every field present; 0 = rule off. Throws on a value that is present but unusable. */
@@ -238,6 +264,14 @@ function cleanEarlyStop(input, base = {}) {
   return out;
 }
 
+/** "Days at once" for one run: undefined = not given, null / "" / 0 = no limit, otherwise a whole number of days. */
+function cleanDaysAtOnce(v) {
+  if (v === undefined) return undefined;
+  if (v === null || v === "") return 0;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 1000) throw new Error("Days at once must be a whole number between 0 and 1000 (0 = no limit)");
+  return v;
+}
+
 /** "Addresses at once" for one run: null / "" / 0 = automatic. */
 function cleanParallelism(v) {
   if (v === undefined) return undefined;
@@ -246,13 +280,22 @@ function cleanParallelism(v) {
   return v;
 }
 
-/** @param {{name: string, days: number, profileId: string, addresses: string[], maxSignatures?: number, overrides?: object, earlyStop?: object, addressParallelism?: number|null}} p  maxSignatures: skip an address with more signatures than this in the window (0 = no limit); overrides: timing values (see TIMING_LIMITS) that replace the profile's */
-export async function createBacktestRun({ name, days, profileId, addresses, maxSignatures = DEFAULT_MAX_SIGNATURES, overrides, earlyStop, addressParallelism }) {
+/**
+ * @param {{name: string, days: number, profileId: string, addresses: string[], maxSignatures?: number, overrides?: object, earlyStop?: object, addressParallelism?: number|null, daysAtOnce?: number, mode?: "separate"|"combined", combined?: object}} p
+ *   maxSignatures: skip an address with more signatures than this in the window (0 = no limit); overrides: values (see OVERRIDE_LIMITS) that replace the profile's;
+ *   mode "combined": all addresses trade as one wallet - `combined` is { startingBalanceUsd, resetDaily?, allowNegativeBalance? } and the trade amount / fees come in `overrides`
+ *   (tradeSizeUsd, pumpFeePercent, jitoFeeUsd). A combined backtest has no loss-trader rules: one address dropping out would change the wallet the others share.
+ */
+export async function createBacktestRun({ name, days, profileId, addresses, maxSignatures = DEFAULT_MAX_SIGNATURES, overrides, earlyStop, addressParallelism, daysAtOnce, mode = "separate", combined }) {
   if (!Number.isFinite(days) || days < 1 || days > MAX_BACKTEST_DAYS) throw new Error(`days must be between 1 and ${MAX_BACKTEST_DAYS}`);
   if (!Number.isFinite(maxSignatures) || maxSignatures < 0) throw new Error("The signature limit must be 0 (no limit) or a positive number");
-  const timing = cleanTiming(overrides);
-  const stopRules = cleanEarlyStop(earlyStop);
+  if (mode !== "separate" && mode !== "combined") throw new Error("mode must be separate or combined");
+  const isCombined = mode === "combined";
+  const wallet = isCombined ? cleanCombined(combined) : null;
+  const timing = cleanOverrides(overrides);
+  const stopRules = cleanEarlyStop(isCombined ? undefined : earlyStop);
   const parallelism = cleanParallelism(addressParallelism) ?? null;
+  const days_ = cleanDaysAtOnce(daysAtOnce) ?? 0;
   const unique = [...new Set(addresses)];
   if (unique.length === 0) throw new Error("Select at least one address");
   const profile = await Profile.findById(profileId).lean();
@@ -273,11 +316,15 @@ export async function createBacktestRun({ name, days, profileId, addresses, maxS
     windowEnd: new Date(now),
     profileId: profile._id,
     profileName: profile.name,
-    settings: { ...(await snapshotProfileSettings(profile._id)), ...timing },
+    // In a combined backtest the shared balance is the wallet's allocation.
+    settings: { ...(await snapshotProfileSettings(profile._id)), ...(wallet ? { allocationUsd: wallet.startingBalanceUsd } : {}), ...timing },
+    mode,
+    combined: wallet,
     addresses: runAddresses,
     maxSignatures: Math.floor(maxSignatures),
     earlyStop: stopRules,
     addressParallelism: parallelism,
+    daysAtOnce: days_,
     status: "queued",
   });
   await BacktestRunTrader.insertMany(runAddresses.map((address) => ({ runId: run._id, address, userId: userIdBy.get(address) || "" })));
@@ -355,21 +402,39 @@ export async function controlBacktestRun(runId, action) {
  *    are cleared and every finished address is simulated again - the
  *    transactions already collected are reused, so it is much faster than
  *    the first time.
- *  - overrides: timing values (executionDelaySeconds, riskCheckIntervalSeconds, fillLatencySeconds). A changed value clears and re-simulates the results too.
+ *  - overrides: timing values (executionDelaySeconds, riskCheckIntervalSeconds, fillLatencySeconds) and, for a combined backtest, tradeSizeUsd, pumpFeePercent and jitoFeeUsd.
+ *    A changed value clears and re-simulates the results too.
+ *  - combined (combined backtests only): the shared wallet { startingBalanceUsd, resetDaily, allowNegativeBalance }. The wallet is worked out from the finished trades
+ *    each time it is read, so nothing is simulated again and it may change while the backtest runs. A profile re-copy keeps the trade amount and the starting balance.
  * A finished backtest that gets work queued this way is set to "paused" - press
  * Resume to run it. (A cancelled or paused one stays as it is.)
  * @param {string} runId
  *  - earlyStop: the loss-trader rules (see earlyStop.js). Needs a pause. Changing them puts the traders already stopped early back in the queue, to be judged on the new rules; results are kept.
  *  - addressParallelism: how many addresses of this backtest are worked at once (null = automatic). May change while it runs.
- * @param {{name?: string, maxSignatures?: number, profileId?: string, overrides?: object, earlyStop?: object, addressParallelism?: number|null}} patch
+ *  - daysAtOnce: how many days of one address are worked at once (0 = no limit). May change while it runs - it only changes the order work is handed out in.
+ * @param {{name?: string, maxSignatures?: number, profileId?: string, overrides?: object, earlyStop?: object, addressParallelism?: number|null, daysAtOnce?: number, combined?: object}} patch
  */
-export async function updateBacktestRun(runId, { name, maxSignatures, profileId, overrides, earlyStop, addressParallelism } = {}) {
+export async function updateBacktestRun(runId, { name, maxSignatures, profileId, overrides, earlyStop: earlyStopPatch, addressParallelism, daysAtOnce, combined } = {}) {
   const run = await BacktestRun.findById(runId);
   if (!run) throw new Error("Backtest not found");
+  const isCombined = run.mode === "combined";
+  if (combined !== undefined && !isCombined) throw new Error("Only a combined backtest has a shared wallet");
+  const earlyStop = isCombined ? undefined : earlyStopPatch; // a combined backtest has no loss-trader rules
   const set = {};
   if (typeof name === "string" && name.trim()) set.name = name.trim();
 
-  const timing = cleanTiming(overrides);
+  // The shared wallet: its balance is also the allocation shown with the strategy.
+  let wallet = isCombined ? run.combined.toObject() : null;
+  let walletChanged = false;
+  if (combined !== undefined) {
+    const next = cleanCombined(combined, wallet);
+    walletChanged = Object.keys(next).some((k) => next[k] !== wallet[k]);
+    wallet = next;
+    if (walletChanged) set.combined = next;
+  }
+  const withWallet = (settings) => (wallet ? { ...settings, allocationUsd: wallet.startingBalanceUsd } : settings);
+
+  const timing = cleanOverrides(overrides);
   const changesTiming = Object.keys(timing).some((k) => run.settings?.[k] !== timing[k]);
   const changesSettings = maxSignatures !== undefined || profileId || changesTiming || earlyStop !== undefined;
   if (changesSettings && ACTIVE_STATUSES.includes(run.status)) throw new Error("Pause the backtest before editing its settings");
@@ -379,6 +444,8 @@ export async function updateBacktestRun(runId, { name, maxSignatures, profileId,
   // The number of addresses worked at once is read by the worker every couple of seconds, so it may change while the backtest runs.
   const parallelism = cleanParallelism(addressParallelism);
   if (parallelism !== undefined) set.addressParallelism = parallelism;
+  const days = cleanDaysAtOnce(daysAtOnce);
+  if (days !== undefined) set.daysAtOnce = days;
 
   if (maxSignatures !== undefined) {
     if (!Number.isFinite(maxSignatures) || maxSignatures < 0) throw new Error("The signature limit must be 0 (no limit) or a positive number");
@@ -405,13 +472,17 @@ export async function updateBacktestRun(runId, { name, maxSignatures, profileId,
     if (!profile) throw new Error("Profile not found");
     set.profileId = profile._id;
     set.profileName = profile.name;
-    set.settings = { ...(await snapshotProfileSettings(profile._id)), ...timing };
+    // A combined backtest keeps its own trade amount; the fees are the new profile's unless they are overridden again.
+    const kept = isCombined ? { tradeSizeUsd: run.settings.tradeSizeUsd } : {};
+    set.settings = withWallet({ ...(await snapshotProfileSettings(profile._id)), ...kept, ...timing });
     await resetSimulation(runId);
     resimulated = true;
   } else if (changesTiming) {
-    set.settings = { ...run.settings, ...timing };
+    set.settings = withWallet({ ...run.settings, ...timing });
     await resetSimulation(runId);
     resimulated = true;
+  } else if (walletChanged) {
+    set.settings = withWallet(run.settings);
   }
 
   if ((requeuedSkipped > 0 || resimulated) && (run.status === "completed" || run.status === "failed")) {

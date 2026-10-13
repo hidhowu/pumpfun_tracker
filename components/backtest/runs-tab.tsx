@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowUpRight, FlaskConical, Loader2, Pencil, PlayCircle, Trash2 } from "lucide-react";
+import { ArrowUpRight, FlaskConical, Loader2, Pencil, PlayCircle, Trash2, Wallet } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -117,6 +118,11 @@ export function RunsTab() {
                   <Link href={`/backtest/${run._id}`} className="group flex min-w-0 flex-1 flex-col gap-1">
                     <span className="flex items-center gap-1.5 font-semibold tracking-tight">
                       <span className="truncate">{run.name}</span>
+                      {run.mode === "combined" && (
+                        <Badge variant="outline" className="shrink-0 gap-1 border-primary/30 bg-primary/10 font-normal text-primary">
+                          <Wallet className="size-3" /> Combined
+                        </Badge>
+                      )}
                       <ArrowUpRight className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
                     </span>
                     <span className="truncate text-xs text-muted-foreground">

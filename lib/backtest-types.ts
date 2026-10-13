@@ -81,6 +81,15 @@ export type BacktestRunProgress = {
   etaMs: number | null;
 };
 
+/** The shared wallet of a combined backtest (every address trades as one wallet). The trade amount and the fees are in the run's `settings`. */
+export type BacktestCombinedConfig = {
+  startingBalanceUsd: number;
+  /** Every UTC day starts again from the starting balance; a trade belongs to the day it was entered. */
+  resetDaily: boolean;
+  /** false = a buy the balance cannot pay is not taken. */
+  allowNegativeBalance: boolean;
+};
+
 export type BacktestRunDefinition = {
   _id: string;
   name: string;
@@ -91,11 +100,16 @@ export type BacktestRunDefinition = {
   profileName: string;
   settings: BacktestStrategy;
   addresses: string[];
+  // Missing on backtests made before combined backtests existed: those are "separate".
+  mode?: "separate" | "combined";
+  combined?: BacktestCombinedConfig | null;
   // An address with more signatures than this in the window is skipped (0 / missing = no limit).
   maxSignatures?: number;
   // Loss-trader rules (0 = off) and how many addresses of this backtest run at once (null / missing = automatic). Runs made before these existed have neither.
   earlyStop?: { lossDays: number; dayLossPercent: number; negativeBalanceEvents?: number; lossAtProgressPercent: number };
   addressParallelism?: number | null;
+  // Days of one address worked at once (0 / missing = no limit).
+  daysAtOnce?: number;
   status: BacktestStatus;
   control: "run" | "pause" | "cancel";
   error: string | null;
@@ -261,4 +275,48 @@ export type BacktestAddressPnl = Omit<WalletPnlBreakdown, "period"> & {
   range: { from: string; to: string };
   // null = fully simulated, "" = nothing yet, "YYYY-MM-DD" = days strictly before it are complete.
   through: string | null;
+};
+
+/** One UTC day of the combined wallet. In a reset-daily backtest the day is the day the trades were entered, otherwise the day they closed. */
+export type BacktestCombinedDay = {
+  date: string;
+  startBalanceUsd: number;
+  endBalanceUsd: number;
+  lowestBalanceUsd: number;
+  pnlUsd: number;
+  trades: number;
+  wins: number;
+  losses: number;
+  negativeEvents: number;
+  maxNegativeDepthUsd: number;
+  /** Buys skipped because the balance could not pay them (only when a negative balance is not allowed). */
+  notTaken: number;
+};
+
+export type BacktestCombinedWallet = {
+  config: BacktestCombinedConfig & { tradeAmountUsd: number; pumpFeePercent: number; jitoFeeUsd: number };
+  wallet: {
+    startingUsd: number;
+    balanceUsd: number; // uncommitted cash at the end (reset daily: where the last day ended)
+    walletValueUsd: number | null; // cash + open trades marked at the end of the window; null when the balance resets daily
+    realizedPnlUsd: number;
+    unrealizedPnlUsd: number;
+    openPositionCount: number;
+    closedPositionCount: number;
+    wins: number;
+    losses: number;
+    winRatePercent: number | null;
+    negativeBalanceEventCount: number;
+    maxNegativeBalanceUsd: number;
+    lowestBalanceUsd: number;
+    notTakenCount: number;
+    lossDays: number;
+    profitDays: number;
+    negativeDays: number;
+  };
+  days: BacktestCombinedDay[];
+  /** Balance after every buy and sell (empty when the balance resets daily). */
+  curve: Array<{ t: number; balanceUsd: number }>;
+  /** false while addresses are still being worked on: the figures then cover only the trades simulated so far. */
+  complete: boolean;
 };

@@ -17,7 +17,7 @@ export async function GET(_request: NextRequest, { params }: Params) {
 
 /**
  * Body: { action: "pause" | "resume" | "cancel" | "retry_failed" | "retry_skipped" }
- *    or { update: { name?: string, maxSignatures?: number, profileId?: string, overrides?: { executionDelaySeconds?, riskCheckIntervalSeconds?, fillLatencySeconds? }, earlyStop?: { lossDays?, dayLossPercent?, negativeBalanceEvents?, lossAtProgressPercent? }, addressParallelism?: number | null } } - see updateBacktestRun.
+ *    or { update: { name?: string, maxSignatures?: number, profileId?: string, overrides?: { executionDelaySeconds?, riskCheckIntervalSeconds?, fillLatencySeconds? }, earlyStop?: { lossDays?, dayLossPercent?, negativeBalanceEvents?, lossAtProgressPercent? }, addressParallelism?: number | null, daysAtOnce?: number, combined?: { startingBalanceUsd?, resetDaily?, allowNegativeBalance? } } } - see updateBacktestRun.
  */
 export async function PATCH(request: NextRequest, { params }: Params) {
   const denied = await requireApiSession();
@@ -34,6 +34,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
         profileId: typeof u.profileId === "string" && u.profileId ? u.profileId : undefined,
         overrides: u.overrides && typeof u.overrides === "object" ? u.overrides : undefined,
         earlyStop: u.earlyStop && typeof u.earlyStop === "object" ? u.earlyStop : undefined,
+        combined: u.combined && typeof u.combined === "object" ? u.combined : undefined,
+        daysAtOnce: u.daysAtOnce === undefined ? undefined : u.daysAtOnce === null || u.daysAtOnce === "" ? 0 : Number(u.daysAtOnce),
         addressParallelism: u.addressParallelism === undefined ? undefined : u.addressParallelism === null || u.addressParallelism === "" ? null : Number(u.addressParallelism),
       });
       return NextResponse.json(JSON.parse(JSON.stringify(result)));

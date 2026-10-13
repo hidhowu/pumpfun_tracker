@@ -11,7 +11,7 @@ export async function GET() {
   return NextResponse.json({ runs: JSON.parse(JSON.stringify(runs)) });
 }
 
-/** Body: { name?: string, days: number, profileId: string, addresses: string[], maxSignatures?: number (0 = no limit, default 50,000), overrides?: { executionDelaySeconds?, riskCheckIntervalSeconds?, fillLatencySeconds? }, earlyStop?: { lossDays?, dayLossPercent?, negativeBalanceEvents?, lossAtProgressPercent? } (0 = rule off), addressParallelism?: number | null (null = automatic) } */
+/** Body: { name?: string, days: number, profileId: string, addresses: string[], maxSignatures?: number (0 = no limit, default 50,000), overrides?: { executionDelaySeconds?, riskCheckIntervalSeconds?, fillLatencySeconds? }, earlyStop?: { lossDays?, dayLossPercent?, negativeBalanceEvents?, lossAtProgressPercent? } (0 = rule off), addressParallelism?: number | null (null = automatic), daysAtOnce?: number (days of one address worked at once, 0 = no limit), mode?: "separate" | "combined", combined?: { startingBalanceUsd, resetDaily?, allowNegativeBalance? } (combined: the trade amount and fees go in overrides as tradeSizeUsd / pumpFeePercent / jitoFeeUsd) } */
 export async function POST(request: NextRequest) {
   const denied = await requireApiSession();
   if (denied) return denied;
@@ -26,6 +26,9 @@ export async function POST(request: NextRequest) {
       ...(body.maxSignatures !== undefined ? { maxSignatures: Number(body.maxSignatures) } : {}),
       ...(body.overrides && typeof body.overrides === "object" ? { overrides: body.overrides } : {}),
       ...(body.earlyStop && typeof body.earlyStop === "object" ? { earlyStop: body.earlyStop } : {}),
+      ...(body.mode === "combined" || body.mode === "separate" ? { mode: body.mode } : {}),
+      ...(body.combined && typeof body.combined === "object" ? { combined: body.combined } : {}),
+      ...(body.daysAtOnce !== undefined ? { daysAtOnce: body.daysAtOnce === null || body.daysAtOnce === "" ? 0 : Number(body.daysAtOnce) } : {}),
       ...(body.addressParallelism !== undefined ? { addressParallelism: body.addressParallelism === null || body.addressParallelism === "" ? null : Number(body.addressParallelism) } : {}),
     });
     return NextResponse.json({ run: JSON.parse(JSON.stringify(run)) });
