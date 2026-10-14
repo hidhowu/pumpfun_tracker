@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from "recharts";
-import { AlertTriangle, CalendarDays, Coins, Target, TrendingDown, Wallet } from "lucide-react";
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ReferenceArea, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from "recharts";
+import { AlertTriangle, CalendarDays, Coins, ShieldAlert, Target, TrendingDown, Wallet } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatTile } from "@/components/traders/stat-tile";
@@ -14,9 +14,10 @@ import { cn } from "@/lib/utils";
 import { formatDateTime, formatSignedPercent, pnlTone } from "./shared";
 
 const axisTick = { fill: "var(--muted-foreground)", fontSize: 11 };
+const DAY_MS = 86_400_000;
 const shortDate = (t: number) => new Date(t).toLocaleDateString("en-US", { month: "numeric", day: "numeric", timeZone: "UTC" });
 
-function BalanceChart({ data, starting }: { data: BacktestCombinedWallet["curve"]; starting: number }) {
+function BalanceChart({ data, starting, lostDays }: { data: BacktestCombinedWallet["curve"]; starting: number; lostDays: BacktestCombinedWallet["days"] }) {
   const up = (data.at(-1)?.balanceUsd ?? starting) >= starting;
   const color = up ? "var(--positive)" : "var(--negative)";
   return (
@@ -32,6 +33,10 @@ function BalanceChart({ data, starting }: { data: BacktestCombinedWallet["curve"
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
           <XAxis dataKey="t" type="number" scale="time" domain={["dataMin", "dataMax"]} tickFormatter={shortDate} tick={axisTick} axisLine={{ stroke: "var(--border)" }} tickLine={false} minTickGap={28} />
           <YAxis domain={["auto", "auto"]} tickFormatter={(v: number) => formatUsd(v)} tick={axisTick} axisLine={false} tickLine={false} width={68} />
+          {lostDays.map((d) => {
+            const from = Date.parse(`${d.date}T00:00:00Z`);
+            return <ReferenceArea key={d.date} x1={from} x2={from + DAY_MS} fill="var(--negative)" fillOpacity={0.14} stroke="var(--negative)" strokeOpacity={0.35} ifOverflow="hidden" />;
+          })}
           <ReferenceLine y={0} stroke="var(--negative)" strokeOpacity={0.5} />
           <ReferenceLine y={starting} stroke="var(--border)" strokeDasharray="4 4" />
           <ChartTooltip
@@ -56,7 +61,8 @@ function BalanceChart({ data, starting }: { data: BacktestCombinedWallet["curve"
 }
 
 function DailyPnlChart({ days }: { days: BacktestCombinedWallet["days"] }) {
-  const data = days.map((d) => ({ date: d.date, pnlUsd: d.pnlUsd, trades: d.trades }));
+  const lostDays = days.filter((d) => d.lostCapital);
+  const data = days.map((d) => ({ date: d.date, pnlUsd: d.pnlUsd, trades: d.trades, lost: d.lostCapital }));
   return (
     <div className="h-60 w-full">
       <ResponsiveContainer width="100%" height="100%">
@@ -65,10 +71,13 @@ function DailyPnlChart({ days }: { days: BacktestCombinedWallet["days"] }) {
           <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(5)} tick={axisTick} axisLine={{ stroke: "var(--border)" }} tickLine={false} minTickGap={12} />
           <YAxis tickFormatter={(v: number) => formatUsd(v)} tick={axisTick} axisLine={false} tickLine={false} width={68} />
           <ReferenceLine y={0} stroke="var(--border)" />
+          {lostDays.map((d) => (
+            <ReferenceDot key={d.date} x={d.date} y={0} r={5} fill="var(--negative)" stroke="var(--background)" strokeWidth={2} ifOverflow="visible" />
+          ))}
           <ChartTooltip
             cursor={{ fill: "var(--muted)", opacity: 0.4 }}
             content={({ active, payload }) => {
-              const p = active ? (payload?.[0]?.payload as { date: string; pnlUsd: number; trades: number } | undefined) : undefined;
+              const p = active ? (payload?.[0]?.payload as { date: string; pnlUsd: number; trades: number; lost: boolean } | undefined) : undefined;
               if (!p) return null;
               return (
                 <div className="rounded-lg border border-border/60 bg-popover px-3 py-2 text-xs shadow-md">
@@ -77,6 +86,7 @@ function DailyPnlChart({ days }: { days: BacktestCombinedWallet["days"] }) {
                     P&amp;L: <span className={pnlTone(p.pnlUsd)}>{formatUsd(p.pnlUsd)}</span>
                   </div>
                   <div className="text-muted-foreground">{p.trades} trade{p.trades === 1 ? "" : "s"}</div>
+                  {p.lost && <div className="text-negative">Balance ran out this day</div>}
                 </div>
               );
             }}
@@ -168,6 +178,21 @@ export function CombinedWalletPanel({ runId, refreshKey = 0 }: { runId: string; 
                 : `${wallet.notTakenCount.toLocaleString()} buy${wallet.notTakenCount === 1 ? "" : "s"} not taken for lack of balance`
           }
         />
+        <StatTile
+          label="Capital-loss start days"
+          value={`${wallet.lostCapitalDays} / ${wallet.testedStartDays}`}
+          icon={ShieldAlert}
+          tone={wallet.lostCapitalDays > 0 ? "negative" : wallet.testedStartDays > 0 ? "positive" : "default"}
+          hint={
+            wallet.testedStartDays === 0
+              ? "no trades yet"
+              : wallet.lostCapitalDays === 0
+                ? reset
+                  ? "no day ran out of balance"
+                  : "starting on any day with trades would have survived"
+                : `starting on ${wallet.lostCapitalDays === 1 ? "that day" : "any of those days"} would have run the balance out`
+          }
+        />
         <StatTile label="Lowest balance" value={formatUsd(wallet.lowestBalanceUsd)} icon={TrendingDown} tone={wallet.lowestBalanceUsd < 0 ? "negative" : "default"} hint={reset ? "lowest point of any day" : "lowest point of the whole window"} />
         <StatTile label="Loss days" value={`${wallet.lossDays} / ${days.filter((d) => d.trades > 0).length}`} icon={CalendarDays} tone={wallet.lossDays > 0 ? "negative" : "default"} hint={`${wallet.profitDays} profit day${wallet.profitDays === 1 ? "" : "s"}`} />
         <StatTile label="Win rate" value={wallet.winRatePercent != null ? `${wallet.winRatePercent.toFixed(0)}%` : "—"} icon={Target} hint={`${wallet.wins}W / ${wallet.losses}L · ${wallet.closedPositionCount.toLocaleString()} closed trades`} />
@@ -180,7 +205,16 @@ export function CombinedWalletPanel({ runId, refreshKey = 0 }: { runId: string; 
         ) : reset ? (
           <DailyPnlChart days={days} />
         ) : (
-          <BalanceChart data={data.curve} starting={config.startingBalanceUsd} />
+          <BalanceChart data={data.curve} starting={config.startingBalanceUsd} lostDays={days.filter((d) => d.lostCapital)} />
+        )}
+        {hasTrades && wallet.lostCapitalDays > 0 && (
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="inline-block size-2.5 shrink-0 rounded-sm bg-negative/30 ring-1 ring-negative/50" />
+            <span>
+              {reset ? "Dots mark" : "Red bands mark"} the {wallet.lostCapitalDays} day{wallet.lostCapitalDays === 1 ? "" : "s"} on which starting the wallet would have run its balance out
+              {reset ? "" : " (it can survive from day one and still have bad days to start on)"}.
+            </span>
+          </p>
         )}
       </div>
 
@@ -196,12 +230,13 @@ export function CombinedWalletPanel({ runId, refreshKey = 0 }: { runId: string; 
                 <TableHead className="text-right">Lowest</TableHead>
                 <TableHead className="text-right">P&amp;L</TableHead>
                 <TableHead className="text-right">Trades</TableHead>
-                <TableHead className="pr-4 text-right">Went negative</TableHead>
+                <TableHead className="text-right">Went negative</TableHead>
+                <TableHead className="pr-4 text-right" title="Had the wallet started trading on this day, would its balance have run out?">If started this day</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {days.map((d) => (
-                <TableRow key={d.date} className="border-border/60">
+                <TableRow key={d.date} className={cn("border-border/60", d.lostCapital && "bg-negative/5")}>
                   <TableCell className="whitespace-nowrap">
                     {new Date(`${d.date}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" })} <span className="text-muted-foreground">{d.date.slice(5)}</span>
                   </TableCell>
@@ -218,7 +253,7 @@ export function CombinedWalletPanel({ runId, refreshKey = 0 }: { runId: string; 
                       "—"
                     )}
                   </TableCell>
-                  <TableCell className={cn("pr-4 text-right tabular-nums", d.negativeEvents > 0 && "text-negative")}>
+                  <TableCell className={cn("text-right tabular-nums", d.negativeEvents > 0 && "text-negative")}>
                     {d.negativeEvents > 0 ? (
                       <>
                         {d.negativeEvents}× <span className="text-xs">to {formatUsd(-d.maxNegativeDepthUsd)}</span>
@@ -227,6 +262,22 @@ export function CombinedWalletPanel({ runId, refreshKey = 0 }: { runId: string; 
                       <span className="text-xs text-muted-foreground">{d.notTaken} not taken</span>
                     ) : (
                       "—"
+                    )}
+                  </TableCell>
+                  <TableCell className="pr-4 text-right tabular-nums">
+                    {!d.testedStart ? (
+                      "—"
+                    ) : d.lostCapital ? (
+                      <span className="text-negative">
+                        Loses capital
+                        {d.lostAt != null && (
+                          <span className="block text-xs">
+                            after {((d.lostAt - Date.parse(`${d.date}T00:00:00Z`)) / DAY_MS).toFixed(1)} days · to {formatUsd(d.lostBalanceUsd ?? 0)}
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="text-positive">Survives</span>
                     )}
                   </TableCell>
                 </TableRow>
@@ -242,7 +293,10 @@ export function CombinedWalletPanel({ runId, refreshKey = 0 }: { runId: string; 
                 <TableCell className="text-right tabular-nums">
                   {totals.trades} <span className="text-xs text-muted-foreground">{totals.wins}W/{totals.losses}L</span>
                 </TableCell>
-                <TableCell className={cn("pr-4 text-right tabular-nums", totals.negativeEvents > 0 && "text-negative")}>{totals.negativeEvents > 0 ? `${totals.negativeEvents}×` : "—"}</TableCell>
+                <TableCell className={cn("text-right tabular-nums", totals.negativeEvents > 0 && "text-negative")}>{totals.negativeEvents > 0 ? `${totals.negativeEvents}×` : "—"}</TableCell>
+                <TableCell className={cn("pr-4 text-right tabular-nums", wallet.lostCapitalDays > 0 && "text-negative")}>
+                  {wallet.lostCapitalDays} / {wallet.testedStartDays} lose
+                </TableCell>
               </TableRow>
             </TableFooter>
           </Table>
@@ -250,6 +304,8 @@ export function CombinedWalletPanel({ runId, refreshKey = 0 }: { runId: string; 
             {reset
               ? "Each day is its own wallet that starts from the starting balance; a trade counts for the day it was entered, even if it was sold after midnight. Open trades keep their cost out of that day's balance."
               : "A day's P&L is grouped by when the trades closed. The balance is cash: while a trade is open its cost is out of it, so it dips below the start even when nothing is lost."}
+            {" "}
+            The last column replays only the trades entered from that day on, from the starting balance: the capital is lost when the balance could not pay a buy at some point.
           </p>
         </div>
       </div>

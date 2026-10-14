@@ -240,7 +240,15 @@ simulating again - only the trade amount, fees and timing clear the results):
   the whole window and a day's P&L is grouped by when its trades closed;
 - the run page gets a *Combined wallet* tab: final / lowest balance, realized P&L, negative-balance events,
   loss days, win rate, the balance curve (or each day's P&L when the balance resets) and a day-by-day table
-  (started at, ended at, lowest, P&L, trades, went negative).
+  (started at, ended at, lowest, P&L, trades, went negative, if started this day).
+- **Capital-loss start days**: surviving the whole window does not mean every day was a safe day to start
+  on (a big early win can cover a later drop that would have wiped a wallet started after it). For every
+  day on which a trade was entered, the trades from that day on are replayed from the starting balance;
+  if the balance could not pay a buy at some point (a negative-balance event, or a refused buy when a
+  negative balance is not allowed) that day would have lost the capital. The tile shows the count out of
+  the days tested, the chart marks those days (red bands; dots when the balance resets daily) and the table
+  says when the balance ran out and how far below zero it went. With the daily reset each day is its own
+  wallet, so a day is judged on its own trades.
 
 A combined backtest has no loss-trader rules (dropping one address would change the wallet the others share).
 The per-address pages still show each address as if it traded alone.

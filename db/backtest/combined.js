@@ -18,6 +18,12 @@ import { BacktestPosition } from "../models/BacktestPosition.js";
  * that sell fills after midnight; nothing carries over from one day to the next. Without it the balance runs on through the whole
  * window, and a day's result is grouped by when its trades closed (like the daily breakdown of a single address).
  *
+ * Lost-capital days: for every day on which a trade was entered, the same trades are replayed as if the wallet had STARTED trading
+ * that day (starting balance, only trades entered from then on). If the balance runs out at some point - a buy it cannot pay, which
+ * is a negative-balance event, or a refused buy when a negative balance is not allowed - starting that day would have lost the
+ * capital. Winning streaks cover later drops, so a run can survive from day one and still have bad days to start on. With the daily
+ * reset every day is its own wallet, so a day is judged on its own trades.
+ *
  * Because it is computed from the positions that exist, the figures are complete only once every address is simulated.
  */
 
@@ -72,11 +78,26 @@ const toEvents = (positions) => {
   const events = [];
   for (const p of positions) {
     const openedMs = new Date(p.openedAt).getTime();
-    events.push({ t: openedMs, order: 1, delta: -((p.costBasisUsd || 0) + (p.buyFeeUsd || 0)), p });
-    if (p.status === "closed" && p.closedAt) events.push({ t: new Date(p.closedAt).getTime(), order: 0, delta: (p.proceedsUsd || 0) - (p.sellFeeUsd || 0), p });
+    events.push({ t: openedMs, order: 1, delta: -((p.costBasisUsd || 0) + (p.buyFeeUsd || 0)), p, entered: openedMs });
+    if (p.status === "closed" && p.closedAt) events.push({ t: new Date(p.closedAt).getTime(), order: 0, delta: (p.proceedsUsd || 0) - (p.sellFeeUsd || 0), p, entered: openedMs });
   }
   return events;
 };
+
+/**
+ * Replays `events` (sorted) as a wallet that started with `startingUsd` at `fromMs`, taking only trades entered from then on. Returns
+ * where the balance first could not pay a buy ({t, balanceUsd} = the balance that buy would have left), or null if it never ran out.
+ */
+function firstShortfall(events, fromMs, startingUsd) {
+  let cash = startingUsd;
+  for (const e of events) {
+    if (e.entered < fromMs) continue;
+    const next = cash + e.delta;
+    if (e.order === 1 && next < -1e-9) return { t: e.t, balanceUsd: next };
+    cash = next;
+  }
+  return null;
+}
 
 const emptyDay = (date, startBalanceUsd) => ({
   date,
@@ -90,6 +111,11 @@ const emptyDay = (date, startBalanceUsd) => ({
   negativeEvents: 0,
   maxNegativeDepthUsd: 0,
   notTaken: 0,
+  // Lost-capital test (see the top of the file): started the wallet on this day, would it have run out of balance?
+  testedStart: false, // a trade was entered this day, so it makes sense as a starting day
+  lostCapital: false,
+  lostAt: null, // when the balance first could not pay a buy
+  lostBalanceUsd: null, // the balance that buy would have left
 });
 
 /** Keeps the shape of a long curve (and always its lowest point) while cutting it to a drawable size. */
@@ -167,6 +193,9 @@ export function buildCombinedLedger(positions, { startingUsd, resetDaily = false
       d.negativeEvents = res.negativeCount;
       d.maxNegativeDepthUsd = res.maxNegativeDepth;
       d.notTaken = res.refused.size;
+      d.testedStart = true;
+      d.lostCapital = res.negativeCount > 0 || res.refused.size > 0;
+      if (d.lostCapital) d.lostBalanceUsd = res.lowest;
       for (const p of group) if (p.status === "closed" && p.closedAt && !res.refused.has(p)) book(p, key);
       negativeEvents += res.negativeCount;
       maxNegativeDepth = Math.max(maxNegativeDepth, res.maxNegativeDepth);
@@ -180,7 +209,8 @@ export function buildCombinedLedger(positions, { startingUsd, resetDaily = false
     const points = [];
     const touched = new Set(); // days that had at least one buy or sell
     let carried = startingUsd; // balance after the previous event
-    const res = walk(toEvents(valid), cfg, (e, cash, flag) => {
+    const events = toEvents(valid);
+    const res = walk(events, cfg, (e, cash, flag) => {
       const key = dayKey(e.t);
       const d = dayOf(key);
       if (!touched.has(key)) {
@@ -208,6 +238,18 @@ export function buildCombinedLedger(positions, { startingUsd, resetDaily = false
         d.startBalanceUsd = running;
         d.endBalanceUsd = running;
         d.lowestBalanceUsd = running;
+      }
+    }
+    // Lost-capital test: replay from the start of every day on which a trade was entered (`events` is sorted by the walk above).
+    const entryDays = new Set(events.filter((e) => e.order === 1).map((e) => dayKey(e.t)));
+    for (const k of entryDays) {
+      const d = dayOf(k);
+      d.testedStart = true;
+      const hit = firstShortfall(events, dayStart(k), startingUsd);
+      if (hit) {
+        d.lostCapital = true;
+        d.lostAt = hit.t;
+        d.lostBalanceUsd = hit.balanceUsd;
       }
     }
     negativeEvents = res.negativeCount;
@@ -241,6 +283,8 @@ export function buildCombinedLedger(positions, { startingUsd, resetDaily = false
       lossDays: dayList.filter((d) => d.trades > 0 && d.pnlUsd < 0).length,
       profitDays: dayList.filter((d) => d.pnlUsd > 0).length,
       negativeDays: dayList.filter((d) => d.negativeEvents > 0).length,
+      testedStartDays: dayList.filter((d) => d.testedStart).length,
+      lostCapitalDays: dayList.filter((d) => d.lostCapital).length,
     },
     days: dayList,
     curve,

@@ -291,6 +291,14 @@ export type BacktestCombinedDay = {
   maxNegativeDepthUsd: number;
   /** Buys skipped because the balance could not pay them (only when a negative balance is not allowed). */
   notTaken: number;
+  /** A trade was entered this day, so it counts as a day the wallet could have started on. */
+  testedStart: boolean;
+  /** Had the wallet started trading on this day, its balance would have run out at some point (the capital would have been lost). */
+  lostCapital: boolean;
+  /** When the balance first could not pay a buy, ms (null when it never did, or when the balance resets daily). */
+  lostAt: number | null;
+  /** The balance that buy would have left. */
+  lostBalanceUsd: number | null;
 };
 
 export type BacktestCombinedWallet = {
@@ -313,6 +321,10 @@ export type BacktestCombinedWallet = {
     lossDays: number;
     profitDays: number;
     negativeDays: number;
+    /** Days a trade was entered, i.e. days the wallet could have started on. */
+    testedStartDays: number;
+    /** How many of those days would have lost the whole capital. */
+    lostCapitalDays: number;
   };
   days: BacktestCombinedDay[];
   /** Balance after every buy and sell (empty when the balance resets daily). */
