@@ -42,6 +42,10 @@ const BacktestRunSchema = new Schema({
   },
   // An address with more signatures than this inside the window is skipped instead of collected (0 / missing = no limit).
   maxSignatures: { type: Number, default: 0 },
+  // Where the addresses' trades are read from. "api": pump.fun's user-trades API (fast, but it only reaches back so far; falls back to the chain for an
+  // address it keeps answering blank pages for). "rpc": the chain only - signatures are listed over RPC and every transaction is parsed for its pump.fun
+  // trades (slow, but reaches as far back as the RPC keeps history). Runs made before this existed have none, which reads as "api".
+  collectMethod: { type: String, enum: ["api", "rpc"], default: "api" },
   // Early stop (see db/backtest/earlyStop.js): a trader that is clearly losing is dropped instead of worked to the end. Each rule is off at 0.
   earlyStop: {
     lossDays: { type: Number, default: 0 }, // stop after this many full days that closed in a loss

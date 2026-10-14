@@ -258,6 +258,11 @@ export function RunDashboard({ runId }: { runId: string }) {
           <Clock className="size-3.5" /> Strategy followed (frozen when this backtest started)
         </span>
         <StrategyChips settings={run.settings} />
+        <p className="text-xs text-muted-foreground">
+          {run.collectMethod === "rpc"
+            ? "Trades are read from the chain over RPC (slow, reaches further back)."
+            : "Trades are read from pump.fun's user-trades API (fast, limited history)."}
+        </p>
         {run.maxSignatures ? (
           <p className="text-xs text-muted-foreground">Addresses with more than {run.maxSignatures.toLocaleString()} signatures in the window are skipped.</p>
         ) : null}

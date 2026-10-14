@@ -20,6 +20,8 @@ import { cn } from "@/lib/utils";
 
 const PRESET_DAYS = [3, 7, 12, 30];
 const DEFAULT_MAX_SIGNATURES = 50_000;
+// pump.fun's user-trades API only keeps about this many days of a wallet's history; beyond it the chain (RPC) is the way.
+const API_HISTORY_DAYS = 60;
 const MAX_DAYS = 120;
 
 type Props = {
@@ -40,6 +42,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
   const [name, setName] = useState("");
   const [days, setDays] = useState("7");
   const [maxSignatures, setMaxSignatures] = useState(String(DEFAULT_MAX_SIGNATURES));
+  const [collectMethod, setCollectMethod] = useState<"api" | "rpc">("api");
   const [profileId, setProfileId] = useState<string>("");
   const [scope, setScope] = useState<"selected" | "all">("selected");
   const [submitting, setSubmitting] = useState(false);
@@ -164,6 +167,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
         profileId,
         addresses,
         maxSignatures: maxSignaturesNumber,
+        collectMethod,
         overrides: {
           ...(timingNumbers ?? {}),
           ...(isCombined && combinedNumbers ? { tradeSizeUsd: combinedNumbers.tradeSizeUsd, pumpFeePercent: combinedNumbers.pumpFeePercent, jitoFeeUsd: combinedNumbers.jitoFeeUsd } : {}),
@@ -237,6 +241,28 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
               />
               <span className="text-sm text-muted-foreground">days</span>
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>How to read the trades</Label>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant={collectMethod === "api" ? "default" : "outline"} onClick={() => setCollectMethod("api")}>
+                API (fast)
+              </Button>
+              <Button type="button" size="sm" variant={collectMethod === "rpc" ? "default" : "outline"} onClick={() => setCollectMethod("rpc")}>
+                RPC (slow, long history)
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {collectMethod === "rpc"
+                ? "Lists each address's transactions over RPC and reads the pump.fun trades out of them. Much slower and uses a lot of requests, but reaches as far back as the RPC keeps history - use it for long windows."
+                : "Takes each address's trades from pump.fun's API: a few dozen requests per address, so it is much faster. pump.fun only keeps about the last 60 days, so use RPC for longer windows."}
+            </p>
+            {collectMethod === "api" && daysValid && daysNumber > API_HISTORY_DAYS && (
+              <p className="text-xs text-amber-500">
+                {daysNumber} days is more than pump.fun keeps - the oldest part of the window would be missing. Switch to RPC to cover it.
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">

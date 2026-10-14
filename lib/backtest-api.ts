@@ -63,6 +63,7 @@ export function createBacktestRun(body: {
   profileId: string;
   addresses: string[];
   maxSignatures?: number;
+  collectMethod?: "api" | "rpc";
   overrides?: CombinedOverrides;
   earlyStop?: EarlyStopRules;
   addressParallelism?: number | null;

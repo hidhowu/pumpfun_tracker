@@ -105,6 +105,8 @@ export type BacktestRunDefinition = {
   combined?: BacktestCombinedConfig | null;
   // An address with more signatures than this in the window is skipped (0 / missing = no limit).
   maxSignatures?: number;
+  // Where the trades are read from: pump.fun's user-trades API (fast, limited history) or the chain over RPC (slow, reaches further back). Missing = "api".
+  collectMethod?: "api" | "rpc";
   // Loss-trader rules (0 = off) and how many addresses of this backtest run at once (null / missing = automatic). Runs made before these existed have neither.
   earlyStop?: { lossDays: number; dayLossPercent: number; negativeBalanceEvents?: number; lossAtProgressPercent: number };
   addressParallelism?: number | null;

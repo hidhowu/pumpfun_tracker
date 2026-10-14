@@ -242,8 +242,9 @@ export class BacktestWorker {
     try {
       if (!rt.collect?.done) {
         await BacktestRunTrader.updateOne({ _id: rt._id }, { $set: { stage: "collecting", error: null } });
-        // Trades come straight from pump.fun (fast). The endpoint takes the wallet address when there is no user id, so every address can use it;
-        // reading the chain over RPC (slow) is only the fallback for an address the endpoint keeps answering blank pages for.
+        // The run chooses where trades are read from. "api" (the default): straight from pump.fun (fast, but only so far back). The endpoint takes the
+        // wallet address when there is no user id, so every address can use it; reading the chain over RPC is then only the fallback for an address the
+        // endpoint keeps answering blank pages for. "rpc": always the chain (slow, but reaches as far back as the RPC keeps history).
         const userId = rt.userId || (await BacktestAddress.findOne({ address: rt.address }, { userId: 1 }).lean())?.userId || "";
         const common = {
           address: rt.address,
@@ -253,14 +254,20 @@ export class BacktestWorker {
           progress: (patch) => writer.set(patch),
           maxSignatures: run.maxSignatures || 0,
         };
+        const viaRpc = () => collectAddress({ ...common, rpcPool: this.rpcPool, txConcurrency: settings.txParallelismPerAddress });
         let result;
-        try {
-          result = await collectAddressViaApi({ ...common, userId, client: this.userTrades });
-        } catch (err) {
-          if (!(err instanceof EmptyPageError)) throw err;
-          logEvent("tracker", `[backtest] ${rt.address}: pump.fun kept answering blank pages, reading the chain over RPC instead`, { meta: { runId, address: rt.address } });
+        if (run.collectMethod === "rpc") {
           writer.set({ "collect.source": "rpc" });
-          result = await collectAddress({ ...common, rpcPool: this.rpcPool, txConcurrency: settings.txParallelismPerAddress });
+          result = await viaRpc();
+        } else {
+          try {
+            result = await collectAddressViaApi({ ...common, userId, client: this.userTrades });
+          } catch (err) {
+            if (!(err instanceof EmptyPageError)) throw err;
+            logEvent("tracker", `[backtest] ${rt.address}: pump.fun kept answering blank pages, reading the chain over RPC instead`, { meta: { runId, address: rt.address } });
+            writer.set({ "collect.source": "rpc" });
+            result = await viaRpc();
+          }
         }
         const { failed } = result;
         await writer.flush();

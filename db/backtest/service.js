@@ -281,13 +281,15 @@ function cleanParallelism(v) {
 }
 
 /**
- * @param {{name: string, days: number, profileId: string, addresses: string[], maxSignatures?: number, overrides?: object, earlyStop?: object, addressParallelism?: number|null, daysAtOnce?: number, mode?: "separate"|"combined", combined?: object}} p
+ * @param {{name: string, days: number, profileId: string, addresses: string[], maxSignatures?: number, overrides?: object, earlyStop?: object, addressParallelism?: number|null, daysAtOnce?: number, mode?: "separate"|"combined", combined?: object, collectMethod?: "api"|"rpc"}} p
+ *   collectMethod: "api" reads each address's trades from pump.fun (fast, limited history), "rpc" lists its signatures over RPC and parses each transaction (slow, reaches further back);
  *   maxSignatures: skip an address with more signatures than this in the window (0 = no limit); overrides: values (see OVERRIDE_LIMITS) that replace the profile's;
  *   mode "combined": all addresses trade as one wallet - `combined` is { startingBalanceUsd, resetDaily?, allowNegativeBalance? } and the trade amount / fees come in `overrides`
  *   (tradeSizeUsd, pumpFeePercent, jitoFeeUsd). A combined backtest has no loss-trader rules: one address dropping out would change the wallet the others share.
  */
-export async function createBacktestRun({ name, days, profileId, addresses, maxSignatures = DEFAULT_MAX_SIGNATURES, overrides, earlyStop, addressParallelism, daysAtOnce, mode = "separate", combined }) {
+export async function createBacktestRun({ name, days, profileId, addresses, maxSignatures = DEFAULT_MAX_SIGNATURES, overrides, earlyStop, addressParallelism, daysAtOnce, mode = "separate", combined, collectMethod = "api" }) {
   if (!Number.isFinite(days) || days < 1 || days > MAX_BACKTEST_DAYS) throw new Error(`days must be between 1 and ${MAX_BACKTEST_DAYS}`);
+  if (collectMethod !== "api" && collectMethod !== "rpc") throw new Error("collectMethod must be api or rpc");
   if (!Number.isFinite(maxSignatures) || maxSignatures < 0) throw new Error("The signature limit must be 0 (no limit) or a positive number");
   if (mode !== "separate" && mode !== "combined") throw new Error("mode must be separate or combined");
   const isCombined = mode === "combined";
@@ -322,6 +324,7 @@ export async function createBacktestRun({ name, days, profileId, addresses, maxS
     combined: wallet,
     addresses: runAddresses,
     maxSignatures: Math.floor(maxSignatures),
+    collectMethod,
     earlyStop: stopRules,
     addressParallelism: parallelism,
     daysAtOnce: days_,
