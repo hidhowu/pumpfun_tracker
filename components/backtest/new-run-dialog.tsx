@@ -28,7 +28,8 @@ type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   selected: string[];
-  allAddresses: string[];
+  /** How many addresses are on the backtest list. "All on the list" is resolved by the server, so the list itself is never loaded here. */
+  allCount: number;
   onCreated: (runId: string) => void;
 };
 
@@ -37,7 +38,7 @@ type Props = {
  * (frozen into the run), and which addresses. The profile's strategy is
  * previewed here so there is no surprise about what will be simulated.
  */
-export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCreated }: Props) {
+export function NewRunDialog({ open, onOpenChange, selected, allCount, onCreated }: Props) {
   const { profiles, currentProfileId } = useProfile();
   const [name, setName] = useState("");
   const [days, setDays] = useState("7");
@@ -113,7 +114,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
     };
   }, [open, profileId]);
 
-  const addresses = scope === "selected" ? selected : allAddresses;
+  const addressCount = scope === "selected" ? selected.length : allCount;
   const daysNumber = Number(days);
   const daysValid = Number.isInteger(daysNumber) && daysNumber >= 1 && daysNumber <= MAX_DAYS;
   // Empty or 0 = no limit.
@@ -155,17 +156,17 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
       toast.error("Check the combined wallet settings - each must be a number in range");
       return;
     }
-    if (addresses.length === 0) {
+    if (addressCount === 0) {
       toast.error("No addresses to backtest");
       return;
     }
     setSubmitting(true);
     try {
-      const { run } = await createBacktestRun({
+      const { run, queuePosition } = await createBacktestRun({
         name: name.trim() || undefined,
         days: daysNumber,
         profileId,
-        addresses,
+        ...(scope === "all" ? { allAddresses: true } : { addresses: selected }),
         maxSignatures: maxSignaturesNumber,
         collectMethod,
         overrides: {
@@ -179,7 +180,9 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
           ? { mode: "combined" as const, combined: { startingBalanceUsd: combinedNumbers.startingBalanceUsd, resetDaily: combinedNumbers.resetDaily, allowNegativeBalance: combinedNumbers.allowNegativeBalance } }
           : {}),
       });
-      toast.success(`Backtest started on ${addresses.length} address${addresses.length === 1 ? "" : "es"}`);
+      const count = `${addressCount.toLocaleString()} address${addressCount === 1 ? "" : "es"}`;
+      // Backtests are worked one at a time: the new one starts at once if nothing else is running, otherwise it waits its turn.
+      toast.success(queuePosition && queuePosition > 0 ? `Backtest on ${count} queued - ${queuePosition} ahead of it, it starts by itself when they finish` : `Backtest started on ${count}`);
       onOpenChange(false);
       onCreated(run._id);
     } catch (e) {
@@ -346,7 +349,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
                 Selected ({selected.length})
               </Button>
               <Button type="button" size="sm" variant={scope === "all" ? "default" : "outline"} onClick={() => setScope("all")}>
-                All on the list ({allAddresses.length})
+                All on the list ({allCount.toLocaleString()})
               </Button>
             </div>
           </div>
@@ -356,7 +359,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allAddresses, onCre
           <DialogClose asChild>
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
-          <Button onClick={handleSubmit} disabled={submitting || addresses.length === 0 || !daysValid || !maxSignaturesValid || !screeningNumbers || (timing !== null && !timingNumbers) || (isCombined && !combinedNumbers)}>
+          <Button onClick={handleSubmit} disabled={submitting || addressCount === 0 || !daysValid || !maxSignaturesValid || !screeningNumbers || (timing !== null && !timingNumbers) || (isCombined && !combinedNumbers)}>
             {submitting && <Loader2 className="size-4 animate-spin" />}
             Start backtest
           </Button>

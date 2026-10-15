@@ -24,7 +24,7 @@ import type { BacktestRunSummary } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
 import { EditRunDialog } from "./edit-run-dialog";
 import { RestartRunDialog } from "./restart-run-dialog";
-import { ProgressBar, RunStatusBadge, formatDate, formatDuration, formatSignedPercent, pnlTone } from "./shared";
+import { ProgressBar, RunStatusBadge, formatDate, formatDuration, formatSignedPercent, pnlTone, waitingInQueue } from "./shared";
 
 const ACTIVE = new Set(["queued", "running"]);
 
@@ -132,7 +132,7 @@ export function RunsTab() {
                       {run.addressCount === 1 ? "" : "es"}
                     </span>
                   </Link>
-                  <RunStatusBadge status={run.status} control={run.control} />
+                  <RunStatusBadge status={run.status} control={run.control} queuePosition={run.progress.queuePosition} />
                   {(run.status === "paused" || run.status === "cancelled") && (
                     <Button variant="outline" size="sm" className="gap-1" disabled={resuming === run._id} onClick={() => resume(run)}>
                       {resuming === run._id ? <Loader2 className="size-4 animate-spin" /> : <PlayCircle className="size-4" />}
@@ -162,7 +162,13 @@ export function RunsTab() {
                       {run.progress.addressesFailed > 0 ? ` · ${run.progress.addressesFailed} failed` : ""}
                       {run.progress.addressesSkipped > 0 ? ` · ${run.progress.addressesSkipped} skipped` : ""}
                     </span>
-                    {active && <span>{run.progress.etaMs != null ? `about ${formatDuration(run.progress.etaMs)} left` : "estimating time left…"}</span>}
+                    {waitingInQueue(run.status, run.progress.queuePosition) ? (
+                      <span>
+                        {run.progress.queuePosition === 1 ? "Next in line" : `${run.progress.queuePosition - 1} backtests before it in line`} · starts by itself
+                      </span>
+                    ) : (
+                      active && <span>{run.progress.etaMs != null ? `about ${formatDuration(run.progress.etaMs)} left` : "estimating time left…"}</span>
+                    )}
                   </div>
                 </div>
 

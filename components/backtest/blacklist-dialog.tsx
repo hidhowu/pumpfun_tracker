@@ -13,7 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { blacklistBacktestAddresses } from "@/lib/backtest-api";
+import { blacklistBacktestAddressesBatched } from "@/lib/backtest-api";
 
 /**
  * Confirm-and-do for blacklisting addresses from the backtest side. The
@@ -33,12 +33,15 @@ export function BlacklistDialog({
   onDone: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const n = addresses.length;
 
   async function run() {
     setBusy(true);
+    setProgress({ done: 0, total: addresses.length });
     try {
-      const res = await blacklistBacktestAddresses(addresses);
+      // In batches, so thousands of addresses never become one request that hangs the page and the server.
+      const res = await blacklistBacktestAddressesBatched(addresses, (done, total) => setProgress({ done, total }));
       const parts: string[] = [];
       const fresh = res.blacklisted.length;
       if (fresh) parts.push(`${fresh} blacklisted`);
@@ -51,17 +54,19 @@ export function BlacklistDialog({
       onDone();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to blacklist");
+      onDone(); // some batches may have gone through before it failed: refresh what the page shows
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
+    <AlertDialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
-            Blacklist {n} address{n === 1 ? "" : "es"}?
+            Blacklist {n.toLocaleString()} address{n === 1 ? "" : "es"}?
           </AlertDialogTitle>
           <AlertDialogDescription>
             {n === 1 ? "It leaves" : "They leave"} the backtest list and {n === 1 ? "is" : "are"} added to the Blacklisted page, so {n === 1 ? "it" : "they"} can&apos;t be added to live trading - or back onto the backtest list -
@@ -79,7 +84,7 @@ export function BlacklistDialog({
             }}
           >
             {busy && <Loader2 className="size-4 animate-spin" />}
-            Blacklist
+            {busy && progress ? `Blacklisting ${progress.done.toLocaleString()} / ${progress.total.toLocaleString()}` : "Blacklist"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

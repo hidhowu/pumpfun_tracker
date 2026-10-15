@@ -2,6 +2,7 @@ import { request } from "./api";
 import type {
   BacktestAddressDetail,
   BacktestAddressPnl,
+  BacktestAddressesPage,
   BacktestAddressView,
   BacktestCombinedConfig,
   BacktestCombinedWallet,
@@ -20,8 +21,30 @@ import type {
 type AddResult = { added: string[]; updated?: string[]; skipped: string[]; blacklisted?: string[]; invalid: string[] };
 export type AddressEntry = string | { address: string; label?: string; userId?: string };
 
-export function listBacktestAddresses(): Promise<{ addresses: BacktestAddressView[] }> {
-  return request(`/api/backtest/addresses`);
+/** One page of the backtest list (newest first). `search` matches text in the address or label. */
+export function listBacktestAddresses(opts: { page?: number; limit?: number; search?: string } = {}): Promise<BacktestAddressesPage> {
+  const qs = new URLSearchParams({ page: String(opts.page ?? 1), limit: String(opts.limit ?? 50) });
+  if (opts.search?.trim()) qs.set("search", opts.search.trim());
+  return request(`/api/backtest/addresses?${qs}`);
+}
+
+/**
+ * Rows `from` to `to` (1-based, inclusive) of the list in the order it is shown - newest first - among the addresses that match the search.
+ * "The first 2,500" is from 1 to 2500; "the next 2,500" is 2501 to 5000. The row numbers shift when addresses are removed.
+ */
+export async function getBacktestAddressRange(from: number, to: number, search = ""): Promise<string[]> {
+  const qs = new URLSearchParams({ idsOnly: "1", skip: String(Math.max(0, from - 1)), count: String(Math.max(1, to - from + 1)) });
+  if (search.trim()) qs.set("search", search.trim());
+  const res: { addresses: string[] } = await request(`/api/backtest/addresses?${qs}`);
+  return res.addresses;
+}
+
+/** Every address on the list that matches the search (not just a page), to select them all. */
+export async function getMatchingBacktestAddresses(search = ""): Promise<string[]> {
+  const qs = new URLSearchParams({ idsOnly: "1" });
+  if (search.trim()) qs.set("search", search.trim());
+  const res: { addresses: string[] } = await request(`/api/backtest/addresses?${qs}`);
+  return res.addresses;
 }
 
 export function addBacktestAddresses(entries: AddressEntry[]): Promise<AddResult> {
@@ -44,6 +67,53 @@ export function deleteBacktestAddresses(addresses: string[]): Promise<{ deletedC
   return request(`/api/backtest/addresses/bulk-delete`, { method: "POST", body: JSON.stringify({ addresses }) });
 }
 
+// Operations on many addresses are sent in batches, one after the other: one giant request would hang the page and the server.
+const OP_BATCH = 500;
+const BLACKLIST_BATCH = 200; // blacklisting a live trader also sells its open positions, so each address can cost more
+const RETRY_DELAY_MS = 1500;
+export type BatchProgress = (done: number, total: number) => void;
+
+async function inBatches<T>(items: string[], size: number, send: (batch: string[]) => Promise<T>, onResult: (result: T) => void, onProgress?: BatchProgress) {
+  for (let i = 0; i < items.length; i += size) {
+    const batch = items.slice(i, i + size);
+    let result: T;
+    try {
+      result = await send(batch);
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS)); // a brief hiccup shouldn't abandon a long job
+      result = await send(batch);
+    }
+    onResult(result);
+    onProgress?.(Math.min(items.length, i + batch.length), items.length);
+    await new Promise((resolve) => setTimeout(resolve, 0)); // let the page repaint between batches
+  }
+}
+
+/** Removes any number of addresses from the backtest list, in batches. */
+export async function deleteBacktestAddressesBatched(addresses: string[], onProgress?: BatchProgress): Promise<{ deletedCount: number }> {
+  let deletedCount = 0;
+  await inBatches(addresses, OP_BATCH, (batch) => deleteBacktestAddresses(batch), (r) => (deletedCount += r.deletedCount), onProgress);
+  return { deletedCount };
+}
+
+/** Blacklists any number of addresses, in batches, and adds up what happened. */
+export async function blacklistBacktestAddressesBatched(addresses: string[], onProgress?: BatchProgress): Promise<BlacklistResult> {
+  const total: BlacklistResult = { blacklisted: [], alreadyBlacklisted: [], liveBlacklisted: [], closingPositions: 0 };
+  await inBatches(
+    addresses,
+    BLACKLIST_BATCH,
+    (batch) => blacklistBacktestAddresses(batch),
+    (r) => {
+      total.blacklisted.push(...r.blacklisted);
+      total.alreadyBlacklisted.push(...r.alreadyBlacklisted);
+      total.liveBlacklisted.push(...r.liveBlacklisted);
+      total.closingPositions += r.closingPositions;
+    },
+    onProgress
+  );
+  return total;
+}
+
 export function updateBacktestAddress(address: string, patch: { label?: string; notes?: string }): Promise<{ address: BacktestAddressView }> {
   return request(`/api/backtest/addresses/${address}`, { method: "PATCH", body: JSON.stringify(patch) });
 }
@@ -63,7 +133,10 @@ export function createBacktestRun(body: {
   name?: string;
   days: number;
   profileId: string;
-  addresses: string[];
+  /** The addresses to run - or leave out and set `allAddresses` to run everything on the list (read by the server). */
+  addresses?: string[];
+  allAddresses?: boolean;
+  search?: string;
   maxSignatures?: number;
   collectMethod?: "api" | "rpc";
   overrides?: CombinedOverrides;
@@ -72,7 +145,7 @@ export function createBacktestRun(body: {
   daysAtOnce?: number;
   mode?: "separate" | "combined";
   combined?: Partial<BacktestCombinedConfig> & { startingBalanceUsd: number };
-}): Promise<{ run: BacktestRunSummary }> {
+}): Promise<{ run: BacktestRunSummary; queuePosition: number | null }> {
   return request(`/api/backtest/runs`, { method: "POST", body: JSON.stringify(body) });
 }
 

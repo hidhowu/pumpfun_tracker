@@ -12,10 +12,14 @@ import { resolveBacktestSettings } from "./settings.js";
 import { addTradersBulk, isValidSolanaAddress, setBlacklisted } from "../traderService.js";
 import { traderProgressPercent, estimateRemainingMs } from "./progress.js";
 import { getRunAddress as getRunAddressDetail } from "./addressView.js";
+import { byQueueOrder } from "./queue.js";
 import { EMPTY_STATS, emptyStoredStats, ensureRunStats, finishStats, invalidateRun, remembered, statsByAddress, summariseRuns, summaryTtl, viewStats } from "./runStats.js";
 
 const DAY_MS = 86_400_000;
 const INSERT_CHUNK = 1000;
+// Addresses are added in batches this big (the page sends them that way too); a bigger request is refused so one call can't hold the server.
+export const ADD_BATCH = 500;
+export const MAX_ADD_REQUEST = 2000;
 const USER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const MAX_BACKTEST_DAYS = 120;
 export const DEFAULT_MAX_SIGNATURES = 50_000;
@@ -62,16 +66,18 @@ export async function addBacktestAddresses(entries, { source = "manual" } = {}) 
   // Pasting an address that is already listed together with a user id gives it (or corrects) that id - so the list can be upgraded to the fast source in place.
   const updated = [];
   const skipped = [];
+  const userIdOps = [];
   for (const e of addable) {
     const have = existingBy.get(e.address);
     if (!have) continue;
     if (e.userId && e.userId !== (have.userId || "")) {
-      await BacktestAddress.updateOne({ address: e.address }, { $set: { userId: e.userId } });
+      userIdOps.push({ updateOne: { filter: { address: e.address }, update: { $set: { userId: e.userId } } } });
       updated.push(e.address);
     } else {
       skipped.push(e.address);
     }
   }
+  if (userIdOps.length > 0) await BacktestAddress.bulkWrite(userIdOps, { ordered: false });
 
   let added = [];
   if (toInsert.length > 0) {
@@ -97,10 +103,16 @@ export async function importTradersToBacktest({ listId } = {}) {
   const filter = { status: "active" };
   if (listId) filter.listIds = listId;
   const traders = await Trader.find(filter, { address: 1, label: 1 }).lean();
-  return addBacktestAddresses(
-    traders.map((t) => ({ address: t.address, label: t.label || "" })),
-    { source: listId ? "list" : "traders" }
-  );
+  // In batches, so thousands of traders are never one giant query / insert.
+  const total = { added: [], updated: [], skipped: [], blacklisted: [], invalid: [] };
+  for (let i = 0; i < traders.length; i += ADD_BATCH) {
+    const res = await addBacktestAddresses(
+      traders.slice(i, i + ADD_BATCH).map((t) => ({ address: t.address, label: t.label || "" })),
+      { source: listId ? "list" : "traders" }
+    );
+    for (const key of Object.keys(total)) total[key].push(...res[key]);
+  }
+  return total;
 }
 
 export async function removeBacktestAddresses(addresses) {
@@ -129,6 +141,7 @@ export async function blacklistBacktestAddresses(addresses) {
   const liveBy = new Map(live.map((t) => [t.address, t.status]));
 
   const result = { blacklisted: [], alreadyBlacklisted: [], liveBlacklisted: [], closingPositions: 0 };
+  const fresh = []; // never a live trader: just added to the blacklist, all in one insert
   for (const address of unique) {
     const status = liveBy.get(address);
     if (status === "blacklisted") {
@@ -138,14 +151,23 @@ export async function blacklistBacktestAddresses(addresses) {
       result.liveBlacklisted.push(address);
       result.closingPositions += closingPositions;
     } else {
-      try {
-        await Trader.create({ address, label: labelBy.get(address) || "", status: "blacklisted", blacklistedAt: new Date() });
-      } catch (err) {
-        if (err?.code !== 11000) throw err; // created by a concurrent request - already blacklisted or tracked; make sure it ends up blacklisted
-        await setBlacklisted(address, true);
-      }
-      result.blacklisted.push(address);
+      fresh.push(address);
     }
+  }
+  if (fresh.length > 0) {
+    const at = new Date();
+    try {
+      await Trader.insertMany(
+        fresh.map((address) => ({ address, label: labelBy.get(address) || "", status: "blacklisted", blacklistedAt: at })),
+        { ordered: false }
+      );
+    } catch (err) {
+      if (err?.code !== 11000 && !err?.writeErrors) throw err;
+      // Some were created by a concurrent request in the meantime: make sure those end up blacklisted too.
+      const done = new Set((await Trader.find({ address: { $in: fresh }, status: "blacklisted" }, { address: 1 }).lean()).map((t) => t.address));
+      for (const address of fresh) if (!done.has(address)) await setBlacklisted(address, true);
+    }
+    result.blacklisted.push(...fresh);
   }
   await BacktestAddress.deleteMany({ address: { $in: unique } });
   return result;
@@ -158,28 +180,73 @@ export async function updateBacktestAddress(address, { label, notes }) {
   return BacktestAddress.findOneAndUpdate({ address }, { $set: update }, { returnDocument: "after" });
 }
 
-/** The backtest list, each address with how much of its history is already cached and how many runs used it. */
-export async function listBacktestAddresses() {
-  const [addresses, scans, runCounts, liveTraders] = await Promise.all([
-    BacktestAddress.find({}).sort({ addedAt: -1 }).lean(),
-    BacktestScan.find({}).lean(),
-    BacktestRunTrader.aggregate([{ $group: { _id: "$address", runs: { $sum: 1 } } }]), // one row per (run, address), so this is how many runs used each
-    Trader.find({}, { address: 1, status: 1 }).lean(),
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Mongo filter for the list's search box: the text anywhere in the address or the label, any case. */
+function addressSearchFilter(search) {
+  const q = typeof search === "string" ? search.trim() : "";
+  if (!q) return {};
+  const re = new RegExp(escapeRegex(q), "i");
+  return { $or: [{ address: re }, { label: re }] };
+}
+
+/**
+ * One page of the backtest list (newest first), each address with how much of its history is already cached, how many runs used it and
+ * whether it is a live trader. Only the page's addresses are looked up in the other collections - the list can hold tens of thousands.
+ * `idsOnly` returns just the addresses that match the search, in list order, for "select everything that matches"; `skip` / `count` take only
+ * a slice of them (rows skip+1 ... skip+count), for "select the first 2,500" or "rows 5,001 to 10,000". At most MAX_IDS.
+ * @param {{page?: number, limit?: number, search?: string, idsOnly?: boolean, skip?: number, count?: number}} [opts]
+ */
+export async function listBacktestAddresses({ page = 1, limit = 50, search = "", idsOnly = false, skip = 0, count = MAX_IDS } = {}) {
+  const filter = addressSearchFilter(search);
+  if (idsOnly) {
+    const rows = await BacktestAddress.find(filter, { address: 1 })
+      .sort({ addedAt: -1, _id: -1 })
+      .skip(Math.max(0, Math.floor(skip) || 0))
+      .limit(Math.min(MAX_IDS, Math.max(1, Math.floor(count) || MAX_IDS)))
+      .lean();
+    return { addresses: rows.map((r) => r.address) };
+  }
+  const pageSize = Math.min(200, Math.max(1, Math.floor(limit) || 50));
+  const pageNo = Math.max(1, Math.floor(page) || 1);
+  const [rows, total, totalAll] = await Promise.all([
+    BacktestAddress.find(filter)
+      .sort({ addedAt: -1, _id: -1 })
+      .skip((pageNo - 1) * pageSize)
+      .limit(pageSize)
+      .lean(),
+    BacktestAddress.countDocuments(filter),
+    BacktestAddress.estimatedDocumentCount(),
   ]);
-  const scanBy = new Map(scans.map((s) => [s.address, s]));
+  const inPage = rows.map((r) => r.address);
+  const [scans, runCounts, liveTraders] = await Promise.all([
+    BacktestScan.find({ address: { $in: inPage } }).lean(),
+    BacktestRunTrader.aggregate([{ $match: { address: { $in: inPage } } }, { $group: { _id: "$address", runs: { $sum: 1 } } }]), // one row per (run, address): how many runs used it
+    Trader.find({ address: { $in: inPage } }, { address: 1, status: 1 }).lean(),
+  ]);
+  const scanBy = new Map(scans.map((x) => [x.address, x]));
   const runsBy = new Map(runCounts.map((r) => [r._id, r.runs]));
   const liveBy = new Map(liveTraders.map((t) => [t.address, t.status]));
-  return addresses.map((a) => {
-    const scan = scanBy.get(a.address);
-    return {
-      ...a,
-      cachedFrom: scan ? new Date(scan.coverFrom * 1000) : null,
-      cachedTo: scan ? new Date(scan.coverTo * 1000) : null,
-      runCount: runsBy.get(a.address) || 0,
-      liveStatus: liveBy.get(a.address) ?? null, // "active" | "blacklisted" | null (not a live trader)
-    };
-  });
+  return {
+    addresses: rows.map((a) => {
+      const scan = scanBy.get(a.address);
+      return {
+        ...a,
+        cachedFrom: scan?.coverFrom != null ? new Date(scan.coverFrom * 1000) : null,
+        cachedTo: scan?.coverTo != null ? new Date(scan.coverTo * 1000) : null,
+        runCount: runsBy.get(a.address) || 0,
+        liveStatus: liveBy.get(a.address) ?? null, // "active" | "blacklisted" | null (not a live trader)
+      };
+    }),
+    total, // matching the search
+    totalAll, // on the list
+    page: pageNo,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  };
 }
+
+const MAX_IDS = 100_000;
 
 // ----------------------------------------------------------------- runs
 
@@ -283,13 +350,14 @@ function cleanParallelism(v) {
 }
 
 /**
- * @param {{name: string, days: number, profileId: string, addresses: string[], maxSignatures?: number, overrides?: object, earlyStop?: object, addressParallelism?: number|null, daysAtOnce?: number, mode?: "separate"|"combined", combined?: object, collectMethod?: "api"|"rpc"}} p
+ * @param {{name: string, days: number, profileId: string, addresses: string[], maxSignatures?: number, overrides?: object, earlyStop?: object, addressParallelism?: number|null, daysAtOnce?: number, mode?: "separate"|"combined", combined?: object, collectMethod?: "api"|"rpc", allAddresses?: boolean, search?: string}} p
+ *   allAddresses: run every address on the backtest list (only those matching `search`, if given) - read by the server, so a huge list is never sent in a request;
  *   collectMethod: "api" reads each address's trades from pump.fun (fast, limited history), "rpc" lists its signatures over RPC and parses each transaction (slow, reaches further back);
  *   maxSignatures: skip an address with more signatures than this in the window (0 = no limit); overrides: values (see OVERRIDE_LIMITS) that replace the profile's;
  *   mode "combined": all addresses trade as one wallet - `combined` is { startingBalanceUsd, resetDaily?, allowNegativeBalance? } and the trade amount / fees come in `overrides`
  *   (tradeSizeUsd, pumpFeePercent, jitoFeeUsd). A combined backtest has no loss-trader rules: one address dropping out would change the wallet the others share.
  */
-export async function createBacktestRun({ name, days, profileId, addresses, maxSignatures = DEFAULT_MAX_SIGNATURES, overrides, earlyStop, addressParallelism, daysAtOnce, mode = "separate", combined, collectMethod = "api" }) {
+export async function createBacktestRun({ name, days, profileId, addresses = [], maxSignatures = DEFAULT_MAX_SIGNATURES, overrides, earlyStop, addressParallelism, daysAtOnce, mode = "separate", combined, collectMethod = "api", allAddresses = false, search = "" }) {
   if (!Number.isFinite(days) || days < 1 || days > MAX_BACKTEST_DAYS) throw new Error(`days must be between 1 and ${MAX_BACKTEST_DAYS}`);
   if (collectMethod !== "api" && collectMethod !== "rpc") throw new Error("collectMethod must be api or rpc");
   if (!Number.isFinite(maxSignatures) || maxSignatures < 0) throw new Error("The signature limit must be 0 (no limit) or a positive number");
@@ -300,17 +368,31 @@ export async function createBacktestRun({ name, days, profileId, addresses, maxS
   const stopRules = cleanEarlyStop(isCombined ? undefined : earlyStop);
   const parallelism = cleanParallelism(addressParallelism) ?? null;
   const days_ = cleanDaysAtOnce(daysAtOnce) ?? 0;
-  const unique = [...new Set(addresses)];
-  if (unique.length === 0) throw new Error("Select at least one address");
+  const unique = allAddresses ? [] : [...new Set(addresses)];
+  if (!allAddresses && unique.length === 0) throw new Error("Select at least one address");
   const profile = await Profile.findById(profileId).lean();
   if (!profile) throw new Error("Profile not found");
 
-  // Only addresses actually on the backtest list can be run.
-  const known = await BacktestAddress.find({ address: { $in: unique } }, { address: 1, userId: 1 }).lean();
-  const knownSet = new Set(known.map((k) => k.address));
-  const userIdBy = new Map(known.map((k) => [k.address, k.userId || ""]));
-  const runAddresses = unique.filter((a) => knownSet.has(a));
-  if (runAddresses.length === 0) throw new Error("None of the selected addresses are on the backtest list");
+  // Only addresses actually on the backtest list can be run. They are read a chunk at a time (never all in memory, never one giant query).
+  async function* onTheList() {
+    if (allAddresses) {
+      let rows = [];
+      for await (const doc of BacktestAddress.find(addressSearchFilter(search), { address: 1, userId: 1 }).sort({ addedAt: -1, _id: -1 }).lean().cursor()) {
+        rows.push(doc);
+        if (rows.length >= INSERT_CHUNK) {
+          yield rows;
+          rows = [];
+        }
+      }
+      if (rows.length > 0) yield rows;
+      return;
+    }
+    for (let i = 0; i < unique.length; i += INSERT_CHUNK) {
+      const slice = unique.slice(i, i + INSERT_CHUNK);
+      const found = new Map((await BacktestAddress.find({ address: { $in: slice } }, { address: 1, userId: 1 }).lean()).map((k) => [k.address, k]));
+      yield slice.filter((a) => found.has(a)).map((a) => found.get(a)); // in the order they were given
+    }
+  }
 
   const now = Date.now();
   const settings = { ...(await snapshotProfileSettings(profile._id)), ...(wallet ? { allocationUsd: wallet.startingBalanceUsd } : {}), ...timing };
@@ -320,12 +402,16 @@ export async function createBacktestRun({ name, days, profileId, addresses, maxS
   // seconds to insert).
   const runId = new mongoose.Types.ObjectId();
   try {
-    for (let i = 0; i < runAddresses.length; i += INSERT_CHUNK) {
+    let count = 0;
+    for await (const chunk of onTheList()) {
+      if (chunk.length === 0) continue;
       await BacktestRunTrader.insertMany(
-        runAddresses.slice(i, i + INSERT_CHUNK).map((address) => ({ runId, address, userId: userIdBy.get(address) || "" })),
+        chunk.map((k) => ({ runId, address: k.address, userId: k.userId || "" })),
         { ordered: true }
       );
+      count += chunk.length;
     }
+    if (count === 0) throw new Error(allAddresses ? "There are no addresses on the backtest list" : "None of the selected addresses are on the backtest list");
     return await BacktestRun.create({
       _id: runId,
       name: name?.trim() || `${days}-day backtest`,
@@ -338,7 +424,7 @@ export async function createBacktestRun({ name, days, profileId, addresses, maxS
       settings,
       mode,
       combined: wallet,
-      addressCount: runAddresses.length,
+      addressCount: count,
       statsVersion: 1,
       maxSignatures: Math.floor(maxSignatures),
       collectMethod,
@@ -418,7 +504,7 @@ export async function controlBacktestRun(runId, action, options = {}) {
     await BacktestRunTrader.updateMany({ runId }, { $set: FRESH_ADDRESS });
     await BacktestRun.updateOne(
       { _id: runId },
-      { $set: { control: "run", status: "queued", error: null, startedAt: null, finishedAt: null, activeMs: 0, statsVersion: 1, ...(collectMethod ? { collectMethod } : {}) } }
+      { $set: { control: "run", status: "queued", queuedAt: new Date(), error: null, startedAt: null, finishedAt: null, activeMs: 0, statsVersion: 1, ...(collectMethod ? { collectMethod } : {}) } }
     );
   } else if (action === "pause") {
     if (!ACTIVE_STATUSES.includes(run.status)) throw new Error("Only a queued or running backtest can be paused");
@@ -427,7 +513,7 @@ export async function controlBacktestRun(runId, action, options = {}) {
     // A cancelled backtest keeps everything it finished (and the addresses it hadn't reached), so it can be picked up again exactly like a paused one.
     if (run.status !== "paused" && run.status !== "cancelled") throw new Error("Only a paused or cancelled backtest can be resumed");
     await BacktestRunTrader.updateMany({ runId, claimedBy: { $ne: null } }, { $set: { claimedBy: null, leaseUntil: null } });
-    await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued", finishedAt: null, error: null } });
+    await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued", queuedAt: new Date(), finishedAt: null, error: null } });
   } else if (action === "cancel") {
     if (!["queued", "running", "paused"].includes(run.status)) throw new Error("This backtest has already finished");
     await BacktestRun.updateOne({ _id: runId }, { $set: { control: "cancel", status: run.status === "paused" ? "cancelled" : run.status, finishedAt: run.status === "paused" ? new Date() : null } });
@@ -436,13 +522,13 @@ export async function controlBacktestRun(runId, action, options = {}) {
       { runId, stage: "failed" },
       { $set: { stage: "pending", error: null, claimedBy: null, leaseUntil: null, finishedAt: null } }
     );
-    if (res.modifiedCount > 0) await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued", finishedAt: null, error: null } });
+    if (res.modifiedCount > 0) await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued", queuedAt: new Date(), finishedAt: null, error: null } });
   } else if (action === "retry_skipped") {
     if (ACTIVE_STATUSES.includes(run.status)) throw new Error("Pause the backtest first");
     const n = await requeueAddresses(runId, "skipped"); // includes the ones stopped early: they continue unless the rules still stop them
     if (n === 0) throw new Error("No skipped addresses to retry");
     if (run.status === "completed" || run.status === "failed") {
-      await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued", finishedAt: null, error: null } });
+      await BacktestRun.updateOne({ _id: runId }, { $set: { control: "run", status: "queued", queuedAt: new Date(), finishedAt: null, error: null } });
     }
   } else {
     throw new Error("Unknown action");
@@ -578,7 +664,7 @@ export { getRunAddressPnl } from "./addressView.js";
 const RUN_FIELDS = { addresses: 0 };
 const withCount = (run, counted) => ({ ...run, addressCount: counted ?? run.addressCount ?? run.addresses?.length ?? 0 });
 
-function runProgress(run, summary) {
+function runProgress(run, summary, queuePosition = null) {
   const total = summary?.addressesTotal ?? 0;
   const percent = run.status === "completed" ? 100 : (summary?.percent ?? 0);
   const done = summary?.addressesDone ?? 0;
@@ -592,18 +678,33 @@ function runProgress(run, summary) {
     addressesSkipped: skipped,
     addressesStoppedEarly: summary?.addressesStoppedEarly ?? 0, // part of addressesSkipped: dropped as loss traders
     addressesSettled: done + failed + skipped,
-    etaMs: ACTIVE_STATUSES.includes(run.status) ? estimateRemainingMs(percent, run.activeMs || 0) : null,
+    // 0 = being worked on (or next to be picked up), 1 = next in line, 2 = after that...; null = not in the line (paused, finished...)
+    queuePosition,
+    etaMs: ACTIVE_STATUSES.includes(run.status) && !(queuePosition > 0) ? estimateRemainingMs(percent, run.activeMs || 0) : null,
   };
+}
+
+/** The backtests waiting for or getting the worker, in the order they are worked on (the first is the one being worked on). */
+async function queueOrder() {
+  const rows = await BacktestRun.find({ status: { $in: ACTIVE_STATUSES }, control: "run" }, { queuedAt: 1, createdAt: 1 }).lean();
+  return rows.sort(byQueueOrder).map((r) => String(r._id));
+}
+
+/** Where a backtest is in the line: 0 = being worked on (or next to be picked up), 1 = next, ...; null = not in the line. */
+export async function getQueuePosition(runId) {
+  const at = (await queueOrder()).indexOf(String(runId));
+  return at < 0 ? null : at;
 }
 
 /** Every run with its progress and headline numbers - for the Runs tab. One pass over the runs' address rows, done by the database. */
 export async function listBacktestRuns() {
   const runs = await BacktestRun.find({}, RUN_FIELDS).sort({ createdAt: -1 }).lean();
   for (const run of runs) await ensureRunStats(run);
-  const summaries = await summariseRuns(runs);
+  const [summaries, order] = await Promise.all([summariseRuns(runs), queueOrder()]);
   return runs.map((run) => {
     const summary = summaries.get(String(run._id));
-    return { ...withCount(run, summary?.addressesTotal), progress: runProgress(run, summary), stats: summary?.stats ?? EMPTY_STATS };
+    const at = order.indexOf(String(run._id));
+    return { ...withCount(run, summary?.addressesTotal), progress: runProgress(run, summary, at < 0 ? null : at), stats: summary?.stats ?? EMPTY_STATS };
   });
 }
 
@@ -615,8 +716,10 @@ export async function getBacktestRun(runId) {
   const run = await BacktestRun.findById(runId, RUN_FIELDS).lean();
   if (!run) return null;
   await ensureRunStats(run);
-  const summary = (await summariseRuns([run])).get(String(run._id));
-  return { run: withCount(run, summary?.addressesTotal), progress: runProgress(run, summary), stats: summary?.stats ?? finishStats(null) };
+  const [summaries, order] = await Promise.all([summariseRuns([run]), queueOrder()]);
+  const summary = summaries.get(String(run._id));
+  const at = order.indexOf(String(run._id));
+  return { run: withCount(run, summary?.addressesTotal), progress: runProgress(run, summary, at < 0 ? null : at), stats: summary?.stats ?? finishStats(null) };
 }
 
 // ----------------------------------------------------- the addresses of a run

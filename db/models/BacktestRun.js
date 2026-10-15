@@ -69,6 +69,9 @@ const BacktestRunSchema = new Schema({
   error: { type: String, default: null },
 
   createdAt: { type: Date, default: Date.now },
+  // Place in the queue: backtests are worked one at a time, oldest `queuedAt` first (see BacktestWorker.tick). Set when the backtest is created and
+  // again whenever it is put back in the line (resume, restart, retry), which sends it to the back. Older runs have none and use `createdAt`.
+  queuedAt: { type: Date, default: Date.now },
   startedAt: { type: Date, default: null },
   finishedAt: { type: Date, default: null },
   // Time actually spent working, excluding paused/stopped periods - what the ETA is based on.

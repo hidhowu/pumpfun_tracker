@@ -17,6 +17,7 @@ import { simulatePosition, UnresolvedError } from "./simulator.js";
 import { EarlyStopError, evaluateEarlyStop, hasEarlyStop } from "./earlyStop.js";
 import { sleep } from "./slotPool.js";
 import { statsRefresher } from "./runStats.js";
+import { byQueueOrder } from "./queue.js";
 
 const TICK_MS = 2000;
 // A finished address wakes the worker up to fill its place right away; many finishing together (cached addresses finish in milliseconds) are one wake-up.
@@ -150,6 +151,10 @@ export class BacktestWorker {
         }
       }
       const live = runs.filter((r) => r.control === "run");
+      // ---- the queue: backtests are worked ONE AT A TIME so they never compete for the same proxies, RPCs and CPU. The first in line (see queue.js)
+      // gets the worker; the others stay "queued" until it finishes, is paused or is cancelled - then the next one starts by itself.
+      // (A backtest sitting "paused" with control "run" is one that was edited and is waiting for Resume: it is not in the line.)
+      const head = live.filter((r) => r.status === "queued" || r.status === "running").sort(byQueueOrder)[0] ?? null;
 
       // ---- keep leases of running work alive (only the addresses in hand, by id), and count working time
       if (this.activeIds.size > 0) {
@@ -171,7 +176,7 @@ export class BacktestWorker {
       const ownRuns = new Set(live.filter((r) => r.addressParallelism > 0).map((r) => String(r._id)));
       let sharedFree = settings.addressParallelism - [...activeBy].filter(([id]) => !ownRuns.has(id)).reduce((n, [, c]) => n + c, 0);
       const exhausted = []; // runs with nothing in hand and nothing left to claim: the only ones that can have just finished
-      for (const run of live) {
+      for (const run of head ? [head] : []) {
         const own = ownRuns.has(String(run._id));
         const hadActive = (activeBy.get(String(run._id)) ?? 0) > 0;
         let free = own ? run.addressParallelism * STANDBY_FACTOR - (activeBy.get(String(run._id)) ?? 0) : sharedFree;
@@ -214,7 +219,8 @@ export class BacktestWorker {
           }
           continue;
         }
-        if (run.addressCount && total < run.addressCount) continue; // rows still missing - not finished
+        // Rows still missing - not finished. Only for a while: a backtest that can never complete would hold up everything queued behind it.
+        if (run.addressCount && total < run.addressCount && Date.now() - new Date(run.createdAt).getTime() < EMPTY_RUN_GRACE_MS) continue;
         const remaining = (by.pending ?? 0) + (by.collecting ?? 0) + (by.simulating ?? 0);
         if (remaining > 0) continue;
         const done = by.done ?? 0;
@@ -232,6 +238,7 @@ export class BacktestWorker {
           }
         );
         logEvent("tracker", `[backtest] Backtest "${run.name}" finished (${done} done, ${failed} failed, ${skippedCount} skipped)`);
+        this.#kick(); // the next backtest in the queue starts right away
       }
     } finally {
       this.ticking = false;

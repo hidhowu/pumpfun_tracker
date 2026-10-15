@@ -52,10 +52,22 @@ const STATUS_META: Record<BacktestStatus, { label: string; className: string; ic
   failed: { label: "Failed", className: "border-negative/30 bg-negative/10 text-negative", icon: AlertTriangle },
 };
 
-export function RunStatusBadge({ status, control }: { status: BacktestStatus; control?: "run" | "pause" | "cancel" }) {
+/**
+ * Backtests are worked one at a time. `queuePosition` (from the run's progress): 0 = being worked on / next to be picked up,
+ * 1 = next in line, 2 = the one after... A queued backtest that is waiting shows its place.
+ */
+export function waitingInQueue(status: BacktestStatus, queuePosition: number | null | undefined): queuePosition is number {
+  return status === "queued" && typeof queuePosition === "number" && queuePosition > 0;
+}
+
+export function RunStatusBadge({ status, control, queuePosition }: { status: BacktestStatus; control?: "run" | "pause" | "cancel"; queuePosition?: number | null }) {
   // A pause/cancel request is acknowledged by the worker within a couple of seconds - show it as "pausing" meanwhile.
   const pending = (status === "running" || status === "queued") && control && control !== "run";
-  const meta = pending ? { ...STATUS_META.paused, label: control === "pause" ? "Pausing…" : "Cancelling…" } : STATUS_META[status];
+  const meta = pending
+    ? { ...STATUS_META.paused, label: control === "pause" ? "Pausing…" : "Cancelling…" }
+    : waitingInQueue(status, queuePosition)
+      ? { ...STATUS_META.queued, label: `Queued · #${queuePosition}` }
+      : STATUS_META[status];
   const Icon = meta.icon;
   return (
     <Badge variant="outline" className={cn("gap-1", meta.className)}>

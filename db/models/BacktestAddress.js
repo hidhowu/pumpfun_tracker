@@ -19,4 +19,6 @@ const BacktestAddressSchema = new Schema({
   addedAt: { type: Date, default: Date.now },
 });
 
+BacktestAddressSchema.index({ addedAt: -1, _id: -1 }); // the list's order, paged
+
 export const BacktestAddress = models.BacktestAddress || model("BacktestAddress", BacktestAddressSchema);

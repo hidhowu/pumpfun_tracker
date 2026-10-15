@@ -20,7 +20,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { StatTile } from "@/components/traders/stat-tile";
-import { controlBacktestRun, deleteBacktestAddresses, deleteBacktestRun, getBacktestRun, promoteBacktestAddresses } from "@/lib/backtest-api";
+import { controlBacktestRun, deleteBacktestAddressesBatched, deleteBacktestRun, getBacktestRun, promoteBacktestAddresses } from "@/lib/backtest-api";
 import { formatUsd } from "@/lib/format";
 import type { BacktestRunDetail } from "@/lib/backtest-types";
 import { CombinedWalletPanel } from "./combined-wallet-panel";
@@ -32,7 +32,7 @@ import { WorkerStatus } from "./worker-status";
 import { BlacklistDialog } from "./blacklist-dialog";
 import { EditRunDialog } from "./edit-run-dialog";
 import { RestartRunDialog } from "./restart-run-dialog";
-import { ProgressBar, RunStatusBadge, StrategyChips, formatDate, formatDuration, formatSignedPercent } from "./shared";
+import { ProgressBar, RunStatusBadge, StrategyChips, formatDate, formatDuration, formatSignedPercent, waitingInQueue } from "./shared";
 
 const ACTIVE = new Set(["queued", "running"]);
 // The chart, daily grid, trade list and combined wallet each read a lot of data, so while a backtest runs they refresh on this slower beat
@@ -133,7 +133,11 @@ export function RunDashboard({ runId }: { runId: string }) {
   async function removeAddresses() {
     setBusy("remove-addresses");
     try {
-      const { deletedCount } = await deleteBacktestAddresses([...selected]);
+      const all = [...selected];
+      const { deletedCount } = await deleteBacktestAddressesBatched(all, (done, total) =>
+        toast.loading(`Removing ${done.toLocaleString()} / ${total.toLocaleString()}…`, { id: "remove-addresses" })
+      );
+      toast.dismiss("remove-addresses");
       toast.success(`Removed ${deletedCount} address${deletedCount === 1 ? "" : "es"} from the backtest list`);
       setSelected(new Set());
     } catch (e) {
@@ -192,7 +196,7 @@ export function RunDashboard({ runId }: { runId: string }) {
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="min-w-0 truncate text-lg font-semibold tracking-tight">{run.name}</h1>
-            <RunStatusBadge status={run.status} control={run.control} />
+            <RunStatusBadge status={run.status} control={run.control} queuePosition={progress.queuePosition} />
             {isCombined && (
               <Badge variant="outline" className="gap-1 border-primary/30 bg-primary/10 font-normal text-primary">
                 <Wallet className="size-3" /> Combined wallet
@@ -264,7 +268,13 @@ export function RunDashboard({ runId }: { runId: string }) {
         <ProgressBar percent={pct} tone={run.status === "failed" ? "negative" : run.status === "completed" ? "positive" : "primary"} className="h-2" />
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <span>Worked for {formatDuration(run.activeMs)}</span>
-          {running && <span>{progress.etaMs != null ? `About ${formatDuration(progress.etaMs)} left` : "Estimating time left…"}</span>}
+          {waitingInQueue(run.status, progress.queuePosition) ? (
+            <span>
+              Waiting in the queue - {progress.queuePosition === 1 ? "next in line" : `${progress.queuePosition - 1} backtests ahead of the next one`}. It starts by itself when the one running finishes.
+            </span>
+          ) : (
+            running && <span>{progress.etaMs != null ? `About ${formatDuration(progress.etaMs)} left` : "Estimating time left…"}</span>
+          )}
           {run.status === "paused" && <span>Paused - resume to continue where it stopped</span>}
           {run.status === "cancelled" && <span>Cancelled - resume to continue with the addresses that are not finished</span>}
           {run.error && <span className="text-negative">{run.error}</span>}

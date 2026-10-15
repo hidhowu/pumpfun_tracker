@@ -18,6 +18,16 @@ export type BacktestAddressView = {
   liveStatus: "active" | "blacklisted" | null;
 };
 
+/** One page of the backtest list. `total` matches the search; `totalAll` is everything on the list. */
+export type BacktestAddressesPage = {
+  addresses: BacktestAddressView[];
+  total: number;
+  totalAll: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
 /** Day-by-day quality of one trader (a day = a UTC day with at least one closed trade; percents are the combined % of that day). See db/backtest/dayStats.js. */
 export type BacktestDaySummary = {
   tradingDays: number;
@@ -80,6 +90,8 @@ export type BacktestRunProgress = {
   addressesSkipped: number;
   addressesStoppedEarly?: number; // part of addressesSkipped: dropped as loss traders
   addressesSettled: number;
+  // Backtests are worked one at a time. 0 = being worked on (or next to be picked up), 1 = next in line, 2 = the one after...; null = not in the line (paused, finished).
+  queuePosition?: number | null;
   etaMs: number | null;
 };
 

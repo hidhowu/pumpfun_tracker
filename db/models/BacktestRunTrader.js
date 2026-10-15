@@ -85,6 +85,8 @@ BacktestRunTraderSchema.index({ stage: 1, leaseUntil: 1 });
 // The worker's "next address to work on" (runId + stage in [...], oldest first) and the stage counts of a run - without it every claim
 // walks past all the finished addresses of the run, which makes a run of many addresses slower and slower.
 BacktestRunTraderSchema.index({ runId: 1, stage: 1, _id: 1 });
+// "How many backtests used this address" for a page of the address list.
+BacktestRunTraderSchema.index({ address: 1 });
 // The run page's default order (best P&L first).
 BacktestRunTraderSchema.index({ runId: 1, "stats.realizedPnlUsd": -1, _id: 1 });
 

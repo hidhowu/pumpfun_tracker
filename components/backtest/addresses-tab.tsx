@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ChevronDown, Download, FlaskConical, Loader2, Pencil, Search, ShieldBan, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Download, FlaskConical, Loader2, Pencil, Search, ShieldBan, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -21,14 +21,15 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { deleteBacktestAddresses, importTradersToBacktest, listBacktestAddresses, updateBacktestAddress } from "@/lib/backtest-api";
+import { deleteBacktestAddressesBatched, getMatchingBacktestAddresses, importTradersToBacktest, listBacktestAddresses, updateBacktestAddress } from "@/lib/backtest-api";
 import { listTraderLists } from "@/lib/api";
 import { formatAddress } from "@/lib/format";
-import type { BacktestAddressView } from "@/lib/backtest-types";
+import type { BacktestAddressesPage, BacktestAddressView } from "@/lib/backtest-types";
 import type { TraderListView } from "@/lib/types";
 import { AddAddressesDialog } from "./add-addresses-dialog";
 import { BlacklistDialog } from "./blacklist-dialog";
 import { NewRunDialog } from "./new-run-dialog";
+import { RangeSelect } from "./range-select";
 import { formatDate } from "./shared";
 import { useRouter } from "next/navigation";
 
@@ -79,50 +80,72 @@ function EditLabelDialog({ entry, onClose, onSaved }: { entry: BacktestAddressVi
   );
 }
 
-/** The backtest list: add / import / label / remove addresses, then pick some and start a backtest on them. */
+const PAGE_SIZES = [25, 50, 100, 200];
+
+/**
+ * The backtest list: add / import / label / remove addresses, then pick some and start a backtest on them. The list can hold tens of
+ * thousands of addresses, so it is read a page at a time and searched on the server.
+ */
 export function AddressesTab() {
   const router = useRouter();
-  const [addresses, setAddresses] = useState<BacktestAddressView[] | null>(null);
+  const [data, setData] = useState<BacktestAddressesPage | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState(""); // the search once typing has paused
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [loading, setLoading] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const latest = useRef(0);
   const [lists, setLists] = useState<TraderListView[]>([]);
   const [importing, setImporting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteProgress, setDeleteProgress] = useState<{ done: number; total: number } | null>(null);
   const [editing, setEditing] = useState<BacktestAddressView | null>(null);
   const [runDialogOpen, setRunDialogOpen] = useState(false);
   const [blacklistOpen, setBlacklistOpen] = useState(false);
 
+  // Searching waits for a pause in typing before asking the server.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAppliedSearch(search);
+      setPage(1);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const refresh = useCallback(async () => {
+    const mine = ++latest.current;
+    setLoading(true);
     try {
-      const { addresses } = await listBacktestAddresses();
-      setAddresses(addresses);
-      // Drop selections that no longer exist (removed elsewhere).
-      setSelected((prev) => {
-        const alive = new Set(addresses.map((a) => a.address));
-        const next = new Set([...prev].filter((a) => alive.has(a)));
-        return next.size === prev.size ? prev : next;
-      });
+      const res = await listBacktestAddresses({ page, limit: pageSize, search: appliedSearch });
+      if (mine !== latest.current) return; // a newer request has been made since
+      setData(res);
+      if (res.page > res.totalPages) setPage(res.totalPages); // the last page emptied out (rows removed)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load the backtest list");
+      if (mine === latest.current) toast.error(e instanceof Error ? e.message : "Failed to load the backtest list");
+    } finally {
+      if (mine === latest.current) setLoading(false);
     }
-  }, []);
+  }, [page, pageSize, appliedSearch]);
 
   useEffect(() => {
-    refresh();
+    const timer = setTimeout(refresh, 0);
+    return () => clearTimeout(timer);
+  }, [refresh]);
+
+  useEffect(() => {
     listTraderLists()
       .then(({ lists }) => setLists(lists))
       .catch(() => {});
-  }, [refresh]);
+  }, []);
 
-  const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!addresses) return [];
-    if (!q) return addresses;
-    return addresses.filter((a) => a.address.toLowerCase().includes(q) || a.label.toLowerCase().includes(q));
-  }, [addresses, search]);
-
+  const visible: BacktestAddressView[] = data?.addresses ?? [];
+  const total = data?.total ?? 0;
   const allVisibleSelected = visible.length > 0 && visible.every((a) => selected.has(a.address));
+  const canSelectAllMatching = allVisibleSelected && total > visible.length && selected.size < total;
+  const selectedList = useMemo(() => [...selected], [selected]);
 
   function toggleAll() {
     setSelected((prev) => {
@@ -131,6 +154,18 @@ export function AddressesTab() {
       else visible.forEach((a) => next.add(a.address));
       return next;
     });
+  }
+
+  async function selectAllMatching() {
+    setSelectingAll(true);
+    try {
+      const matching = await getMatchingBacktestAddresses(appliedSearch);
+      setSelected((prev) => new Set([...prev, ...matching]));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to select the addresses");
+    } finally {
+      setSelectingAll(false);
+    }
   }
 
   function toggleOne(address: string) {
@@ -157,20 +192,21 @@ export function AddressesTab() {
 
   async function handleDelete() {
     setDeleting(true);
+    setDeleteProgress({ done: 0, total: selected.size });
     try {
-      const { deletedCount } = await deleteBacktestAddresses([...selected]);
+      const { deletedCount } = await deleteBacktestAddressesBatched(selectedList, (done, total) => setDeleteProgress({ done, total }));
       toast.success(`Removed ${deletedCount} address${deletedCount === 1 ? "" : "es"} from the backtest list`);
       setSelected(new Set());
       setConfirmDelete(false);
       await refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to remove");
+      refresh(); // some batches may have gone through before it failed
     } finally {
       setDeleting(false);
+      setDeleteProgress(null);
     }
   }
-
-  const selectedList = [...selected];
 
   return (
     <div className="flex flex-col gap-4">
@@ -198,12 +234,29 @@ export function AddressesTab() {
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
-        <AddAddressesDialog onAdded={refresh} />
+        <AddAddressesDialog
+          onAdded={() => {
+            setPage(1);
+            refresh();
+          }}
+        />
       </div>
+
+      {data !== null && data.totalAll > 0 && <RangeSelect total={total} search={appliedSearch} onSelect={(addresses) => setSelected(new Set(addresses))} />}
+
+      {canSelectAllMatching && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <span>All {visible.length} on this page are selected.</span>
+          <Button size="sm" variant="outline" disabled={selectingAll} onClick={selectAllMatching}>
+            {selectingAll && <Loader2 className="size-4 animate-spin" />}
+            Select all {total.toLocaleString()} {appliedSearch.trim() ? "that match" : "on the list"}
+          </Button>
+        </div>
+      )}
 
       {selected.size > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
-          <span className="text-sm font-medium">{selected.size} selected</span>
+          <span className="text-sm font-medium">{selected.size.toLocaleString()} selected</span>
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <Button size="sm" className="gap-1.5" onClick={() => setRunDialogOpen(true)}>
               <FlaskConical className="size-4" />
@@ -224,13 +277,13 @@ export function AddressesTab() {
         </div>
       )}
 
-      {addresses === null ? (
+      {data === null ? (
         <div className="flex flex-col gap-2">
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-12 w-full rounded-lg" />
           ))}
         </div>
-      ) : addresses.length === 0 ? (
+      ) : data.totalAll === 0 ? (
         <div className="flex min-h-[200px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-card/40 px-4 text-center">
           <p className="text-sm text-muted-foreground">No addresses yet. Add some, or copy your live traders over, then start a backtest on them.</p>
         </div>
@@ -257,11 +310,11 @@ export function AddressesTab() {
                 </TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className={loading && data !== null ? "opacity-70 transition-opacity" : undefined}>
               {visible.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
-                    No address matches &quot;{search}&quot;.
+                    No address matches &quot;{appliedSearch}&quot;.
                   </TableCell>
                 </TableRow>
               ) : (
@@ -326,13 +379,48 @@ export function AddressesTab() {
         </div>
       )}
 
+      {data && data.totalAll > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            {loading && <Loader2 className="size-3 animate-spin" />}
+            {total === 0
+              ? "No matches"
+              : `${((data.page - 1) * data.pageSize + 1).toLocaleString()}–${Math.min(total, data.page * data.pageSize).toLocaleString()} of ${total.toLocaleString()}${
+                  appliedSearch.trim() ? ` matching (${data.totalAll.toLocaleString()} on the list)` : ""
+                }`}
+          </span>
+          <div className="flex items-center gap-1.5">
+            {PAGE_SIZES.map((n) => (
+              <Button
+                key={n}
+                size="sm"
+                variant={pageSize === n ? "default" : "ghost"}
+                className="h-7 px-2 text-xs"
+                onClick={() => {
+                  setPageSize(n);
+                  setPage(1);
+                }}
+              >
+                {n}
+              </Button>
+            ))}
+            <Button size="sm" variant="outline" className="h-7 gap-1 px-2" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+              <ChevronLeft className="size-3.5" /> Prev
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 gap-1 px-2" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>
+              Next <ChevronRight className="size-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
       <EditLabelDialog entry={editing} onClose={() => setEditing(null)} onSaved={refresh} />
 
       <NewRunDialog
         open={runDialogOpen}
         onOpenChange={setRunDialogOpen}
         selected={selectedList}
-        allAddresses={(addresses ?? []).map((a) => a.address)}
+        allCount={data?.totalAll ?? 0}
         onCreated={(id) => router.push(`/backtest/${id}`)}
       />
 
@@ -346,20 +434,28 @@ export function AddressesTab() {
         }}
       />
 
-      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+      <AlertDialog open={confirmDelete} onOpenChange={(open) => !deleting && setConfirmDelete(open)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Remove {selected.size} address{selected.size === 1 ? "" : "es"}?
+              Remove {selected.size.toLocaleString()} address{selected.size === 1 ? "" : "es"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
               They leave the backtest list only. Past backtests keep their results, cached history stays, and live Traders are untouched.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction className="bg-negative text-negative-foreground hover:bg-negative/90" disabled={deleting} onClick={handleDelete}>
-              Remove
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-negative text-negative-foreground hover:bg-negative/90"
+              disabled={deleting}
+              onClick={(e) => {
+                e.preventDefault(); // stay open to show the progress; handleDelete closes it when done
+                handleDelete();
+              }}
+            >
+              {deleting && <Loader2 className="size-4 animate-spin" />}
+              {deleting && deleteProgress ? `Removing ${deleteProgress.done.toLocaleString()} / ${deleteProgress.total.toLocaleString()}` : "Remove"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
