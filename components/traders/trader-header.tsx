@@ -1,5 +1,8 @@
 "use client";
 
+import { copyText } from "@/lib/clipboard";
+
+
 import { useState } from "react";
 import { toast } from "sonner";
 import { Copy, Check, ShieldBan, ShieldCheck, Pencil } from "lucide-react";
@@ -42,7 +45,10 @@ export function TraderHeader({ trader, onUpdated }: Props) {
   const [busy, setBusy] = useState(false);
 
   const copyAddress = async () => {
-    await navigator.clipboard.writeText(trader.address);
+    if (!(await copyText(trader.address))) {
+      toast.error("Couldn't copy the address");
+      return;
+    }
     setCopied(true);
     toast.success("Address copied");
     setTimeout(() => setCopied(false), 1500);

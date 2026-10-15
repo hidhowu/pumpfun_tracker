@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import { useEffect, useState } from "react";
 import { ExternalLink, Gauge, Layers, TrendingDown, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -65,10 +67,10 @@ export function AddressOpenPositions({ runId, address, refreshKey }: { runId: st
                   return (
                     <TableRow key={p._id}>
                       <TableCell>
-                        <a href={`https://pump.fun/coin/${p.mint}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-primary">
+                        <span className="inline-flex min-w-0 items-center gap-1"><a href={`https://pump.fun/coin/${p.mint}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-primary">
                           {formatAddress(p.mint, 5)}
                           <ExternalLink className="size-3" />
-                        </a>
+                        </a><CopyButton value={p.mint} label="token address" /></span>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{formatTokenAmount(p.tokenAmount)}</TableCell>
                       <TableCell className="text-right tabular-nums text-muted-foreground">{formatUsd(p.costBasisUsd)}</TableCell>

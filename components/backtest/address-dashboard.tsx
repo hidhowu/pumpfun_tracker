@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { copyText } from "@/lib/clipboard";
 import { ArrowLeft, Check, Copy, History, LineChart, Loader2, Pencil, SlidersHorizontal, Layers, ShieldBan, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -64,12 +65,11 @@ export function AddressDashboard({ runId, address }: { runId: string; address: s
   }, [refresh, active]);
 
   async function copyAddress() {
-    try {
-      await navigator.clipboard.writeText(address);
+    if (await copyText(address)) {
       setCopied(true);
       toast.success("Address copied");
       setTimeout(() => setCopied(false), 1500);
-    } catch {
+    } else {
       toast.error("Couldn't copy");
     }
   }

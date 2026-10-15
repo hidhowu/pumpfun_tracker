@@ -13,7 +13,9 @@ import { addTradersBulk, isValidSolanaAddress, setBlacklisted } from "../traderS
 import { traderProgressPercent, estimateRemainingMs } from "./progress.js";
 import { getRunAddress as getRunAddressDetail } from "./addressView.js";
 import { byQueueOrder } from "./queue.js";
-import { EMPTY_STATS, emptyStoredStats, ensureRunStats, finishStats, invalidateRun, remembered, statsByAddress, summariseRuns, summaryTtl, viewStats } from "./runStats.js";
+import { freshAddressState, insertAddressRows } from "./rows.js";
+import { addTradersToList } from "../listService.js";
+import { EMPTY_STATS, emptyStoredStats, ensureRunStats, finishStats, invalidateRun, remembered, rememberedWithAge, statsByAddress, summariseRuns, summaryTtl, viewStats } from "./runStats.js";
 
 const DAY_MS = 86_400_000;
 const INSERT_CHUNK = 1000;
@@ -97,22 +99,24 @@ export async function addBacktestAddresses(entries, { source = "manual" } = {}) 
   return { added, updated, skipped, blacklisted, invalid };
 }
 
-/** Copies live traders (optionally just one list's) onto the backtest list. The live Trader documents are untouched. */
-/** @param {{listId?: string}} [opts] */
-export async function importTradersToBacktest({ listId } = {}) {
+/**
+ * Copies live traders (optionally just one list's) onto the backtest list. The live Trader documents are untouched.
+ * ONE PAGE per call: pass the `nextAfterId` of the previous answer to get the next page (null = that was the last one). `total` (first page only)
+ * is how many traders there are, for a progress bar.
+ * @param {{listId?: string, afterId?: string|null, limit?: number}} [opts]
+ */
+export async function importTradersToBacktest({ listId, afterId = null, limit = ADD_BATCH } = {}) {
   const filter = { status: "active" };
   if (listId) filter.listIds = listId;
-  const traders = await Trader.find(filter, { address: 1, label: 1 }).lean();
-  // In batches, so thousands of traders are never one giant query / insert.
-  const total = { added: [], updated: [], skipped: [], blacklisted: [], invalid: [] };
-  for (let i = 0; i < traders.length; i += ADD_BATCH) {
-    const res = await addBacktestAddresses(
-      traders.slice(i, i + ADD_BATCH).map((t) => ({ address: t.address, label: t.label || "" })),
-      { source: listId ? "list" : "traders" }
-    );
-    for (const key of Object.keys(total)) total[key].push(...res[key]);
-  }
-  return total;
+  const pageSize = Math.min(MAX_ADD_REQUEST, Math.max(1, Math.floor(limit) || ADD_BATCH));
+  const total = afterId ? undefined : await Trader.countDocuments(filter);
+  const page = afterId ? { ...filter, _id: { $gt: new mongoose.Types.ObjectId(String(afterId)) } } : filter;
+  const traders = await Trader.find(page, { address: 1, label: 1 }).sort({ _id: 1 }).limit(pageSize).lean();
+  const res = await addBacktestAddresses(
+    traders.map((t) => ({ address: t.address, label: t.label || "" })),
+    { source: listId ? "list" : "traders" }
+  );
+  return { ...res, scanned: traders.length, total, nextAfterId: traders.length === pageSize ? String(traders.at(-1)._id) : null };
 }
 
 export async function removeBacktestAddresses(addresses) {
@@ -183,7 +187,7 @@ export async function updateBacktestAddress(address, { label, notes }) {
 const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Mongo filter for the list's search box: the text anywhere in the address or the label, any case. */
-function addressSearchFilter(search) {
+export function addressSearchFilter(search) {
   const q = typeof search === "string" ? search.trim() : "";
   if (!q) return {};
   const re = new RegExp(escapeRegex(q), "i");
@@ -405,11 +409,7 @@ export async function createBacktestRun({ name, days, profileId, addresses = [],
     let count = 0;
     for await (const chunk of onTheList()) {
       if (chunk.length === 0) continue;
-      await BacktestRunTrader.insertMany(
-        chunk.map((k) => ({ runId, address: k.address, userId: k.userId || "" })),
-        { ordered: true }
-      );
-      count += chunk.length;
+      count += await insertAddressRows(runId, chunk);
     }
     if (count === 0) throw new Error(allAddresses ? "There are no addresses on the backtest list" : "None of the selected addresses are on the backtest list");
     return await BacktestRun.create({
@@ -439,6 +439,61 @@ export async function createBacktestRun({ name, days, profileId, addresses = [],
   }
 }
 
+/**
+ * Adds addresses to a backtest that already exists - running, queued, paused, or finished - so one backtest can keep growing instead of
+ * a new one being made for every batch. Addresses already in it are left alone. The new ones wait like any other: a running backtest
+ * just picks them up; a FINISHED one is set to paused, and Resume then works only through the new addresses (everything done stays done).
+ *
+ * Either pass `addresses` (at most MAX_ADD_REQUEST, all of which must be on the backtest list), or `fromList: true` to take everything on
+ * the backtest list (matching `search`, if given) that is not in the backtest yet, ONE PAGE per call: pass the `nextAfterId` of the previous
+ * answer to get the next page (null = that was the last one). The page loops, so a list of any size is never one long request.
+ * @param {string} runId
+ * @param {{addresses?: string[], fromList?: boolean, afterId?: string|null, search?: string, limit?: number}} opts
+ */
+export async function addAddressesToRun(runId, { addresses = [], fromList = false, afterId = null, search = "", limit = ADD_BATCH } = {}) {
+  const run = await BacktestRun.findById(runId, { status: 1, control: 1, addressCount: 1 }).lean();
+  if (!run) throw new Error("Backtest not found");
+
+  let candidates;
+  let notOnList = 0;
+  let scanned;
+  let nextAfterId = null;
+  if (fromList) {
+    const pageSize = Math.min(MAX_ADD_REQUEST, Math.max(1, Math.floor(limit) || ADD_BATCH));
+    const filter = { ...addressSearchFilter(search), ...(afterId ? { _id: { $gt: new mongoose.Types.ObjectId(String(afterId)) } } : {}) };
+    const rows = await BacktestAddress.find(filter, { address: 1, userId: 1 }).sort({ _id: 1 }).limit(pageSize).lean();
+    candidates = rows;
+    scanned = rows.length;
+    nextAfterId = rows.length === pageSize ? String(rows.at(-1)._id) : null;
+  } else {
+    const unique = [...new Set(addresses)];
+    if (unique.length === 0) throw new Error("Provide at least one address");
+    if (unique.length > MAX_ADD_REQUEST) throw new Error(`Add at most ${MAX_ADD_REQUEST} addresses per request`);
+    candidates = await BacktestAddress.find({ address: { $in: unique } }, { address: 1, userId: 1 }).lean();
+    notOnList = unique.length - candidates.length;
+    scanned = unique.length;
+  }
+
+  const inRun = new Set(
+    (await BacktestRunTrader.find({ runId: run._id, address: { $in: candidates.map((c) => c.address) } }, { address: 1 }).lean()).map((r) => r.address)
+  );
+  const fresh = candidates.filter((c) => !inRun.has(c.address));
+  const added = await insertAddressRows(run._id, fresh);
+
+  if (added > 0) {
+    if (typeof run.addressCount === "number") await BacktestRun.updateOne({ _id: run._id }, { $inc: { addressCount: added } });
+    else await BacktestRun.updateOne({ _id: run._id }, { $set: { addressCount: await BacktestRunTrader.countDocuments({ runId: run._id }) } }); // an older backtest: count what is really there
+    // Checked AFTER the rows exist, so a worker that finished the backtest a moment ago can't leave it "completed" with addresses waiting.
+    await BacktestRun.updateOne(
+      { _id: run._id, status: { $in: ["completed", "failed"] } },
+      { $set: { status: "paused", control: "pause", finishedAt: null, error: null } }
+    );
+    invalidateRun(run._id);
+  }
+  const now = await BacktestRun.findById(run._id, { status: 1 }).lean();
+  return { added, alreadyInRun: candidates.length - fresh.length, notOnList, scanned, nextAfterId, status: now?.status ?? run.status };
+}
+
 const FRESH_SIM = {
   "sim.done": false,
   "sim.signalsTotal": 0,
@@ -448,19 +503,6 @@ const FRESH_SIM = {
   stats: emptyStoredStats(), // the positions are thrown away with it
 };
 
-/** Every address back to the very start: nothing collected, nothing simulated. */
-const FRESH_ADDRESS = {
-  stage: "pending",
-  error: null,
-  stopReason: null,
-  claimedBy: null,
-  leaseUntil: null,
-  startedAt: null,
-  finishedAt: null,
-  collect: { done: false, source: null, listing: false, signaturesFound: 0, signaturesToProcess: 0, signaturesProcessed: 0, signaturesFailed: 0, tradesFound: 0 },
-  sim: { done: false, signalsTotal: 0, signalsDone: 0, simulatedThrough: null, skipped: { dust: 0, noData: 0, insufficientBalance: 0, unresolved: 0, error: 0 } },
-  stats: emptyStoredStats(),
-};
 
 /** Puts addresses that ended in `stage` back to "pending" so the worker picks them up again. Returns how many. */
 async function requeueAddresses(runId, stage, extraFilter = {}) {
@@ -501,7 +543,7 @@ export async function controlBacktestRun(runId, action, options = {}) {
     // A paused backtest hands its addresses back within a few seconds; restarting while one is still being wound down would let two workers share it.
     if ((await BacktestRunTrader.countDocuments({ runId, claimedBy: { $ne: null } })) > 0) throw new Error("The backtest is still stopping - try again in a few seconds");
     await BacktestPosition.deleteMany({ runId });
-    await BacktestRunTrader.updateMany({ runId }, { $set: FRESH_ADDRESS });
+    await BacktestRunTrader.updateMany({ runId }, { $set: freshAddressState() });
     await BacktestRun.updateOne(
       { _id: runId },
       { $set: { control: "run", status: "queued", queuedAt: new Date(), error: null, startedAt: null, finishedAt: null, activeMs: 0, statsVersion: 1, ...(collectMethod ? { collectMethod } : {}) } }
@@ -749,6 +791,23 @@ const SORT_FIELDS = {
 
 const finite = (v) => (v === undefined || v === null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
 
+/** "Contains this text" in the address (the index on runId + address is scanned, not the documents). */
+function searchQuery(search) {
+  const q = typeof search === "string" ? search.trim() : "";
+  return q ? { address: { $regex: escapeRegex(q) } } : {};
+}
+
+/** The Mongo filter for a run's addresses: its status filter, the limits and the address search. `runId` must be an ObjectId. */
+export function traderMatch(runId, { filter = "all", limits, search = "" } = {}) {
+  return and({ runId }, FILTER_QUERIES[filter] ?? FILTER_QUERIES.all, limitQuery(limits), searchQuery(search));
+}
+
+/** The Mongo sort for a run's addresses. The tie-break goes the same way as the column, which is what its index is built for. */
+export function traderSort(sort = "pnl", dir = "desc") {
+  const direction = dir === "asc" ? 1 : -1;
+  return { [SORT_FIELDS[sort] ?? SORT_FIELDS.pnl]: direction, _id: direction };
+}
+
 /** The "at least / at most" limits of the run page as a query (they match what the table used to do in the browser). */
 function limitQuery(limits = {}) {
   const q = {};
@@ -776,34 +835,42 @@ const and = (...parts) => {
  * A page of a run's addresses, filtered and sorted by the database. `counts` is how many addresses are under each status filter
  * (ignoring the limits), for the filter buttons; `total` is how many match the current filter AND limits.
  * @param {string} runId
- * @param {{filter?: string, sort?: string, dir?: "asc"|"desc", page?: number, limit?: number, limits?: object, addressesOnly?: boolean}} [opts]
+ * @param {{filter?: string, sort?: string, dir?: "asc"|"desc", page?: number, limit?: number, limits?: object, search?: string, addressesOnly?: boolean}} [opts]
  *   addressesOnly: just the addresses that match (up to MAX_ADDRESSES_ONLY), for "select everything that matches".
+ *   search: text that must be in the address.
+ * Every query has a time limit (QUERY_LIMIT_MS) and may use the disk to sort, so a backtest of hundreds of thousands of addresses can be filtered and
+ * sorted without running the server out of memory; `tookMs` says how long the page itself took, for the page's estimate of slow queries.
  */
-export async function listRunTraders(runId, { filter = "all", sort = "pnl", dir = "desc", page = 1, limit = 50, limits, addressesOnly = false } = {}) {
+export async function listRunTraders(runId, { filter = "all", sort = "pnl", dir = "desc", page = 1, limit = 50, limits, search = "", addressesOnly = false } = {}) {
+  const startedAt = Date.now();
   const run = await BacktestRun.findById(runId, RUN_FIELDS).lean();
   if (!run) return null;
   await ensureRunStats(run);
   const base = { runId: run._id };
-  const match = and(base, FILTER_QUERIES[filter] ?? FILTER_QUERIES.all, limitQuery(limits));
+  const match = traderMatch(run._id, { filter, limits, search });
 
   if (addressesOnly) {
-    const rows = await BacktestRunTrader.find(match, { address: 1 }).sort({ _id: 1 }).limit(MAX_ADDRESSES_ONLY).lean();
-    return { addresses: rows.map((r) => r.address) };
+    const rows = await BacktestRunTrader.find(match, { address: 1 }).sort({ _id: 1 }).limit(MAX_ADDRESSES_ONLY).maxTimeMS(QUERY_LIMIT_MS).lean();
+    return { addresses: rows.map((r) => r.address), capped: rows.length >= MAX_ADDRESSES_ONLY };
   }
 
   const pageSize = Math.min(200, Math.max(1, Math.floor(limit) || 50));
   const pageNo = Math.max(1, Math.floor(page) || 1);
-  const sortField = SORT_FIELDS[sort] ?? SORT_FIELDS.pnl;
-  const direction = dir === "asc" ? 1 : -1;
-  const [rows, total, countRows] = await Promise.all([
+  const unfiltered = !match.$and; // nothing but { runId } (any filter, limit or search makes it an $and): the count is the run's size
+  const [rows, total, countsInfo] = await Promise.all([
     BacktestRunTrader.find(match)
-      .sort({ [sortField]: direction, _id: 1 })
+      .sort(traderSort(sort, dir))
       .skip((pageNo - 1) * pageSize)
       .limit(pageSize)
+      .allowDiskUse(true)
+      .maxTimeMS(QUERY_LIMIT_MS)
       .lean(),
-    BacktestRunTrader.countDocuments(match),
+    // The size of the filtered set: kept for a while like the counts below (it only matters for the pager), and for the whole run it is just its size.
+    unfiltered
+      ? Promise.resolve(run.addressCount || BacktestRunTrader.countDocuments(match))
+      : remembered(run._id, `total:${JSON.stringify(match)}`, summaryTtl(run.status), () => BacktestRunTrader.countDocuments(match).maxTimeMS(QUERY_LIMIT_MS)),
     // How many addresses are under each filter button: the same for every page and sort, so it is worked out once for a few seconds.
-    remembered(run._id, "filter-counts", summaryTtl(run.status), () =>
+    rememberedWithAge(run._id, "filter-counts", summaryTtl(run.status), () =>
       BacktestRunTrader.aggregate([
         { $match: base },
         {
@@ -817,9 +884,10 @@ export async function listRunTraders(runId, { filter = "all", sort = "pnl", dir 
             losing: { $sum: { $cond: [{ $and: [{ $eq: ["$stage", "done"] }, { $gt: ["$stats.closed", 0] }, { $lt: ["$stats.realizedPnlUsd", 0] }] }, 1, 0] } },
           },
         },
-      ])
+      ], { allowDiskUse: true, maxTimeMS: QUERY_LIMIT_MS })
     ),
   ]);
+  const countRows = countsInfo.value;
   const labels = await BacktestAddress.find({ address: { $in: rows.map((r) => r.address) } }, { address: 1, label: 1 }).lean();
   const labelBy = new Map(labels.map((l) => [l.address, l.label]));
   const { _id, ...counts } = countRows[0] ?? { all: 0, running: 0, failed: 0, skipped: 0, profitable: 0, losing: 0 };
@@ -840,10 +908,15 @@ export async function listRunTraders(runId, { filter = "all", sort = "pnl", dir 
     pageSize,
     totalPages: Math.max(1, Math.ceil(total / pageSize)),
     counts,
+    countsAgeMs: countsInfo.ageMs, // how far behind the button counts are (they take a pass over the whole backtest, so a huge one refreshes them less often)
+    tookMs: Date.now() - startedAt,
+    runSize: run.addressCount || counts.all,
   };
 }
 
 const MAX_ADDRESSES_ONLY = 100_000;
+// No query on a run's addresses may hold the database longer than this.
+const QUERY_LIMIT_MS = 120_000;
 
 // ------------------------------------------------------ positions / daily
 
@@ -882,25 +955,32 @@ export async function getRunDaily(runId, { page = 1, limit = 50 } = {}) {
   const pageNo = Math.max(1, Math.floor(page) || 1);
   const [runTraders, total, unfinished, totalRows] = await Promise.all([
     BacktestRunTrader.find({ runId: run._id }, { address: 1, stage: 1, "sim.simulatedThrough": 1 })
-      .sort({ "stats.realizedPnlUsd": -1, _id: 1 })
+      .sort({ "stats.realizedPnlUsd": -1, _id: -1 })
       .skip((pageNo - 1) * pageSize)
       .limit(pageSize)
+      .maxTimeMS(QUERY_LIMIT_MS)
       .lean(),
-    BacktestRunTrader.countDocuments({ runId: run._id }),
-    BacktestRunTrader.countDocuments({ runId: run._id, stage: { $in: TRADER_STAGES_RUNNING } }),
-    BacktestPosition.aggregate([
-      { $match: { runId: run._id, status: "closed" } },
-      {
-        $group: {
-          _id: DAY_GROUP,
-          pnlUsd: { $sum: "$realizedPnlUsd" },
-          combinedPercent: { $sum: "$realizedPnlPercent" },
-          trades: { $sum: 1 },
-          wins: { $sum: { $cond: [{ $gt: ["$realizedPnlUsd", 0] }, 1, 0] } },
-          losses: { $sum: { $cond: [{ $lt: ["$realizedPnlUsd", 0] }, 1, 0] } },
-        },
-      },
-    ]),
+    Promise.resolve(run.addressCount || BacktestRunTrader.countDocuments({ runId: run._id })),
+    remembered(run._id, "unfinished", summaryTtl(run.status), () => BacktestRunTrader.countDocuments({ runId: run._id, stage: { $in: TRADER_STAGES_RUNNING } })),
+    // Every closed trade of the backtest, added up per day: a pass over all its positions, so it is kept (longer, the slower it is) like the other totals.
+    remembered(run._id, "day-totals", summaryTtl(run.status), () =>
+      BacktestPosition.aggregate(
+        [
+          { $match: { runId: run._id, status: "closed" } },
+          {
+            $group: {
+              _id: DAY_GROUP,
+              pnlUsd: { $sum: "$realizedPnlUsd" },
+              combinedPercent: { $sum: "$realizedPnlPercent" },
+              trades: { $sum: 1 },
+              wins: { $sum: { $cond: [{ $gt: ["$realizedPnlUsd", 0] }, 1, 0] } },
+              losses: { $sum: { $cond: [{ $lt: ["$realizedPnlUsd", 0] }, 1, 0] } },
+            },
+          },
+        ],
+        { allowDiskUse: true, maxTimeMS: QUERY_LIMIT_MS }
+      )
+    ),
   ]);
   const addresses = runTraders.map((rt) => rt.address);
   const [rows, labels] = await Promise.all([
@@ -950,6 +1030,7 @@ export async function getRunDaily(runId, { page = 1, limit = 50 } = {}) {
 }
 
 const MAX_POINTS = 400;
+const ACTIVE_EQUITY_TTL_MS = 5000;
 
 /**
  * Cumulative realized P&L over time, as chart points (at most MAX_POINTS). The closed trades are cut into time-ordered buckets by the
@@ -959,13 +1040,16 @@ const MAX_POINTS = 400;
 export async function getRunEquity(runId, { address } = {}) {
   const match = { runId: new mongoose.Types.ObjectId(String(runId)), status: "closed", closedAt: { $ne: null } };
   if (address) match.address = address;
-  const buckets = await BacktestPosition.aggregate(
-    [
-      { $match: match },
-      { $bucketAuto: { groupBy: { $toLong: "$closedAt" }, buckets: MAX_POINTS, output: { pnlUsd: { $sum: "$realizedPnlUsd" }, n: { $sum: 1 } } } },
-    ],
-    { allowDiskUse: true }
-  );
+  const compute = () =>
+    BacktestPosition.aggregate(
+      [
+        { $match: match },
+        { $bucketAuto: { groupBy: { $toLong: "$closedAt" }, buckets: MAX_POINTS, output: { pnlUsd: { $sum: "$realizedPnlUsd" }, n: { $sum: 1 } } } },
+      ],
+      { allowDiskUse: true, maxTimeMS: QUERY_LIMIT_MS }
+    );
+  // The whole backtest's curve is a pass over every closed trade, so it is kept (longer, the slower it is); one address's is cheap.
+  const buckets = address ? await compute() : await remembered(runId, "equity", ACTIVE_EQUITY_TTL_MS, compute);
   let cumulative = 0;
   let count = 0;
   const points = buckets.map((b) => {
@@ -977,8 +1061,11 @@ export async function getRunEquity(runId, { address } = {}) {
 }
 
 /** Adds backtest addresses to the LIVE trader list (duplicate-protected, blacklisted ones are not revived). */
-export async function promoteToLiveTraders(addresses) {
+export async function promoteToLiveTraders(addresses, { listId } = {}) {
   const labels = await BacktestAddress.find({ address: { $in: addresses } }, { address: 1, label: 1 }).lean();
   const labelBy = new Map(labels.map((l) => [l.address, l.label || ""]));
-  return addTradersBulk(addresses.map((address) => ({ address, label: labelBy.get(address) || "" })));
+  const result = await addTradersBulk(addresses.map((address) => ({ address, label: labelBy.get(address) || "" })));
+  // Into a trader list as well, if one was chosen: the ones just added AND the ones already tracked (blacklisted ones are never touched).
+  const tagged = listId ? await addTradersToList(listId, [...result.added, ...result.skipped]) : 0;
+  return { ...result, tagged };
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, Plus, Search } from "lucide-react";
@@ -154,7 +156,10 @@ export function AddTradersToWalletDialog({ walletId, existingAddresses, onAdded 
                       className="size-4 rounded border-border accent-primary"
                     />
                     <span className="flex min-w-0 flex-col">
-                      <span className="truncate font-mono text-xs">{formatAddress(trader.address, 6)}</span>
+                      <span className="flex min-w-0 items-center gap-1">
+                        <span className="truncate font-mono text-xs">{formatAddress(trader.address, 6)}</span>
+                        <CopyButton value={trader.address} />
+                      </span>
                       {trader.label ? <span className="truncate text-xs text-muted-foreground">{trader.label}</span> : null}
                     </span>
                   </label>

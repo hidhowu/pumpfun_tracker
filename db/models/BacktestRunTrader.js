@@ -87,7 +87,18 @@ BacktestRunTraderSchema.index({ stage: 1, leaseUntil: 1 });
 BacktestRunTraderSchema.index({ runId: 1, stage: 1, _id: 1 });
 // "How many backtests used this address" for a page of the address list.
 BacktestRunTraderSchema.index({ address: 1 });
-// The run page's default order (best P&L first).
-BacktestRunTraderSchema.index({ runId: 1, "stats.realizedPnlUsd": -1, _id: 1 });
+// One index per sortable column of the run page, so sorting (either way) a backtest of hundreds of thousands of addresses walks an index
+// instead of sorting every row. The tie-break is `_id` in the SAME direction as the column, which is what lets one index serve both directions.
+export const SORT_INDEX_FIELDS = [
+  "stats.realizedPnlUsd",
+  "stats.combinedPercent",
+  "stats.avgPnlUsd",
+  "stats.winRatePercent",
+  "stats.closed",
+  "stats.daily.lossDays",
+  "stats.daily.profitMarginPercent",
+  "stats.daily.withoutBestDay.combinedPercent",
+];
+for (const field of SORT_INDEX_FIELDS) BacktestRunTraderSchema.index({ runId: 1, [field]: -1, _id: -1 });
 
 export const BacktestRunTrader = models.BacktestRunTrader || model("BacktestRunTrader", BacktestRunTraderSchema);

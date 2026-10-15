@@ -188,6 +188,8 @@ export type BacktestTraderQuery = {
   page: number;
   limit: number;
   limits: BacktestTraderLimits;
+  /** Text that must be in the address. */
+  search: string;
 };
 
 /** One page of a run's addresses, filtered and sorted by the server. `counts` is per status filter (the limits not applied); `total` matches filter + limits. */
@@ -198,6 +200,37 @@ export type BacktestTradersPage = {
   pageSize: number;
   totalPages: number;
   counts: Record<BacktestTraderFilter, number>;
+  /** How long the server took, ms - lets the page estimate how long the next slow query will take. */
+  tookMs?: number;
+  /** How many addresses the whole backtest has. */
+  runSize?: number;
+  /** How far behind the status-button counts are, ms (on a huge backtest they are refreshed less often). */
+  countsAgeMs?: number;
+};
+
+/** What adding addresses to an existing backtest did (one request's worth). */
+export type AddToRunResult = { added: number; alreadyInRun: number; notOnList: number; scanned: number; nextAfterId: string | null; status: BacktestStatus };
+
+/** How a backtest to be merged differs from the one it is merged into. */
+export type MergeSourcePreview = {
+  _id: string;
+  name: string;
+  status: BacktestStatus;
+  days: number;
+  addressCount: number;
+  /** Why it cannot be merged right now (it is queued or running), else null. */
+  blocked: string | null;
+  /** Same simulation settings as the target: its results can be kept. */
+  sameResults: boolean;
+  /** The settings that change results and differ: label, and the value in the target and in this backtest. */
+  differences: Array<{ label: string; target: string; source: string }>;
+  /** Rules that only decide what is skipped or dropped, or how fast it runs: never change a result. */
+  otherDifferences: Array<{ label: string; target: string; source: string }>;
+  windowOffsetHours: number;
+};
+export type MergePreview = {
+  target: { _id: string; name: string; status: BacktestStatus; days: number; addressCount: number; working: boolean };
+  sources: MergeSourcePreview[];
 };
 
 export type BacktestCloseReason = "trader_sell" | "stop_loss" | "take_profit" | "trailing_stop" | "max_hold_time";

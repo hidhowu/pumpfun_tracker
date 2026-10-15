@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowUpRight, FlaskConical, Loader2, Pencil, PlayCircle, RefreshCcw, Trash2, Wallet } from "lucide-react";
+import { ArrowUpRight, FlaskConical, GitMerge, Loader2, Pencil, PlayCircle, RefreshCcw, Trash2, Wallet } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import type { BacktestRunSummary } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
 import { EditRunDialog } from "./edit-run-dialog";
 import { RestartRunDialog } from "./restart-run-dialog";
+import { MergeRunsDialog } from "./merge-runs-dialog";
 import { ProgressBar, RunStatusBadge, formatDate, formatDuration, formatSignedPercent, pnlTone, waitingInQueue } from "./shared";
 
 const ACTIVE = new Set(["queued", "running"]);
@@ -43,6 +44,7 @@ export function RunsTab() {
   const [toDelete, setToDelete] = useState<BacktestRunSummary | null>(null);
   const [toEdit, setToEdit] = useState<BacktestRunSummary | null>(null);
   const [toRestart, setToRestart] = useState<BacktestRunSummary | null>(null);
+  const [mergeOpen, setMergeOpen] = useState(false);
   const [resuming, setResuming] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -109,6 +111,14 @@ export function RunsTab() {
 
   return (
     <>
+      {runs.length >= 2 && (
+        <div className="mb-3 flex justify-end">
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setMergeOpen(true)}>
+            <GitMerge className="size-4" /> Merge backtests
+          </Button>
+        </div>
+      )}
+      <MergeRunsDialog runs={runs} open={mergeOpen} onOpenChange={setMergeOpen} onMerged={refresh} />
       <div className="grid gap-4 lg:grid-cols-2">
         {runs.map((run) => {
           const active = ACTIVE.has(run.status);

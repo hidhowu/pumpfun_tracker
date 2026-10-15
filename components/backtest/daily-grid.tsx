@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -105,8 +107,11 @@ export function DailyGrid({ runId, refreshKey = 0 }: { runId: string; refreshKey
           {data.rows.map((t) => (
             <TableRow key={t.address} className="border-border/60">
               <TableCell className="sticky left-0 z-10 max-w-36 bg-background sm:max-w-48">
-                <span className="block truncate font-mono text-xs" title={t.address}>
-                  {t.label || formatAddress(t.address, 5)}
+                <span className="flex min-w-0 items-center gap-1">
+                  <span className="truncate font-mono text-xs" title={t.address}>
+                    {t.label || formatAddress(t.address, 5)}
+                  </span>
+                  <CopyButton value={t.address} />
                 </span>
               </TableCell>
               {data.days.map((day) => (

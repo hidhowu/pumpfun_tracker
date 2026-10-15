@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -235,7 +237,7 @@ export default function LeaderboardPage() {
                       </TableCell>
                       <TableCell className="max-w-3xs sm:max-w-xs">
                         <div className="flex min-w-0 flex-col gap-0.5">
-                          <Link
+                          <span className="inline-flex min-w-0 items-center gap-1"><Link
                             href={`/traders/${entry.address}`}
                             target="_blank"
                             rel="noopener noreferrer"
@@ -243,7 +245,7 @@ export default function LeaderboardPage() {
                           >
                             {formatAddress(entry.address, 5)}
                             <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
-                          </Link>
+                          </Link><CopyButton value={entry.address} label="address" /></span>
                           {entry.label ? <span className="truncate text-xs text-muted-foreground">{entry.label}</span> : null}
                         </div>
                       </TableCell>

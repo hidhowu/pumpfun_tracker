@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
@@ -33,7 +35,7 @@ function PositionRow({ p, showAddress }: { p: BacktestPositionView; showAddress:
     <TableRow className="border-border/60">
       <TableCell className="max-w-40">
         <div className="flex min-w-0 flex-col gap-0.5">
-          <a
+          <span className="inline-flex min-w-0 items-center gap-1"><a
             href={`https://pump.fun/coin/${p.mint}`}
             target="_blank"
             rel="noopener noreferrer"
@@ -41,8 +43,13 @@ function PositionRow({ p, showAddress }: { p: BacktestPositionView; showAddress:
           >
             <span className="truncate">{formatAddress(p.mint, 5)}</span>
             <ExternalLink className="size-3 shrink-0" />
-          </a>
-          {showAddress && <span className="truncate font-mono text-[11px] text-muted-foreground">{formatAddress(p.address, 4)}</span>}
+          </a><CopyButton value={p.mint} label="token address" /></span>
+          {showAddress && (
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <span className="truncate font-mono text-[11px] text-muted-foreground">{formatAddress(p.address, 4)}</span>
+              <CopyButton value={p.address} label="address" />
+            </span>
+          )}
         </div>
       </TableCell>
       <TableCell className="text-xs">

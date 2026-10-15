@@ -23,6 +23,7 @@ export async function GET(request: NextRequest, { params }: Params) {
     dir: sp.get("dir") === "asc" ? "asc" : "desc",
     page: Number(sp.get("page")) || 1,
     limit: Number(sp.get("limit")) || 50,
+    search: sp.get("search") || "",
     addressesOnly: sp.get("addressesOnly") === "1",
     limits: {
       minWinRate: sp.get("minWinRate"),

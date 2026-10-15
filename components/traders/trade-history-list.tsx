@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import { useEffect, useState, useCallback } from "react";
 import {
   Anchor,
@@ -74,6 +76,7 @@ function TxLink({ label, signature }: { label: string; signature: string | null 
         {formatAddress(signature, 6)}
         <ExternalLink className="size-3" />
       </a>
+      <CopyButton value={signature} label="transaction signature" />
     </div>
   );
 }
@@ -128,7 +131,7 @@ function TradeDetailDialog({ position, onClose }: { position: SimPosition | null
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <a
+            <span className="inline-flex min-w-0 items-center gap-1"><a
               href={`https://pump.fun/coin/${position.mint}`}
               target="_blank"
               rel="noreferrer"
@@ -136,7 +139,7 @@ function TradeDetailDialog({ position, onClose }: { position: SimPosition | null
             >
               {formatAddress(position.mint, 6)}
               <ExternalLink className="size-3.5" />
-            </a>
+            </a><CopyButton value={position.mint} label="token address" /></span>
           </DialogTitle>
           <DialogDescription>Full detail for this simulated trade.</DialogDescription>
         </DialogHeader>
@@ -343,6 +346,7 @@ export function TradeHistoryList({ address }: Props) {
                       <TableCell>
                         <span className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground">
                           {formatAddress(position.mint, 5)}
+                          <CopyButton value={position.mint} label="token address" />
                         </span>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">

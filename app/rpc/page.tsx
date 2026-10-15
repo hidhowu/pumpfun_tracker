@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -564,7 +566,10 @@ export default function RpcPage() {
               {unresolvedAddresses.map((a) => (
                 <div key={a.address} className="flex min-w-0 items-center gap-1.5 text-xs">
                   <SubStatusDot status={a.subscriptionStatus} />
-                  <span className="shrink-0 truncate font-mono text-muted-foreground">{formatAddress(a.address, 5)}</span>
+                  <span className="inline-flex shrink-0 items-center gap-1">
+                    <span className="truncate font-mono text-muted-foreground">{formatAddress(a.address, 5)}</span>
+                    <CopyButton value={a.address} />
+                  </span>
                   {a.label ? <span className="min-w-0 truncate text-muted-foreground/70">({a.label})</span> : null}
                   <span className="ml-auto shrink-0 truncate text-[11px] text-muted-foreground/70">
                     {a.assignedRpcUrl ? endpointLabelByUrl.get(a.assignedRpcUrl) ?? "unknown endpoint" : "unassigned"}
@@ -690,7 +695,10 @@ export default function RpcPage() {
                           {addresses.map((a) => (
                             <div key={a.address} className="flex min-w-0 items-center gap-1.5 text-xs">
                               <SubStatusDot status={a.subscriptionStatus} />
-                              <span className="shrink-0 truncate font-mono text-muted-foreground">{formatAddress(a.address, 5)}</span>
+                              <span className="inline-flex shrink-0 items-center gap-1">
+                    <span className="truncate font-mono text-muted-foreground">{formatAddress(a.address, 5)}</span>
+                    <CopyButton value={a.address} />
+                  </span>
                               {a.label ? <span className="min-w-0 truncate text-muted-foreground/70">({a.label})</span> : null}
                             </div>
                           ))}

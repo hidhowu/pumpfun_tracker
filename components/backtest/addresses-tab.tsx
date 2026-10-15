@@ -1,8 +1,10 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ChevronDown, ChevronLeft, ChevronRight, Download, FlaskConical, Loader2, Pencil, Search, ShieldBan, Trash2 } from "lucide-react";
+import { ChevronDown, FileDown, ChevronLeft, ChevronRight, Download, FlaskConical, ListPlus, Loader2, Pencil, Search, ShieldBan, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -21,7 +23,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { deleteBacktestAddressesBatched, getMatchingBacktestAddresses, importTradersToBacktest, listBacktestAddresses, updateBacktestAddress } from "@/lib/backtest-api";
+import { addressListExportUrl, deleteBacktestAddressesBatched, getMatchingBacktestAddresses, importTradersToBacktest, listBacktestAddresses, updateBacktestAddress } from "@/lib/backtest-api";
 import { listTraderLists } from "@/lib/api";
 import { formatAddress } from "@/lib/format";
 import type { BacktestAddressesPage, BacktestAddressView } from "@/lib/backtest-types";
@@ -30,6 +32,7 @@ import { AddAddressesDialog } from "./add-addresses-dialog";
 import { BlacklistDialog } from "./blacklist-dialog";
 import { NewRunDialog } from "./new-run-dialog";
 import { RangeSelect } from "./range-select";
+import { AddToBacktestDialog } from "./add-to-backtest-dialog";
 import { formatDate } from "./shared";
 import { useRouter } from "next/navigation";
 
@@ -99,6 +102,8 @@ export function AddressesTab() {
   const latest = useRef(0);
   const [lists, setLists] = useState<TraderListView[]>([]);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+  const [addToOpen, setAddToOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteProgress, setDeleteProgress] = useState<{ done: number; total: number } | null>(null);
@@ -179,14 +184,17 @@ export function AddressesTab() {
 
   async function handleImport(listId?: string) {
     setImporting(true);
+    setImportProgress(null);
     try {
-      const { added, skipped, blacklisted = [] } = await importTradersToBacktest(listId);
+      const { added, skipped, blacklisted = [] } = await importTradersToBacktest(listId, (done, total) => setImportProgress({ done, total }));
       toast.success(`${added.length} added${skipped.length ? `, ${skipped.length} already on the list` : ""}${blacklisted.length ? `, ${blacklisted.length} blacklisted (not added)` : ""}`);
       await refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Import failed");
+      refresh(); // some pages may have gone through
     } finally {
       setImporting(false);
+      setImportProgress(null);
     }
   }
 
@@ -219,7 +227,7 @@ export function AddressesTab() {
           <DropdownMenuTrigger asChild>
             <Button variant="outline" className="gap-1.5" disabled={importing}>
               {importing ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-              Import from Traders
+              {importing && importProgress ? `Importing ${importProgress.done.toLocaleString()} / ${importProgress.total.toLocaleString()}` : "Import from Traders"}
               <ChevronDown className="size-3.5" />
             </Button>
           </DropdownMenuTrigger>
@@ -232,6 +240,28 @@ export function AddressesTab() {
                 List: {l.name} ({l.memberCount})
               </DropdownMenuItem>
             ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" className="gap-1.5" disabled={data === null || data.totalAll === 0}>
+              <FileDown className="size-4" />
+              Export CSV
+              <ChevronDown className="size-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>{appliedSearch.trim() ? "The addresses matching your search" : "The whole backtest list"}</DropdownMenuLabel>
+            <DropdownMenuItem asChild>
+              <a href={addressListExportUrl(appliedSearch, "addresses")} download>
+                Addresses only
+              </a>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <a href={addressListExportUrl(appliedSearch, "full")} download>
+                With label, user ID and date added
+              </a>
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
         <AddAddressesDialog
@@ -261,6 +291,10 @@ export function AddressesTab() {
             <Button size="sm" className="gap-1.5" onClick={() => setRunDialogOpen(true)}>
               <FlaskConical className="size-4" />
               Start backtest
+            </Button>
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setAddToOpen(true)}>
+              <ListPlus className="size-4" />
+              Add to a backtest
             </Button>
             <Button size="sm" variant="outline" className="gap-1.5 text-negative hover:text-negative" onClick={() => setBlacklistOpen(true)}>
               <ShieldBan className="size-4" />
@@ -343,9 +377,12 @@ export function AddressesTab() {
                             </Badge>
                           )}
                         </span>
-                        <span className="truncate font-mono text-xs text-muted-foreground" title={a.address}>
-                          <span className="sm:hidden">{formatAddress(a.address, 6)}</span>
-                          <span className="hidden sm:inline">{a.address}</span>
+                        <span className="flex min-w-0 items-center gap-1">
+                          <span className="truncate font-mono text-xs text-muted-foreground" title={a.address}>
+                            <span className="sm:hidden">{formatAddress(a.address, 6)}</span>
+                            <span className="hidden sm:inline">{a.address}</span>
+                          </span>
+                          <CopyButton value={a.address} />
                         </span>
                       </div>
                     </TableCell>
@@ -423,6 +460,8 @@ export function AddressesTab() {
         allCount={data?.totalAll ?? 0}
         onCreated={(id) => router.push(`/backtest/${id}`)}
       />
+
+      <AddToBacktestDialog addresses={selectedList} open={addToOpen} onOpenChange={setAddToOpen} onDone={() => router.refresh()} />
 
       <BlacklistDialog
         open={blacklistOpen}

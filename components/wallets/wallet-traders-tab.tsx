@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ExternalLink, Users } from "lucide-react";
@@ -145,7 +147,7 @@ export function WalletTradersTab({ walletId }: Props) {
                   return (
                     <TableRow key={t.traderAddress}>
                       <TableCell className="max-w-3xs sm:max-w-xs">
-                        <a
+                        <span className="inline-flex min-w-0 items-center gap-1"><a
                           href={`/traders/${t.traderAddress}`}
                           target="_blank"
                           rel="noopener noreferrer"
@@ -153,7 +155,7 @@ export function WalletTradersTab({ walletId }: Props) {
                         >
                           <span className="truncate">{t.label || formatAddress(t.traderAddress, 6)}</span>
                           <ExternalLink className="size-3 shrink-0" />
-                        </a>
+                        </a><CopyButton value={t.traderAddress} label="address" /></span>
                       </TableCell>
                       <TableCell className="text-right text-xs text-muted-foreground">{formatRelativeTime(t.addedAt)}</TableCell>
                       <TableCell className="text-right tabular-nums">{t.lifetimeTrades}</TableCell>

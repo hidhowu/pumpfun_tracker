@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ExternalLink } from "lucide-react";
@@ -127,7 +129,7 @@ export function WalletTradersDailyTable({ walletId, load, emptyMessage, refreshK
           {data.traders.map((t) => (
             <TableRow key={t.traderAddress}>
               <TableCell className="max-w-3xs sm:max-w-xs">
-                <a
+                <span className="inline-flex min-w-0 items-center gap-1"><a
                   href={`/traders/${t.traderAddress}`}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -135,7 +137,7 @@ export function WalletTradersDailyTable({ walletId, load, emptyMessage, refreshK
                 >
                   <span className="truncate">{t.label || formatAddress(t.traderAddress, 6)}</span>
                   <ExternalLink className="size-3 shrink-0" />
-                </a>
+                </a><CopyButton value={t.traderAddress} label="address" /></span>
               </TableCell>
               {t.daily.map((d) => (
                 <TableCell key={d.date} className="text-right tabular-nums">

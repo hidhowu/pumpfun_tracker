@@ -184,16 +184,24 @@ const PROGRESS_PERCENT = {
   ],
 };
 
-// ------------------------------------------------------------ short-lived cache
+// ------------------------------------------------------------ cache that adapts to how slow the answer is
 
 /**
- * The run-level figures (progress, totals, the filter counts) take a pass over every address row of the run, which is real work for a run
- * of tens of thousands of addresses. They are kept for a few seconds in this process, so a page polling every 3 seconds - or several
- * tabs - read the same answer instead of each recomputing it. Anything that changes a run through the web app drops its entries.
+ * The run-level figures (progress, totals, the filter counts, the day totals...) take a pass over the run's rows or positions. That is
+ * nothing for a few thousand addresses and real work for a million. They are kept in this process so a page polling every few seconds -
+ * or several tabs - read the same answer instead of each recomputing it, and the time they are kept GROWS WITH THE TIME THEY TOOK:
+ * a figure that took 4 seconds to work out is not worked out again for 32, so the server is never busy recomputing for more than
+ * about one eighth of the time however big the backtest is. Once it is older than that, the old answer is still returned at once
+ * and a fresh one is worked out in the background (the page is never held up by it, and only one recomputation runs at a time).
+ * Anything that changes a backtest through the web app drops its entries.
  */
-const memo = new Map(); // `${runId}|${kind}` -> { at, value } | { promise }
+const memo = new Map(); // `${runId}|${kind}` -> { at, value, tookMs, promise? }
 const ACTIVE_TTL_MS = 4000; // a run being worked on: progress should look live
 const IDLE_TTL_MS = 30_000; // a finished / paused run only changes through the web app, which invalidates
+const SLOWNESS_FACTOR = 8; // kept for at least this many times as long as it took to work out
+const MAX_TTL_MS = 5 * 60_000;
+const STALE_GRACE = 6; // an answer up to this many TTLs old is still returned at once while a new one is worked out
+const MAX_ENTRIES = 600;
 
 export const summaryTtl = (status) => (status === "queued" || status === "running" || status === "paused" ? ACTIVE_TTL_MS : IDLE_TTL_MS);
 
@@ -202,24 +210,52 @@ export function invalidateRun(runId) {
   for (const key of memo.keys()) if (key.startsWith(`${id}|`)) memo.delete(key);
 }
 
-/** Returns the cached value for (run, kind) if it is younger than ttlMs, else loads it (once, however many ask meanwhile). */
-export async function remembered(runId, kind, ttlMs, load) {
-  const key = `${String(runId)}|${kind}`;
-  const hit = memo.get(key);
-  if (hit?.promise) return hit.promise;
-  if (hit && Date.now() - hit.at < ttlMs) return hit.value;
+function prune() {
+  if (memo.size <= MAX_ENTRIES) return;
+  const oldest = [...memo.entries()].filter(([, e]) => !e.promise).sort((x, y) => (x[1].at ?? 0) - (y[1].at ?? 0));
+  for (const [key] of oldest.slice(0, memo.size - MAX_ENTRIES)) memo.delete(key);
+}
+
+function startRefresh(key, load, previous) {
+  const startedAt = Date.now();
   const promise = load().then(
     (value) => {
-      memo.set(key, { at: Date.now(), value });
+      memo.set(key, { at: Date.now(), value, tookMs: Date.now() - startedAt });
+      prune();
       return value;
     },
     (err) => {
-      memo.delete(key);
+      if (previous) memo.set(key, previous); // keep serving the old answer; the next call tries again
+      else memo.delete(key);
       throw err;
     }
   );
-  memo.set(key, { promise });
+  memo.set(key, { ...(previous ?? {}), promise });
   return promise;
+}
+
+/**
+ * The cached value for (run, kind), or `load()`'s result. `ttlMs` is the least time it is kept; a slow `load` is kept longer (see above).
+ * Also returns how old the answer is (`ageMs`, 0 when just worked out) so the page can say when the figures are a little behind.
+ */
+export async function rememberedWithAge(runId, kind, ttlMs, load) {
+  const key = `${String(runId)}|${kind}`;
+  const hit = memo.get(key);
+  if (hit && "value" in hit) {
+    const ttl = Math.max(ttlMs, Math.min(MAX_TTL_MS, (hit.tookMs ?? 0) * SLOWNESS_FACTOR));
+    const age = Date.now() - hit.at;
+    if (age < ttl) return { value: hit.value, ageMs: age };
+    if (age < ttl * STALE_GRACE) {
+      if (!hit.promise) startRefresh(key, load, hit).catch(() => {}); // in the background; the caller does not wait
+      return { value: hit.value, ageMs: age };
+    }
+  }
+  if (hit?.promise) return { value: await hit.promise, ageMs: 0 };
+  return { value: await startRefresh(key, load, null), ageMs: 0 };
+}
+
+export async function remembered(runId, kind, ttlMs, load) {
+  return (await rememberedWithAge(runId, kind, ttlMs, load)).value;
 }
 
 const stageCount = (stage) => ({ $sum: { $cond: [{ $eq: ["$stage", stage] }, 1, 0] } });
@@ -230,22 +266,13 @@ const stageCount = (stage) => ({ $sum: { $cond: [{ $eq: ["$stage", stage] }, 1, 
  * @returns {Promise<Map<string, {addressesTotal: number, addressesDone: number, addressesFailed: number, addressesSkipped: number, addressesStoppedEarly: number, percent: number, stats: object}>>}
  */
 export async function summariseRuns(runs) {
-  if (runs.length === 0) return new Map();
-  const cached = new Map();
-  const stale = [];
+  const out = new Map();
   for (const run of runs) {
-    const hit = memo.get(`${String(run._id)}|summary`);
-    if (hit && !hit.promise && Date.now() - hit.at < summaryTtl(run.status)) cached.set(String(run._id), hit.value);
-    else stale.push(run);
-  }
-  if (stale.length === 0) return cached;
-  const fresh = await summariseRunsNow(stale);
-  for (const run of stale) {
     const id = String(run._id);
-    memo.set(`${id}|summary`, { at: Date.now(), value: fresh.get(id) });
-    if (fresh.has(id)) cached.set(id, fresh.get(id));
+    const { value, ageMs } = await rememberedWithAge(run._id, "summary", summaryTtl(run.status), async () => (await summariseRunsNow([run])).get(id) ?? null);
+    if (value) out.set(id, { ...value, ageMs });
   }
-  return cached;
+  return out;
 }
 
 async function summariseRunsNow(runs) {

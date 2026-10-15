@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, CalendarDays, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, Pencil, RotateCcw, RefreshCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, Wallet, XCircle } from "lucide-react";
+import { ArrowLeft, CalendarDays, ListPlus, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, Pencil, RotateCcw, RefreshCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, Wallet, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,7 +20,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { StatTile } from "@/components/traders/stat-tile";
-import { controlBacktestRun, deleteBacktestAddressesBatched, deleteBacktestRun, getBacktestRun, promoteBacktestAddresses } from "@/lib/backtest-api";
+import { controlBacktestRun, deleteBacktestAddressesBatched, deleteBacktestRun, getBacktestRun } from "@/lib/backtest-api";
 import { formatUsd } from "@/lib/format";
 import type { BacktestRunDetail } from "@/lib/backtest-types";
 import { CombinedWalletPanel } from "./combined-wallet-panel";
@@ -32,6 +32,8 @@ import { WorkerStatus } from "./worker-status";
 import { BlacklistDialog } from "./blacklist-dialog";
 import { EditRunDialog } from "./edit-run-dialog";
 import { RestartRunDialog } from "./restart-run-dialog";
+import { AddToRunDialog } from "./add-to-run-dialog";
+import { PromoteDialog } from "./promote-dialog";
 import { ProgressBar, RunStatusBadge, StrategyChips, formatDate, formatDuration, formatSignedPercent, waitingInQueue } from "./shared";
 
 const ACTIVE = new Set(["queued", "running"]);
@@ -53,6 +55,8 @@ export function RunDashboard({ runId }: { runId: string }) {
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [blacklistOpen, setBlacklistOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [promoteOpen, setPromoteOpen] = useState(false);
   const [restartOpen, setRestartOpen] = useState(false);
   const lastStatus = useRef<string | null>(null);
   const lastHeavy = useRef(0);
@@ -112,21 +116,6 @@ export function RunDashboard({ runId }: { runId: string }) {
       toast.error(e instanceof Error ? e.message : "Failed to delete");
       setBusy(null);
       setConfirm(null);
-    }
-  }
-
-  async function promote() {
-    setBusy("promote");
-    try {
-      const { added, skipped, blacklisted } = await promoteBacktestAddresses(runId, [...selected]);
-      const parts = [`${added.length} added to Traders`];
-      if (skipped.length) parts.push(`${skipped.length} already tracked`);
-      if (blacklisted.length) parts.push(`${blacklisted.length} blacklisted (not re-added)`);
-      toast.success(parts.join(", "));
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to add to Traders");
-    } finally {
-      setBusy(null);
     }
   }
 
@@ -224,6 +213,9 @@ export function RunDashboard({ runId }: { runId: string }) {
               <RotateCcw className="size-4" /> Retry {progress.addressesSkipped} skipped
             </Button>
           )}
+          <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => setAddOpen(true)}>
+            <ListPlus className="size-4" /> Add addresses
+          </Button>
           <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => setEditOpen(true)}>
             <Pencil className="size-4" /> Edit
           </Button>
@@ -352,8 +344,8 @@ export function RunDashboard({ runId }: { runId: string }) {
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
               <span className="text-sm font-medium">{selected.size} selected</span>
               <div className="ml-auto flex flex-wrap items-center gap-2">
-                <Button size="sm" className="gap-1.5" disabled={busy !== null} onClick={promote}>
-                  {busy === "promote" ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
+                <Button size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => setPromoteOpen(true)}>
+                  <UserPlus className="size-4" />
                   Add to live Traders
                 </Button>
                 <Button size="sm" variant="outline" className="gap-1.5 text-negative hover:text-negative" disabled={busy !== null} onClick={() => setBlacklistOpen(true)}>
@@ -394,6 +386,18 @@ export function RunDashboard({ runId }: { runId: string }) {
           refresh();
         }}
       />
+
+      <AddToRunDialog
+        run={run}
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onAdded={() => {
+          forceHeavy.current = true;
+          refresh();
+        }}
+      />
+
+      <PromoteDialog runId={runId} addresses={[...selected]} open={promoteOpen} onOpenChange={setPromoteOpen} onDone={() => {}} />
 
       {restartOpen && (
         <RestartRunDialog

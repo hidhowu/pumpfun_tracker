@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -446,7 +448,7 @@ export function TraderTable({
                   <TableCell className={cn(STICKY_FIRST_CELL, "max-w-3xs pl-4 sm:max-w-xs")}>
                     <div className="flex min-w-0 flex-col gap-0.5">
                       <div className="flex min-w-0 items-center gap-1.5">
-                        <Link
+                        <span className="inline-flex min-w-0 items-center gap-1"><Link
                           href={`/traders/${trader.address}`}
                           target="_blank"
                           rel="noopener noreferrer"
@@ -454,7 +456,7 @@ export function TraderTable({
                         >
                           {formatAddress(trader.address, 5)}
                           <ArrowUpRight className="size-3.5 text-muted-foreground transition-colors group-hover:text-primary" />
-                        </Link>
+                        </Link><CopyButton value={trader.address} label="address" /></span>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <button

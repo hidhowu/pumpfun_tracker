@@ -105,6 +105,8 @@ export class BacktestWorker {
   }
 
   async start() {
+    // An index that an earlier version built and a newer one replaced (same column, different tie-break): keeping it only slows down every write.
+    await BacktestRunTrader.collection.dropIndex("runId_1_stats.realizedPnlUsd_-1__id_1").catch(() => {});
     // One worker process owns every lease, so anything left over from a previous (crashed) process is free to take back.
     await BacktestRunTrader.updateMany({ claimedBy: { $ne: null } }, { $set: { claimedBy: null, leaseUntil: null } });
     logEvent("tracker", `[backtest] Backtest worker started (${this.id})`);
@@ -237,6 +239,14 @@ export class BacktestWorker {
             },
           }
         );
+        // Addresses can be added to a backtest while it runs (addAddressesToRun). One added in the instant between the count above and the
+        // update just now would be left waiting in a "completed" backtest, so look once more and take the backtest back if there is any.
+        const late = await BacktestRunTrader.countDocuments({ runId: run._id, stage: { $in: ["pending", "collecting", "simulating"] } });
+        if (late > 0) {
+          await BacktestRun.updateOne({ _id: run._id, status: { $in: ["completed", "failed"] }, control: "run" }, { $set: { status: "queued", finishedAt: null, error: null } });
+          this.#kick();
+          continue;
+        }
         logEvent("tracker", `[backtest] Backtest "${run.name}" finished (${done} done, ${failed} failed, ${skippedCount} skipped)`);
         this.#kick(); // the next backtest in the queue starts right away
       }

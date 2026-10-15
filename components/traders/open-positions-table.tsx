@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyButton } from "@/components/copy-button";
+
 import { useEffect, useState, useCallback } from "react";
 import { ExternalLink, Gauge, Layers, TrendingUp, TrendingDown } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -74,7 +76,7 @@ export function OpenPositionsTable({ address, refreshKey }: Props) {
                   return (
                     <TableRow key={position._id}>
                       <TableCell>
-                        <a
+                        <span className="inline-flex min-w-0 items-center gap-1"><a
                           href={`https://pump.fun/coin/${position.mint}`}
                           target="_blank"
                           rel="noreferrer"
@@ -82,7 +84,7 @@ export function OpenPositionsTable({ address, refreshKey }: Props) {
                         >
                           {formatAddress(position.mint, 5)}
                           <ExternalLink className="size-3" />
-                        </a>
+                        </a><CopyButton value={position.mint} label="token address" /></span>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{formatTokenAmount(position.tokenAmount)}</TableCell>
                       <TableCell className="text-right tabular-nums text-muted-foreground">{formatUsd(position.costBasisUsd)}</TableCell>

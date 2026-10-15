@@ -11,8 +11,11 @@ import type {
   BacktestPnlPeriod,
   BacktestPositionView,
   BacktestRunDetail,
+  AddToRunResult,
   BacktestRunSummary,
   BacktestSettingsView,
+  BacktestStatus,
+  MergePreview,
   BacktestTraderQuery,
   BacktestTradersPage,
   BacktestStoredSettings,
@@ -51,9 +54,31 @@ export function addBacktestAddresses(entries: AddressEntry[]): Promise<AddResult
   return request(`/api/backtest/addresses`, { method: "POST", body: JSON.stringify({ entries }) });
 }
 
-/** Copies the live active traders (or just one list's) onto the backtest list. */
-export function importTradersToBacktest(listId?: string): Promise<AddResult> {
-  return request(`/api/backtest/addresses/import`, { method: "POST", body: JSON.stringify({ listId }) });
+/**
+ * Copies the live active traders (or just one list's) onto the backtest list, a page at a time so any number is fine. `onProgress(done, total)`
+ * is called after every page.
+ */
+export async function importTradersToBacktest(listId?: string, onProgress?: BatchProgress): Promise<AddResult> {
+  const total: AddResult = { added: [], updated: [], skipped: [], blacklisted: [], invalid: [] };
+  let afterId: string | null = null;
+  let done = 0;
+  let size = 0;
+  do {
+    const res: AddResult & { nextAfterId: string | null; total?: number; scanned: number } = await withRetry(() =>
+      request(`/api/backtest/addresses/import`, { method: "POST", body: JSON.stringify({ listId, afterId }) })
+    );
+    total.added.push(...res.added);
+    total.updated!.push(...(res.updated ?? []));
+    total.skipped.push(...res.skipped);
+    total.blacklisted!.push(...(res.blacklisted ?? []));
+    total.invalid.push(...res.invalid);
+    if (res.total != null) size = res.total;
+    done += res.scanned;
+    afterId = res.nextAfterId;
+    onProgress?.(Math.min(done, size || done), size || done);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } while (afterId);
+  return total;
 }
 
 export type BlacklistResult = { blacklisted: string[]; alreadyBlacklisted: string[]; liveBlacklisted: string[]; closingPositions: number };
@@ -65,6 +90,16 @@ export function blacklistBacktestAddresses(addresses: string[]): Promise<Blackli
 
 export function deleteBacktestAddresses(addresses: string[]): Promise<{ deletedCount: number }> {
   return request(`/api/backtest/addresses/bulk-delete`, { method: "POST", body: JSON.stringify({ addresses }) });
+}
+
+/** A call tried twice: a brief hiccup shouldn't abandon a long job. */
+async function withRetry<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return call();
+  }
 }
 
 // Operations on many addresses are sent in batches, one after the other: one giant request would hang the page and the server.
@@ -164,6 +199,7 @@ export function controlBacktestRun(
 
 function tradersQuery(q: BacktestTraderQuery): URLSearchParams {
   const qs = new URLSearchParams({ filter: q.filter, sort: q.sort, dir: q.dir, page: String(q.page), limit: String(q.limit) });
+  if (q.search.trim()) qs.set("search", q.search.trim());
   for (const key of ["minWinRate", "minMargin", "maxLossDays", "minTrades", "maxTrades", "minAvgPnl"] as const) {
     if (q.limits[key].trim() !== "") qs.set(key, q.limits[key].trim());
   }
@@ -229,11 +265,135 @@ export function getBacktestAddressPnl(id: string, address: string, period: Backt
   return request(`/api/backtest/runs/${id}/addresses/${address}/pnl?period=${period}${date ? `&date=${date}` : ""}`);
 }
 
-export function promoteBacktestAddresses(
-  id: string,
-  addresses: string[]
-): Promise<{ added: string[]; skipped: string[]; blacklisted: string[]; invalid: string[] }> {
-  return request(`/api/backtest/runs/${id}/promote`, { method: "POST", body: JSON.stringify({ addresses }) });
+export type PromoteResult = { added: string[]; skipped: string[]; blacklisted: string[]; invalid: string[]; tagged: number };
+
+/** Adds addresses to the live Traders (and into a trader list, if one is given), in batches, and adds up what happened. */
+export async function promoteBacktestAddresses(id: string, addresses: string[], options: { listId?: string; onProgress?: BatchProgress } = {}): Promise<PromoteResult> {
+  const total: PromoteResult = { added: [], skipped: [], blacklisted: [], invalid: [], tagged: 0 };
+  await inBatches(
+    addresses,
+    OP_BATCH,
+    (batch) => request<PromoteResult>(`/api/backtest/runs/${id}/promote`, { method: "POST", body: JSON.stringify({ addresses: batch, listId: options.listId }) }),
+    (r) => {
+      total.added.push(...r.added);
+      total.skipped.push(...r.skipped);
+      total.blacklisted.push(...r.blacklisted);
+      total.invalid.push(...r.invalid);
+      total.tagged += r.tagged ?? 0;
+    },
+    options.onProgress
+  );
+  return total;
+}
+
+export type AddToRunTotals = { added: number; alreadyInRun: number; notOnList: number; status: BacktestStatus | null };
+
+/** Adds the given addresses (which must be on the backtest list) to an existing backtest, in batches. */
+export async function addAddressesToRunBatched(runId: string, addresses: string[], onProgress?: BatchProgress): Promise<AddToRunTotals> {
+  const total: AddToRunTotals = { added: 0, alreadyInRun: 0, notOnList: 0, status: null };
+  await inBatches(
+    addresses,
+    OP_BATCH,
+    (batch) => request<AddToRunResult>(`/api/backtest/runs/${runId}/addresses`, { method: "POST", body: JSON.stringify({ addresses: batch }) }),
+    (r) => {
+      total.added += r.added;
+      total.alreadyInRun += r.alreadyInRun;
+      total.notOnList += r.notOnList;
+      total.status = r.status;
+    },
+    onProgress
+  );
+  return total;
+}
+
+/** Adds everything on the backtest list that is not in the backtest yet (only what matches `search`, if given), a page at a time. `expected` is for the progress bar. */
+export async function addListToRun(runId: string, options: { search?: string; expected?: number; onProgress?: BatchProgress; shouldStop?: () => boolean } = {}): Promise<AddToRunTotals & { stopped: boolean }> {
+  const total: AddToRunTotals & { stopped: boolean } = { added: 0, alreadyInRun: 0, notOnList: 0, status: null, stopped: false };
+  let afterId: string | null = null;
+  let scanned = 0;
+  do {
+    if (options.shouldStop?.()) {
+      total.stopped = true;
+      break;
+    }
+    const res: AddToRunResult = await withRetry(() =>
+      request(`/api/backtest/runs/${runId}/addresses`, { method: "POST", body: JSON.stringify({ fromList: true, afterId, search: options.search, limit: OP_BATCH * 2 }) })
+    );
+    total.added += res.added;
+    total.alreadyInRun += res.alreadyInRun;
+    total.status = res.status;
+    scanned += res.scanned;
+    afterId = res.nextAfterId;
+    options.onProgress?.(scanned, Math.max(scanned, options.expected ?? scanned));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } while (afterId);
+  return total;
+}
+
+// ----------------------------------------------------------------- merging backtests
+
+/** What merging the sources into the target would do - for the confirmation screen. */
+export function previewMerge(targetId: string, sourceIds: string[]): Promise<MergePreview> {
+  return request(`/api/backtest/runs/merge`, { method: "POST", body: JSON.stringify({ targetId, sourceIds }) });
+}
+
+export type MergeTotals = { moved: number; duplicates: number; removed: string[] };
+
+/**
+ * Merges each source into the target (the sources' addresses and results move over; the sources are removed). `rerun(sourceId)` says whether that
+ * source's addresses are simulated again by the target. Moves a page at a time so any size works; if it is interrupted, run it again - what has moved stays moved.
+ */
+export async function mergeBacktests(
+  targetId: string,
+  sources: Array<{ _id: string; addressCount: number; rerun: boolean }>,
+  onProgress?: (done: number, total: number, currentSource: string) => void,
+  shouldStop?: () => boolean
+): Promise<MergeTotals & { stopped: boolean }> {
+  const total: MergeTotals & { stopped: boolean } = { moved: 0, duplicates: 0, removed: [], stopped: false };
+  const grand = sources.reduce((n, s) => n + s.addressCount, 0);
+  let done = 0;
+  for (const source of sources) {
+    let afterId: string | null = null;
+    do {
+      if (shouldStop?.()) {
+        total.stopped = true;
+        return total;
+      }
+      const res: { moved: number; duplicates: number; scanned: number; nextAfterId: string | null } = await withRetry(() =>
+        request(`/api/backtest/runs/${targetId}/merge`, { method: "POST", body: JSON.stringify({ sourceId: source._id, afterId, rerun: source.rerun }) })
+      );
+      total.moved += res.moved;
+      total.duplicates += res.duplicates;
+      done += res.scanned;
+      afterId = res.nextAfterId;
+      onProgress?.(Math.min(done, grand), grand, source._id);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } while (afterId);
+    await withRetry(() => request(`/api/backtest/runs/${targetId}/merge`, { method: "POST", body: JSON.stringify({ sourceId: source._id, finish: true }) }));
+    total.removed.push(source._id);
+  }
+  return total;
+}
+
+// ----------------------------------------------------------------------- exports
+
+export type RunExportMode = "addresses" | "summary" | "trades";
+
+/** The link that downloads the backtest's addresses as CSV - the same filter, limits, search and sort as `query`. The browser streams the download. */
+export function runExportUrl(id: string, query: BacktestTraderQuery, mode: RunExportMode, includeSkipped = false): string {
+  const qs = tradersQuery(query);
+  qs.delete("page");
+  qs.delete("limit");
+  qs.set("mode", mode);
+  if (includeSkipped) qs.set("includeSkipped", "1");
+  return `/api/backtest/runs/${id}/export?${qs}`;
+}
+
+/** The link that downloads the backtest list as CSV (only what matches `search`). */
+export function addressListExportUrl(search: string, mode: "addresses" | "full"): string {
+  const qs = new URLSearchParams({ mode });
+  if (search.trim()) qs.set("search", search.trim());
+  return `/api/backtest/addresses/export?${qs}`;
 }
 
 export function getBacktestSettings(): Promise<BacktestSettingsView> {
