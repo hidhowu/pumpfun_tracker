@@ -16,7 +16,7 @@ export async function GET(_request: NextRequest, { params }: Params) {
 }
 
 /**
- * Body: { action: "pause" | "resume" | "cancel" | "retry_failed" | "retry_skipped" }
+ * Body: { action: "pause" | "resume" | "cancel" | "retry_failed" | "retry_skipped" | "restart" (from the first address again; optional collectMethod: "api" | "rpc") }
  *    or { update: { name?: string, maxSignatures?: number, profileId?: string, overrides?: { executionDelaySeconds?, riskCheckIntervalSeconds?, fillLatencySeconds? }, earlyStop?: { lossDays?, dayLossPercent?, negativeBalanceEvents?, lossAtProgressPercent? }, addressParallelism?: number | null, daysAtOnce?: number, combined?: { startingBalanceUsd?, resetDaily?, allowNegativeBalance? } } } - see updateBacktestRun.
  */
 export async function PATCH(request: NextRequest, { params }: Params) {
@@ -40,7 +40,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       });
       return NextResponse.json(JSON.parse(JSON.stringify(result)));
     }
-    const run = await controlBacktestRun(id, String(body.action));
+    const run = await controlBacktestRun(id, String(body.action), { collectMethod: body.collectMethod === "api" || body.collectMethod === "rpc" ? body.collectMethod : undefined });
     return NextResponse.json({ run: JSON.parse(JSON.stringify(run)) });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Failed" }, { status: 400 });

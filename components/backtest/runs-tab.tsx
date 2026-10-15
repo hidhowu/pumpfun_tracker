@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowUpRight, FlaskConical, Loader2, Pencil, PlayCircle, Trash2, Wallet } from "lucide-react";
+import { ArrowUpRight, FlaskConical, Loader2, Pencil, PlayCircle, RefreshCcw, Trash2, Wallet } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ import { formatUsd } from "@/lib/format";
 import type { BacktestRunSummary } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
 import { EditRunDialog } from "./edit-run-dialog";
+import { RestartRunDialog } from "./restart-run-dialog";
 import { ProgressBar, RunStatusBadge, formatDate, formatDuration, formatSignedPercent, pnlTone } from "./shared";
 
 const ACTIVE = new Set(["queued", "running"]);
@@ -41,6 +42,7 @@ export function RunsTab() {
   const [runs, setRuns] = useState<BacktestRunSummary[] | null>(null);
   const [toDelete, setToDelete] = useState<BacktestRunSummary | null>(null);
   const [toEdit, setToEdit] = useState<BacktestRunSummary | null>(null);
+  const [toRestart, setToRestart] = useState<BacktestRunSummary | null>(null);
   const [resuming, setResuming] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -126,8 +128,8 @@ export function RunsTab() {
                       <ArrowUpRight className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
                     </span>
                     <span className="truncate text-xs text-muted-foreground">
-                      {run.days}d · {formatDate(run.windowStart)} – {formatDate(run.windowEnd)} · follows &quot;{run.profileName}&quot; · {run.addresses.length} address
-                      {run.addresses.length === 1 ? "" : "es"}
+                      {run.days}d · {formatDate(run.windowStart)} – {formatDate(run.windowEnd)} · follows &quot;{run.profileName}&quot; · {run.addressCount.toLocaleString()} address
+                      {run.addressCount === 1 ? "" : "es"}
                     </span>
                   </Link>
                   <RunStatusBadge status={run.status} control={run.control} />
@@ -135,6 +137,11 @@ export function RunsTab() {
                     <Button variant="outline" size="sm" className="gap-1" disabled={resuming === run._id} onClick={() => resume(run)}>
                       {resuming === run._id ? <Loader2 className="size-4 animate-spin" /> : <PlayCircle className="size-4" />}
                       Resume
+                    </Button>
+                  )}
+                  {!(active && run.control === "run") && (
+                    <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setToRestart(run)} aria-label="Restart backtest" title="Restart from the first address">
+                      <RefreshCcw className="size-4" />
                     </Button>
                   )}
                   <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setToEdit(run)} aria-label="Edit backtest">
@@ -151,7 +158,7 @@ export function RunsTab() {
                   <ProgressBar percent={run.progress.percent} tone={run.status === "failed" ? "negative" : run.status === "completed" ? "positive" : "primary"} />
                   <div className="flex flex-wrap items-center justify-between gap-x-3 text-xs text-muted-foreground">
                     <span>
-                      {run.progress.percent.toFixed(run.progress.percent >= 99.95 || run.progress.percent === 0 ? 0 : 1)}% · {run.progress.addressesDone}/{run.progress.addressesTotal} addresses done
+                      {run.progress.percent.toFixed(run.progress.percent >= 99.95 || run.progress.percent === 0 ? 0 : 1)}% · {run.progress.addressesDone.toLocaleString()}/{run.progress.addressesTotal.toLocaleString()} addresses done
                       {run.progress.addressesFailed > 0 ? ` · ${run.progress.addressesFailed} failed` : ""}
                       {run.progress.addressesSkipped > 0 ? ` · ${run.progress.addressesSkipped} skipped` : ""}
                     </span>
@@ -170,6 +177,8 @@ export function RunsTab() {
           );
         })}
       </div>
+
+      {toRestart && <RestartRunDialog run={toRestart} open onOpenChange={(open) => !open && setToRestart(null)} onRestarted={refresh} />}
 
       {toEdit && <EditRunDialog run={toEdit} open onOpenChange={(open) => !open && setToEdit(null)} onSaved={refresh} />}
 

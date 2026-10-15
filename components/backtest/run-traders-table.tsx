@@ -1,17 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { getBacktestMatchingAddresses, getBacktestRunTraders } from "@/lib/backtest-api";
 import { formatAddress, formatUsd } from "@/lib/format";
-import type { BacktestRunTraderView } from "@/lib/backtest-types";
+import type { BacktestTraderFilter, BacktestTraderLimits, BacktestTraderQuery, BacktestTraderSort, BacktestTradersPage } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
 import { ProgressBar, StageBadge, formatSignedPercent, pnlTone, stageDescription } from "./shared";
 
-type SortKey = "pnl" | "combined" | "avgPnl" | "winRate" | "trades" | "lossDays" | "margin" | "withoutBest" | "progress";
-type Filter = "all" | "profitable" | "losing" | "running" | "failed" | "skipped";
+type SortKey = BacktestTraderSort;
+type Filter = BacktestTraderFilter;
 
 const FILTERS: Array<{ value: Filter; label: string }> = [
   { value: "all", label: "All" },
@@ -22,41 +24,8 @@ const FILTERS: Array<{ value: Filter; label: string }> = [
   { value: "skipped", label: "Skipped / stopped early" },
 ];
 
-const NO_VALUE = -1e9; // sorts "no figure yet" below every real one
-
-/** Realized P&L divided by the closed trades, in dollars. null until a trade has closed. */
-const avgPnlUsd = (t: BacktestRunTraderView): number | null => (t.stats.closed > 0 ? t.stats.realizedPnlUsd / t.stats.closed : null);
-
-type Limits = { minWinRate: string; minMargin: string; maxLossDays: string; minTrades: string; maxTrades: string; minAvgPnl: string; holdsWithoutBest: boolean };
-const NO_LIMITS: Limits = { minWinRate: "", minMargin: "", maxLossDays: "", minTrades: "", maxTrades: "", minAvgPnl: "", holdsWithoutBest: false };
-
-const sortValue: Record<SortKey, (t: BacktestRunTraderView) => number> = {
-  pnl: (t) => t.stats.realizedPnlUsd,
-  combined: (t) => t.stats.combinedPercent,
-  avgPnl: (t) => avgPnlUsd(t) ?? NO_VALUE,
-  winRate: (t) => t.stats.winRatePercent ?? -1,
-  trades: (t) => t.stats.closed,
-  lossDays: (t) => t.stats.daily?.lossDays ?? 0,
-  margin: (t) => t.stats.daily?.profitMarginPercent ?? NO_VALUE,
-  withoutBest: (t) => (t.stats.daily?.withoutBestDay ? t.stats.daily.withoutBestDay.combinedPercent : NO_VALUE),
-  progress: (t) => t.progressPercent,
-};
-
-/**
- * Every address sits under exactly one status filter. Until a final decision is made it is In progress - winning or losing right
- * now makes no difference. Only a finished address is Profitable or Losing; failed and skipped / stopped-early ones have their own.
- */
-function matchesFilter(t: BacktestRunTraderView, filter: Filter): boolean {
-  const failed = t.stage === "failed";
-  const skipped = t.stage === "skipped";
-  const done = t.stage === "done";
-  if (filter === "failed") return failed;
-  if (filter === "skipped") return skipped;
-  if (filter === "running") return !failed && !skipped && !done;
-  if (filter === "profitable") return done && t.stats.closed > 0 && t.stats.realizedPnlUsd > 0;
-  if (filter === "losing") return done && t.stats.closed > 0 && t.stats.realizedPnlUsd < 0;
-  return true;
-}
+const PAGE_SIZES = [25, 50, 100, 200];
+const NO_LIMITS: BacktestTraderLimits = { minWinRate: "", minMargin: "", maxLossDays: "", minTrades: "", maxTrades: "", minAvgPnl: "", holdsWithoutBest: false };
 
 function SortHead({
   label,
@@ -84,55 +53,80 @@ function SortHead({
 }
 
 type Props = {
-  traders: BacktestRunTraderView[];
+  runId: string;
+  /** The backtest is being worked on: the page refreshes more often. */
+  active: boolean;
   selected: Set<string>;
   onSelectedChange: (next: Set<string>) => void;
   onOpen: (address: string) => void;
 };
 
-/** Every address in the run with its own progress and the results it has produced so far. Click a row to open the address's full page in a new tab. */
-export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }: Props) {
+/**
+ * The addresses of the run, a page at a time. A backtest can have tens of thousands, so the filtering, sorting and paging happen on the
+ * server (the results of every address are stored on its row) and only the rows on screen are ever loaded or drawn.
+ * Click a row to open the address's full page in a new tab.
+ */
+export function RunTradersTable({ runId, active, selected, onSelectedChange, onOpen }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "pnl", dir: "desc" });
-  const [limits, setLimits] = useState<Limits>(NO_LIMITS);
+  const [limits, setLimits] = useState<BacktestTraderLimits>(NO_LIMITS);
+  const [appliedLimits, setAppliedLimits] = useState<BacktestTraderLimits>(NO_LIMITS); // the limits once typing has paused
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [data, setData] = useState<BacktestTradersPage | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const latest = useRef(0);
+  const loadedOnce = useRef(false);
 
-  const rows = useMemo(() => {
-    const filtered = traders.filter((t) => matchesFilter(t, filter));
-    const num = (s: string) => (s.trim() === "" || !Number.isFinite(Number(s)) ? null : Number(s));
-    const minWin = num(limits.minWinRate);
-    const minMargin = num(limits.minMargin);
-    const maxLoss = num(limits.maxLossDays);
-    const minTrades = num(limits.minTrades);
-    const maxTrades = num(limits.maxTrades);
-    const minAvg = num(limits.minAvgPnl);
-    const limited = filtered.filter((t) => {
-      const d = t.stats.daily;
-      if (minWin != null && (t.stats.winRatePercent == null || t.stats.winRatePercent < minWin)) return false;
-      if (minMargin != null && (d?.profitMarginPercent == null || d.profitMarginPercent < minMargin)) return false;
-      if (maxLoss != null && (d?.lossDays ?? 0) > maxLoss) return false;
-      if (minTrades != null && t.stats.closed < minTrades) return false;
-      if (maxTrades != null && t.stats.closed > maxTrades) return false;
-      if (minAvg != null) {
-        const avg = avgPnlUsd(t);
-        if (avg == null || avg < minAvg) return false;
-      }
-      if (limits.holdsWithoutBest && !d?.withoutBestDay?.stillProfitable) return false;
-      return true;
-    });
-    const value = sortValue[sort.key];
-    return [...limited].sort((a, b) => (sort.dir === "desc" ? value(b) - value(a) : value(a) - value(b)));
-  }, [traders, filter, sort, limits]);
+  // Typing in a limit waits for a pause before asking the server.
+  useEffect(() => {
+    const timer = setTimeout(() => setAppliedLimits(limits), 400);
+    return () => clearTimeout(timer);
+  }, [limits]);
+
+  const query: BacktestTraderQuery = { filter, sort: sort.key, dir: sort.dir, page, limit: pageSize, limits: appliedLimits };
+  const queryKey = JSON.stringify(query);
+
+  const load = useCallback(async () => {
+    const mine = ++latest.current;
+    setLoading(true);
+    try {
+      const res = await getBacktestRunTraders(runId, JSON.parse(queryKey) as BacktestTraderQuery);
+      if (mine !== latest.current) return; // a newer request has been made since
+      loadedOnce.current = true;
+      setData(res);
+      if (res.page > res.totalPages) setPage(res.totalPages); // the last page emptied out (a filter now matches fewer)
+    } catch (e) {
+      if (mine === latest.current && !loadedOnce.current) toast.error(e instanceof Error ? e.message : "Failed to load the addresses");
+    } finally {
+      if (mine === latest.current) setLoading(false);
+    }
+  }, [runId, queryKey]);
+
+  useEffect(() => {
+    const first = setTimeout(load, 0);
+    const interval = setInterval(load, active ? 5000 : 30000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(interval);
+    };
+  }, [load, active]);
+
+  const rows = data?.traders ?? [];
   const limitsActive = JSON.stringify(limits) !== JSON.stringify(NO_LIMITS);
-
-  const allSelected = rows.length > 0 && rows.every((t) => selected.has(t.address));
+  const pageAllSelected = rows.length > 0 && rows.every((t) => selected.has(t.address));
+  const total = data?.total ?? 0;
+  const canSelectAllMatching = pageAllSelected && total > rows.length && selected.size < total;
 
   function onSort(key: SortKey) {
     setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }));
+    setPage(1);
   }
 
-  function toggleAll() {
+  function togglePage() {
     const next = new Set(selected);
-    if (allSelected) rows.forEach((t) => next.delete(t.address));
+    if (pageAllSelected) rows.forEach((t) => next.delete(t.address));
     else rows.forEach((t) => next.add(t.address));
     onSelectedChange(next);
   }
@@ -144,12 +138,32 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
     onSelectedChange(next);
   }
 
+  async function selectAllMatching() {
+    setSelectingAll(true);
+    try {
+      const addresses = await getBacktestMatchingAddresses(runId, query);
+      onSelectedChange(new Set([...selected, ...addresses]));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to select the addresses");
+    } finally {
+      setSelectingAll(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-1.5">
         {FILTERS.map((f) => (
-          <Button key={f.value} size="sm" variant={filter === f.value ? "default" : "outline"} onClick={() => setFilter(f.value)}>
-            {f.label} <span className="ml-1 text-xs opacity-70">{traders.filter((t) => matchesFilter(t, f.value)).length}</span>
+          <Button
+            key={f.value}
+            size="sm"
+            variant={filter === f.value ? "default" : "outline"}
+            onClick={() => {
+              setFilter(f.value);
+              setPage(1);
+            }}
+          >
+            {f.label} <span className="ml-1 text-xs opacity-70">{(data?.counts[f.value] ?? 0).toLocaleString()}</span>
           </Button>
         ))}
       </div>
@@ -170,31 +184,61 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
             <Input
               inputMode="decimal"
               value={limits[key]}
-              onChange={(e) => setLimits((prev) => ({ ...prev, [key]: e.target.value.replace(key === "minMargin" || key === "minAvgPnl" ? /[^0-9.-]/g : /[^0-9.]/g, "") }))}
+              onChange={(e) => {
+                const value = e.target.value.replace(key === "minMargin" || key === "minAvgPnl" ? /[^0-9.-]/g : /[^0-9.]/g, "");
+                setLimits((prev) => ({ ...prev, [key]: value }));
+                setPage(1);
+              }}
               className="h-8 w-40"
             />
           </label>
         ))}
         <label className="flex items-center gap-2 pb-1.5 text-xs text-muted-foreground" title="Keep only traders that are still profitable after their single best day is removed">
-          <input type="checkbox" className="size-4 accent-primary" checked={limits.holdsWithoutBest} onChange={(e) => setLimits((prev) => ({ ...prev, holdsWithoutBest: e.target.checked }))} />
+          <input
+            type="checkbox"
+            className="size-4 accent-primary"
+            checked={limits.holdsWithoutBest}
+            onChange={(e) => {
+              setLimits((prev) => ({ ...prev, holdsWithoutBest: e.target.checked }));
+              setPage(1);
+            }}
+          />
           Still profitable without best day
         </label>
         {limitsActive && (
-          <Button size="sm" variant="ghost" onClick={() => setLimits(NO_LIMITS)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setLimits(NO_LIMITS);
+              setPage(1);
+            }}
+          >
             Clear
           </Button>
         )}
-        <span className="ml-auto pb-1.5 text-xs text-muted-foreground">
-          {rows.length} of {traders.length} shown
+        <span className="ml-auto flex items-center gap-1.5 pb-1.5 text-xs text-muted-foreground">
+          {loading && <Loader2 className="size-3 animate-spin" />}
+          {total.toLocaleString()} of {(data?.counts.all ?? 0).toLocaleString()} match
         </span>
       </div>
+
+      {canSelectAllMatching && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <span>All {rows.length} on this page are selected.</span>
+          <Button size="sm" variant="outline" disabled={selectingAll} onClick={selectAllMatching}>
+            {selectingAll && <Loader2 className="size-4 animate-spin" />}
+            Select all {total.toLocaleString()} that match
+          </Button>
+        </div>
+      )}
 
       <div className="overflow-x-auto rounded-xl border border-border/60">
         <Table>
           <TableHeader>
             <TableRow className="border-border/60 hover:bg-transparent">
               <TableHead className="w-10 pl-4">
-                <input type="checkbox" aria-label="Select all" className="size-4 accent-primary" checked={allSelected} onChange={toggleAll} />
+                <input type="checkbox" aria-label="Select this page" className="size-4 accent-primary" checked={pageAllSelected} onChange={togglePage} />
               </TableHead>
               <TableHead>Address &amp; progress</TableHead>
               <SortHead label="P&L" k="pnl" sort={sort} onSort={onSort} className="text-right" />
@@ -211,7 +255,7 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
             {rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={10} className="py-10 text-center text-sm text-muted-foreground">
-                  No address matches this filter.
+                  {data === null ? "Loading…" : "No address matches this filter."}
                 </TableCell>
               </TableRow>
             ) : (
@@ -315,6 +359,36 @@ export function RunTradersTable({ traders, selected, onSelectedChange, onOpen }:
           </TableBody>
         </Table>
       </div>
+
+      {data && data.totalPages > 1 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>
+            Page {data.page.toLocaleString()} of {data.totalPages.toLocaleString()}
+          </span>
+          <div className="flex items-center gap-1.5">
+            {PAGE_SIZES.map((n) => (
+              <Button
+                key={n}
+                size="sm"
+                variant={pageSize === n ? "default" : "ghost"}
+                className="h-7 px-2 text-xs"
+                onClick={() => {
+                  setPageSize(n);
+                  setPage(1);
+                }}
+              >
+                {n}
+              </Button>
+            ))}
+            <Button size="sm" variant="outline" className="h-7 gap-1 px-2" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+              <ChevronLeft className="size-3.5" /> Prev
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 gap-1 px-2" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>
+              Next <ChevronRight className="size-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

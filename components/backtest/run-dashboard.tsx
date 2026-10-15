@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, CalendarDays, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, Pencil, RotateCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, Wallet, XCircle } from "lucide-react";
+import { ArrowLeft, CalendarDays, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, Pencil, RotateCcw, RefreshCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, Wallet, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -31,9 +31,13 @@ import { RunTradersTable } from "./run-traders-table";
 import { WorkerStatus } from "./worker-status";
 import { BlacklistDialog } from "./blacklist-dialog";
 import { EditRunDialog } from "./edit-run-dialog";
+import { RestartRunDialog } from "./restart-run-dialog";
 import { ProgressBar, RunStatusBadge, StrategyChips, formatDate, formatDuration, formatSignedPercent } from "./shared";
 
 const ACTIVE = new Set(["queued", "running"]);
+// The chart, daily grid, trade list and combined wallet each read a lot of data, so while a backtest runs they refresh on this slower beat
+// instead of with every progress poll.
+const HEAVY_REFRESH_MS = 15_000;
 
 type Confirm = null | "cancel" | "delete" | "remove-addresses";
 
@@ -49,14 +53,23 @@ export function RunDashboard({ runId }: { runId: string }) {
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [blacklistOpen, setBlacklistOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [restartOpen, setRestartOpen] = useState(false);
   const lastStatus = useRef<string | null>(null);
+  const lastHeavy = useRef(0);
+  const forceHeavy = useRef(false); // something changed the results (restart, edit, remove): the heavy panels re-read at the next poll
 
   const refresh = useCallback(async () => {
     try {
       const d = await getBacktestRun(runId);
       setDetail(d);
-      setRefreshKey((k) => k + 1);
-      // The poll that notices a run just finished is the last one that needs to refetch the charts - already covered by the bump above.
+      // The heavy panels re-read when the status changed (the poll that notices a run just finished is the last one they need), and
+      // every HEAVY_REFRESH_MS while it is being worked on.
+      const working = ACTIVE.has(d.run.status) || d.run.control !== "run";
+      if (forceHeavy.current || lastStatus.current !== d.run.status || (working && Date.now() - lastHeavy.current >= HEAVY_REFRESH_MS)) {
+        forceHeavy.current = false;
+        lastHeavy.current = Date.now();
+        setRefreshKey((k) => k + 1);
+      }
       lastStatus.current = d.run.status;
     } catch (e) {
       const message = e instanceof Error ? e.message : "";
@@ -154,12 +167,14 @@ export function RunDashboard({ runId }: { runId: string }) {
     );
   }
 
-  const { run, progress, stats, traders } = detail;
+  const { run, progress, stats } = detail;
   const running = ACTIVE.has(run.status);
   const canPause = running && run.control === "run";
   // A cancelled backtest keeps everything it finished and the addresses it had not reached, so it can be resumed just like a paused one.
   const canResume = run.status === "paused" || run.status === "cancelled";
   const canCancel = (running && run.control === "run") || run.status === "paused";
+  // Restarting throws the results away and starts from the first address; not while the worker is working on it (pause first).
+  const canRestart = !(running && run.control === "run");
   const failedCount = progress.addressesFailed;
   const settled = !running && run.status !== "paused";
   const pct = progress.percent;
@@ -185,8 +200,8 @@ export function RunDashboard({ runId }: { runId: string }) {
             )}
           </div>
           <p className="text-sm text-muted-foreground">
-            {run.days}-day window ({formatDate(run.windowStart)} – {formatDate(run.windowEnd)}) · following &quot;{run.profileName}&quot; · {run.addresses.length} address
-            {run.addresses.length === 1 ? "" : "es"}
+            {run.days}-day window ({formatDate(run.windowStart)} – {formatDate(run.windowEnd)}) · following &quot;{run.profileName}&quot; · {run.addressCount.toLocaleString()} address
+            {run.addressCount === 1 ? "" : "es"}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -208,6 +223,17 @@ export function RunDashboard({ runId }: { runId: string }) {
           <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => setEditOpen(true)}>
             <Pencil className="size-4" /> Edit
           </Button>
+          {canRestart && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={busy !== null}
+              onClick={() => setRestartOpen(true)}
+            >
+              <RefreshCcw className="size-4" /> Restart
+            </Button>
+          )}
           {settled && failedCount > 0 && (
             <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => act("retry_failed")}>
               <RotateCcw className="size-4" /> Retry {failedCount} failed
@@ -232,7 +258,7 @@ export function RunDashboard({ runId }: { runId: string }) {
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <span className="text-2xl font-semibold tabular-nums tracking-tight">{pct.toFixed(pct >= 99.95 || pct === 0 ? 0 : 1)}%</span>
           <span className="text-sm text-muted-foreground">
-            {progress.addressesDone}/{progress.addressesTotal} addresses done{failedCount > 0 ? ` · ${failedCount} failed` : ""}{progress.addressesSkipped > 0 ? ` · ${progress.addressesSkipped} skipped` : ""}
+            {progress.addressesDone.toLocaleString()}/{progress.addressesTotal.toLocaleString()} addresses done{failedCount > 0 ? ` · ${failedCount} failed` : ""}{progress.addressesSkipped > 0 ? ` · ${progress.addressesSkipped} skipped` : ""}
           </span>
         </div>
         <ProgressBar percent={pct} tone={run.status === "failed" ? "negative" : run.status === "completed" ? "positive" : "primary"} className="h-2" />
@@ -332,11 +358,11 @@ export function RunDashboard({ runId }: { runId: string }) {
               </div>
             </div>
           )}
-          <RunTradersTable traders={traders} selected={selected} onSelectedChange={setSelected} onOpen={(address) => window.open(`/backtest/${runId}/${address}`, "_blank", "noopener,noreferrer")} />
+          <RunTradersTable runId={runId} active={running} selected={selected} onSelectedChange={setSelected} onOpen={(address) => window.open(`/backtest/${runId}/${address}`, "_blank", "noopener,noreferrer")} />
         </TabsContent>
 
         <TabsContent value="daily">
-          <DailyGrid runId={runId} traders={traders} refreshKey={refreshKey} />
+          <DailyGrid runId={runId} refreshKey={refreshKey} />
         </TabsContent>
 
         <TabsContent value="performance" className="flex flex-col gap-2">
@@ -349,7 +375,28 @@ export function RunDashboard({ runId }: { runId: string }) {
         </TabsContent>
       </Tabs>
 
-      <EditRunDialog run={run} open={editOpen} onOpenChange={setEditOpen} onSaved={refresh} />
+      <EditRunDialog
+        run={run}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        onSaved={() => {
+          forceHeavy.current = true;
+          refresh();
+        }}
+      />
+
+      {restartOpen && (
+        <RestartRunDialog
+          run={run}
+          open
+          onOpenChange={setRestartOpen}
+          onRestarted={() => {
+            forceHeavy.current = true;
+            setSelected(new Set());
+            refresh();
+          }}
+        />
+      )}
 
       <BlacklistDialog
         open={blacklistOpen}
@@ -357,6 +404,7 @@ export function RunDashboard({ runId }: { runId: string }) {
         addresses={[...selected]}
         onDone={() => {
           setSelected(new Set());
+          forceHeavy.current = true;
           refresh();
         }}
       />

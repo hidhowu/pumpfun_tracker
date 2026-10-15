@@ -16,8 +16,13 @@ import { groupTradesByMint, listSignals, findTraderSell } from "./signals.js";
 import { simulatePosition, UnresolvedError } from "./simulator.js";
 import { EarlyStopError, evaluateEarlyStop, hasEarlyStop } from "./earlyStop.js";
 import { sleep } from "./slotPool.js";
+import { statsRefresher } from "./runStats.js";
 
 const TICK_MS = 2000;
+// A finished address wakes the worker up to fill its place right away; many finishing together (cached addresses finish in milliseconds) are one wake-up.
+const KICK_DELAY_MS = 20;
+// A run with no address rows this long after it was created is broken, not "still being set up".
+const EMPTY_RUN_GRACE_MS = 5 * 60_000;
 const LEASE_MS = 60_000;
 // "Addresses at once" = N means N addresses are served first and N more are collected and started on standby: when the front ones are
 // waiting for their last trades of a day, the freed capacity goes to the standby ones' current day instead of racing ahead to a later day.
@@ -87,6 +92,8 @@ export class BacktestWorker {
     this.scheduler = new PositionScheduler(); // which position is simulated next, across ALL addresses (slots = settings.positionParallelism)
     this.launchSeq = 0; // claim order of addresses: the older one gets the free slots first
     this.active = new Map(); // `${runId}:${address}` -> promise
+    this.activeIds = new Map(); // `${runId}:${address}` -> the address's BacktestRunTrader _id (to renew just those leases)
+    this.kickTimer = null;
     this.runControl = new Map(); // runId -> "run" | "pause" | "cancel"
     this.runDaysAtOnce = new Map(); // runId -> days of one address worked at once (0 = no limit); refreshed every tick so an edit applies while running
     this.settingsCache = { at: 0, value: null };
@@ -109,6 +116,7 @@ export class BacktestWorker {
   async stop() {
     this.stopping = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.kickTimer) clearTimeout(this.kickTimer);
     await Promise.allSettled([...this.active.values()]);
   }
 
@@ -128,7 +136,8 @@ export class BacktestWorker {
       this.lastTickAt = now;
       await BacktestSettings.updateOne({ key: "default" }, { $set: { workerHeartbeatAt: new Date(now), workerId: this.id } }, { upsert: true });
 
-      const runs = await BacktestRun.find({ status: { $in: ["queued", "running", "paused"] } }).sort({ createdAt: 1 }).lean();
+      // `addresses` (the legacy list kept on old runs) is left out: it can be tens of thousands of strings and nothing here needs it.
+      const runs = await BacktestRun.find({ status: { $in: ["queued", "running", "paused"] } }, { addresses: 0 }).sort({ createdAt: 1 }).lean();
       this.runControl = new Map(runs.map((r) => [String(r._id), r.control]));
       this.runDaysAtOnce = new Map(runs.map((r) => [String(r._id), r.daysAtOnce || 0]));
 
@@ -142,12 +151,9 @@ export class BacktestWorker {
       }
       const live = runs.filter((r) => r.control === "run");
 
-      // ---- keep leases of running work alive, and count working time
-      if (this.active.size > 0) {
-        await BacktestRunTrader.updateMany(
-          { claimedBy: this.id, stage: { $in: ["pending", "collecting", "simulating"] } },
-          { $set: { leaseUntil: new Date(now + LEASE_MS) } }
-        );
+      // ---- keep leases of running work alive (only the addresses in hand, by id), and count working time
+      if (this.activeIds.size > 0) {
+        await BacktestRunTrader.updateMany({ _id: { $in: [...this.activeIds.values()] } }, { $set: { leaseUntil: new Date(now + LEASE_MS) } });
       }
       const workingRunIds = new Set([...this.active.keys()].map((k) => k.split(":")[0]));
       for (const run of live) {
@@ -164,9 +170,12 @@ export class BacktestWorker {
       for (const k of this.active.keys()) activeBy.set(k.split(":")[0], (activeBy.get(k.split(":")[0]) ?? 0) + 1);
       const ownRuns = new Set(live.filter((r) => r.addressParallelism > 0).map((r) => String(r._id)));
       let sharedFree = settings.addressParallelism - [...activeBy].filter(([id]) => !ownRuns.has(id)).reduce((n, [, c]) => n + c, 0);
+      const exhausted = []; // runs with nothing in hand and nothing left to claim: the only ones that can have just finished
       for (const run of live) {
         const own = ownRuns.has(String(run._id));
+        const hadActive = (activeBy.get(String(run._id)) ?? 0) > 0;
         let free = own ? run.addressParallelism * STANDBY_FACTOR - (activeBy.get(String(run._id)) ?? 0) : sharedFree;
+        let claimed = 0;
         while (free > 0) {
           const rt = await BacktestRunTrader.findOneAndUpdate(
             {
@@ -177,24 +186,40 @@ export class BacktestWorker {
             { $set: { claimedBy: this.id, leaseUntil: new Date(Date.now() + LEASE_MS) } },
             { sort: { _id: 1 }, returnDocument: "after" }
           );
-          if (!rt) break;
+          if (!rt) {
+            if (!hadActive && claimed === 0) exhausted.push(run);
+            break;
+          }
           if (run.status !== "running") {
             await BacktestRun.updateOne({ _id: run._id }, { $set: { status: "running", startedAt: run.startedAt ?? new Date() } });
             run.status = "running";
           }
           this.#launch(run, rt);
+          claimed += 1;
           free -= 1;
           if (!own) sharedFree -= 1;
         }
       }
 
-      // ---- finish runs whose addresses are all settled
-      for (const run of live) {
-        const remaining = await BacktestRunTrader.countDocuments({ runId: run._id, stage: { $in: ["pending", "collecting", "simulating"] } });
+      // ---- finish runs whose addresses are all settled. Only a run that has nothing in hand and nothing left to claim can be done, so the others
+      // are not even looked at (this used to be four counts over every run on every tick).
+      for (const run of exhausted) {
+        const rows = await BacktestRunTrader.aggregate([{ $match: { runId: run._id } }, { $group: { _id: "$stage", n: { $sum: 1 } } }]);
+        const by = Object.fromEntries(rows.map((r) => [r._id, r.n]));
+        const total = rows.reduce((n, r) => n + r.n, 0);
+        if (total === 0) {
+          // No address rows at all: still being written, or broken. Never "finished".
+          if (Date.now() - new Date(run.createdAt).getTime() > EMPTY_RUN_GRACE_MS) {
+            await BacktestRun.updateOne({ _id: run._id, status: { $in: ["queued", "running"] } }, { $set: { status: "failed", finishedAt: new Date(), error: "This backtest has no addresses" } });
+          }
+          continue;
+        }
+        if (run.addressCount && total < run.addressCount) continue; // rows still missing - not finished
+        const remaining = (by.pending ?? 0) + (by.collecting ?? 0) + (by.simulating ?? 0);
         if (remaining > 0) continue;
-        const done = await BacktestRunTrader.countDocuments({ runId: run._id, stage: "done" });
-        const failed = await BacktestRunTrader.countDocuments({ runId: run._id, stage: "failed" });
-        const skippedCount = await BacktestRunTrader.countDocuments({ runId: run._id, stage: "skipped" });
+        const done = by.done ?? 0;
+        const failed = by.failed ?? 0;
+        const skippedCount = by.skipped ?? 0;
         await BacktestRun.updateOne(
           { _id: run._id, status: { $in: ["queued", "running"] } },
           {
@@ -213,15 +238,26 @@ export class BacktestWorker {
     }
   }
 
+  /** Wakes the worker up shortly (not on every single finished address - a burst of them is one wake-up). */
+  #kick() {
+    if (this.kickTimer || this.stopping) return;
+    this.kickTimer = setTimeout(() => {
+      this.kickTimer = null;
+      this.tick().catch((err) => console.error("[backtest] tick failed:", err.message || err));
+    }, KICK_DELAY_MS);
+  }
+
   #launch(run, rt) {
     const key = `${run._id}:${rt.address}`;
     const order = this.launchSeq++;
+    this.activeIds.set(key, rt._id);
     const task = this.#processAddress(run, rt, order)
       .catch((err) => console.error(`[backtest] ${key} crashed:`, err))
       .finally(() => {
         this.active.delete(key);
-        // Take the next address right away instead of leaving the freed place empty until the next tick.
-        this.tick().catch((err) => console.error("[backtest] tick failed:", err.message || err));
+        this.activeIds.delete(key);
+        // Take the next address soon instead of leaving the freed place empty until the next tick.
+        this.#kick();
       });
     this.active.set(key, task);
   }
@@ -234,6 +270,7 @@ export class BacktestWorker {
     const runId = String(run._id);
     const shouldStop = () => this.#shouldStop(runId);
     const writer = progressWriter(rt._id);
+    const stats = statsRefresher(run._id, rt.address); // this address's results, kept on its row for the run page
     const settings = await this.#settings();
     const windowStartSec = Math.floor(run.windowStart.getTime() / 1000);
     const windowEndSec = Math.floor(run.windowEnd.getTime() / 1000);
@@ -279,9 +316,10 @@ export class BacktestWorker {
 
       if (!rt.sim?.done) {
         await BacktestRunTrader.updateOne({ _id: rt._id }, { $set: { stage: "simulating" } });
-        await this.#simulateAddress({ run, rt, settings, windowStartSec, windowEndSec, writer, shouldStop, order });
+        await this.#simulateAddress({ run, rt, settings, windowStartSec, windowEndSec, writer, stats, shouldStop, order });
         await writer.flush();
       }
+      await stats.final(); // before it is marked done, so a finished address never shows older figures
 
       await BacktestRunTrader.updateOne(
         { _id: rt._id },
@@ -289,6 +327,7 @@ export class BacktestWorker {
       );
     } catch (err) {
       await writer.flush().catch(() => {});
+      await stats.final(); // whatever stopped it (pause, loss-trader rule, error), the results so far are shown
       if (err instanceof StopRequested) {
         // Paused/cancelled/shutting down - give the address back untouched; progress made so far is kept.
         await BacktestRunTrader.updateOne({ _id: rt._id }, { $set: { claimedBy: null, leaseUntil: null } });
@@ -321,7 +360,7 @@ export class BacktestWorker {
     }
   }
 
-  async #simulateAddress({ run, rt, settings, windowStartSec, windowEndSec, writer, shouldStop, order }) {
+  async #simulateAddress({ run, rt, settings, windowStartSec, windowEndSec, writer, stats, shouldStop, order }) {
     const strategy = run.settings;
     const address = rt.address;
     const runId = String(run._id);
@@ -441,6 +480,7 @@ export class BacktestWorker {
       signalsDone += 1;
       finished[index] = true;
       publish();
+      stats.maybe();
       advance();
       checkEarlyStop();
     };

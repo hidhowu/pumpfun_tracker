@@ -46,6 +46,34 @@ const BacktestRunTraderSchema = new Schema({
     },
   },
 
+  // This address's results so far (see db/backtest/runStats.js). Kept here, next to the stage, so the run page can filter, sort and page the
+  // addresses with a plain query instead of re-adding up every position of the run on each refresh.
+  stats: {
+    closed: { type: Number, default: 0 },
+    open: { type: Number, default: 0 },
+    skipped: { type: Number, default: 0 },
+    wins: { type: Number, default: 0 },
+    losses: { type: Number, default: 0 },
+    winRatePercent: { type: Number, default: null },
+    realizedPnlUsd: { type: Number, default: 0 },
+    combinedPercent: { type: Number, default: 0 },
+    avgPercent: { type: Number, default: null },
+    avgPnlUsd: { type: Number, default: null }, // realized P&L per closed trade
+    bestPercent: { type: Number, default: null },
+    worstPercent: { type: Number, default: null },
+    unrealizedUsd: { type: Number, default: 0 },
+    daily: {
+      tradingDays: { type: Number, default: 0 },
+      lossDays: { type: Number, default: 0 },
+      profitDays: { type: Number, default: 0 },
+      grossProfitPercent: { type: Number, default: 0 },
+      grossLossPercent: { type: Number, default: 0 },
+      profitMarginPercent: { type: Number, default: null },
+      bestDay: { type: Schema.Types.Mixed, default: null },
+      withoutBestDay: { type: Schema.Types.Mixed, default: null },
+    },
+  },
+
   claimedBy: { type: String, default: null },
   leaseUntil: { type: Date, default: null },
   startedAt: { type: Date, default: null },
@@ -54,5 +82,10 @@ const BacktestRunTraderSchema = new Schema({
 
 BacktestRunTraderSchema.index({ runId: 1, address: 1 }, { unique: true });
 BacktestRunTraderSchema.index({ stage: 1, leaseUntil: 1 });
+// The worker's "next address to work on" (runId + stage in [...], oldest first) and the stage counts of a run - without it every claim
+// walks past all the finished addresses of the run, which makes a run of many addresses slower and slower.
+BacktestRunTraderSchema.index({ runId: 1, stage: 1, _id: 1 });
+// The run page's default order (best P&L first).
+BacktestRunTraderSchema.index({ runId: 1, "stats.realizedPnlUsd": -1, _id: 1 });
 
 export const BacktestRunTrader = models.BacktestRunTrader || model("BacktestRunTrader", BacktestRunTraderSchema);

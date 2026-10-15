@@ -42,6 +42,8 @@ export type BacktestStats = {
   realizedPnlUsd: number;
   combinedPercent: number;
   avgPercent: number | null;
+  // Realized P&L per closed trade, in dollars (only on a run's addresses).
+  avgPnlUsd?: number | null;
   bestPercent: number | null;
   worstPercent: number | null;
   unrealizedUsd: number;
@@ -99,7 +101,8 @@ export type BacktestRunDefinition = {
   profileId: string | null;
   profileName: string;
   settings: BacktestStrategy;
-  addresses: string[];
+  // How many addresses the backtest has. The addresses themselves are fetched a page at a time (a backtest can have tens of thousands).
+  addressCount: number;
   // Missing on backtests made before combined backtests existed: those are "separate".
   mode?: "separate" | "combined";
   combined?: BacktestCombinedConfig | null;
@@ -158,7 +161,31 @@ export type BacktestRunDetail = {
   run: BacktestRunDefinition;
   progress: BacktestRunProgress;
   stats: BacktestStats;
+};
+
+export type BacktestTraderFilter = "all" | "profitable" | "losing" | "running" | "failed" | "skipped";
+export type BacktestTraderSort = "pnl" | "combined" | "avgPnl" | "winRate" | "trades" | "lossDays" | "margin" | "withoutBest";
+
+/** The "at least / at most" limits of the addresses table, as typed (empty = no limit). */
+export type BacktestTraderLimits = { minWinRate: string; minMargin: string; maxLossDays: string; minTrades: string; maxTrades: string; minAvgPnl: string; holdsWithoutBest: boolean };
+
+export type BacktestTraderQuery = {
+  filter: BacktestTraderFilter;
+  sort: BacktestTraderSort;
+  dir: "asc" | "desc";
+  page: number;
+  limit: number;
+  limits: BacktestTraderLimits;
+};
+
+/** One page of a run's addresses, filtered and sorted by the server. `counts` is per status filter (the limits not applied); `total` matches filter + limits. */
+export type BacktestTradersPage = {
   traders: BacktestRunTraderView[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  counts: Record<BacktestTraderFilter, number>;
 };
 
 export type BacktestCloseReason = "trader_sell" | "stop_loss" | "take_profit" | "trailing_stop" | "max_hold_time";
@@ -200,11 +227,20 @@ export type BacktestPositionView = {
 
 export type BacktestDay = { pnlUsd: number; combinedPercent: number; trades: number; wins: number; losses: number };
 
+/** The daily grid for one page of the addresses (best P&L first); `totalsByDay` covers ALL the run's addresses. */
 export type BacktestDaily = {
   days: string[];
   byAddress: Record<string, Record<string, BacktestDay>>;
-  // Per address: null = fully simulated, "" = nothing yet, "YYYY-MM-DD" = days strictly before it are complete.
+  // Per address on the page: null = fully simulated, "" = nothing yet, "YYYY-MM-DD" = days strictly before it are complete.
   through: Record<string, string | null>;
+  totalsByDay: Record<string, BacktestDay>;
+  /** No address is still being worked on, so the totals are final. */
+  allDone: boolean;
+  rows: Array<{ address: string; label: string }>;
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 };
 
 export type BacktestEquityPoint = { t: string; cumulativeUsd: number; n: number };

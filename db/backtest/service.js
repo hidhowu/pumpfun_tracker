@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { BacktestAddress } from "../models/BacktestAddress.js";
 import { BacktestRun } from "../models/BacktestRun.js";
 import { BacktestRunTrader } from "../models/BacktestRunTrader.js";
@@ -9,11 +10,12 @@ import { getGlobalSettings } from "../models/GlobalSettings.js";
 import { getSystemSettings } from "../models/SystemSettings.js";
 import { resolveBacktestSettings } from "./settings.js";
 import { addTradersBulk, isValidSolanaAddress, setBlacklisted } from "../traderService.js";
-import { traderProgressPercent, runProgressPercent, estimateRemainingMs } from "./progress.js";
+import { traderProgressPercent, estimateRemainingMs } from "./progress.js";
 import { getRunAddress as getRunAddressDetail } from "./addressView.js";
-import { summariseDays } from "./dayStats.js";
+import { EMPTY_STATS, emptyStoredStats, ensureRunStats, finishStats, invalidateRun, remembered, statsByAddress, summariseRuns, summaryTtl, viewStats } from "./runStats.js";
 
 const DAY_MS = 86_400_000;
+const INSERT_CHUNK = 1000;
 const USER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const MAX_BACKTEST_DAYS = 120;
 export const DEFAULT_MAX_SIGNATURES = 50_000;
@@ -161,7 +163,7 @@ export async function listBacktestAddresses() {
   const [addresses, scans, runCounts, liveTraders] = await Promise.all([
     BacktestAddress.find({}).sort({ addedAt: -1 }).lean(),
     BacktestScan.find({}).lean(),
-    BacktestRun.aggregate([{ $unwind: "$addresses" }, { $group: { _id: "$addresses", runs: { $sum: 1 } } }]),
+    BacktestRunTrader.aggregate([{ $group: { _id: "$address", runs: { $sum: 1 } } }]), // one row per (run, address), so this is how many runs used each
     Trader.find({}, { address: 1, status: 1 }).lean(),
   ]);
   const scanBy = new Map(scans.map((s) => [s.address, s]));
@@ -311,27 +313,44 @@ export async function createBacktestRun({ name, days, profileId, addresses, maxS
   if (runAddresses.length === 0) throw new Error("None of the selected addresses are on the backtest list");
 
   const now = Date.now();
-  const run = await BacktestRun.create({
-    name: name?.trim() || `${days}-day backtest`,
-    days,
-    windowStart: new Date(now - days * DAY_MS),
-    windowEnd: new Date(now),
-    profileId: profile._id,
-    profileName: profile.name,
-    // In a combined backtest the shared balance is the wallet's allocation.
-    settings: { ...(await snapshotProfileSettings(profile._id)), ...(wallet ? { allocationUsd: wallet.startingBalanceUsd } : {}), ...timing },
-    mode,
-    combined: wallet,
-    addresses: runAddresses,
-    maxSignatures: Math.floor(maxSignatures),
-    collectMethod,
-    earlyStop: stopRules,
-    addressParallelism: parallelism,
-    daysAtOnce: days_,
-    status: "queued",
-  });
-  await BacktestRunTrader.insertMany(runAddresses.map((address) => ({ runId: run._id, address, userId: userIdBy.get(address) || "" })));
-  return run;
+  const settings = { ...(await snapshotProfileSettings(profile._id)), ...(wallet ? { allocationUsd: wallet.startingBalanceUsd } : {}), ...timing };
+
+  // The address rows go in BEFORE the run exists. The worker only looks at runs, so it can never meet a run whose addresses are still being
+  // written: it used to see a "queued" run with nothing waiting yet, call it finished and never come back to it (thousands of addresses take
+  // seconds to insert).
+  const runId = new mongoose.Types.ObjectId();
+  try {
+    for (let i = 0; i < runAddresses.length; i += INSERT_CHUNK) {
+      await BacktestRunTrader.insertMany(
+        runAddresses.slice(i, i + INSERT_CHUNK).map((address) => ({ runId, address, userId: userIdBy.get(address) || "" })),
+        { ordered: true }
+      );
+    }
+    return await BacktestRun.create({
+      _id: runId,
+      name: name?.trim() || `${days}-day backtest`,
+      days,
+      windowStart: new Date(now - days * DAY_MS),
+      windowEnd: new Date(now),
+      profileId: profile._id,
+      profileName: profile.name,
+      // In a combined backtest the shared balance is the wallet's allocation.
+      settings,
+      mode,
+      combined: wallet,
+      addressCount: runAddresses.length,
+      statsVersion: 1,
+      maxSignatures: Math.floor(maxSignatures),
+      collectMethod,
+      earlyStop: stopRules,
+      addressParallelism: parallelism,
+      daysAtOnce: days_,
+      status: "queued",
+    });
+  } catch (err) {
+    await BacktestRunTrader.deleteMany({ runId }).catch(() => {});
+    throw err;
+  }
 }
 
 const FRESH_SIM = {
@@ -340,6 +359,21 @@ const FRESH_SIM = {
   "sim.signalsDone": 0,
   "sim.simulatedThrough": null,
   "sim.skipped": { dust: 0, noData: 0, insufficientBalance: 0, unresolved: 0, error: 0 },
+  stats: emptyStoredStats(), // the positions are thrown away with it
+};
+
+/** Every address back to the very start: nothing collected, nothing simulated. */
+const FRESH_ADDRESS = {
+  stage: "pending",
+  error: null,
+  stopReason: null,
+  claimedBy: null,
+  leaseUntil: null,
+  startedAt: null,
+  finishedAt: null,
+  collect: { done: false, source: null, listing: false, signaturesFound: 0, signaturesToProcess: 0, signaturesProcessed: 0, signaturesFailed: 0, tradesFound: 0 },
+  sim: { done: false, signalsTotal: 0, signalsDone: 0, simulatedThrough: null, skipped: { dust: 0, noData: 0, insufficientBalance: 0, unresolved: 0, error: 0 } },
+  stats: emptyStoredStats(),
 };
 
 /** Puts addresses that ended in `stage` back to "pending" so the worker picks them up again. Returns how many. */
@@ -360,11 +394,33 @@ async function resetSimulation(runId) {
   );
 }
 
-/** pause | resume | cancel | retry_failed | retry_skipped */
-export async function controlBacktestRun(runId, action) {
+/**
+ * pause | resume | cancel | retry_failed | retry_skipped | restart
+ *
+ * restart: starts the whole backtest again from the first address - every result is thrown away and every address goes back to waiting.
+ * The window, the settings and the addresses stay as they are, and the transactions already collected are kept (they are cached per
+ * address), so it is much faster than the first time. Works from any state except while the worker is actively working on it (pause
+ * first). `options.collectMethod` ("api" | "rpc") restarts it with the other way of reading the trades.
+ * @param {string} runId
+ * @param {string} action
+ * @param {{collectMethod?: "api"|"rpc"}} [options]
+ */
+export async function controlBacktestRun(runId, action, options = {}) {
   const run = await BacktestRun.findById(runId);
   if (!run) throw new Error("Backtest not found");
-  if (action === "pause") {
+  if (action === "restart") {
+    if (ACTIVE_STATUSES.includes(run.status) && run.control === "run") throw new Error("Pause the backtest before restarting it");
+    const { collectMethod } = options;
+    if (collectMethod !== undefined && collectMethod !== "api" && collectMethod !== "rpc") throw new Error("collectMethod must be api or rpc");
+    // A paused backtest hands its addresses back within a few seconds; restarting while one is still being wound down would let two workers share it.
+    if ((await BacktestRunTrader.countDocuments({ runId, claimedBy: { $ne: null } })) > 0) throw new Error("The backtest is still stopping - try again in a few seconds");
+    await BacktestPosition.deleteMany({ runId });
+    await BacktestRunTrader.updateMany({ runId }, { $set: FRESH_ADDRESS });
+    await BacktestRun.updateOne(
+      { _id: runId },
+      { $set: { control: "run", status: "queued", error: null, startedAt: null, finishedAt: null, activeMs: 0, statsVersion: 1, ...(collectMethod ? { collectMethod } : {}) } }
+    );
+  } else if (action === "pause") {
     if (!ACTIVE_STATUSES.includes(run.status)) throw new Error("Only a queued or running backtest can be paused");
     await BacktestRun.updateOne({ _id: runId }, { $set: { control: "pause" } });
   } else if (action === "resume") {
@@ -391,7 +447,8 @@ export async function controlBacktestRun(runId, action) {
   } else {
     throw new Error("Unknown action");
   }
-  return BacktestRun.findById(runId).lean();
+  invalidateRun(runId);
+  return BacktestRun.findById(runId, RUN_FIELDS).lean();
 }
 
 /**
@@ -495,7 +552,8 @@ export async function updateBacktestRun(runId, { name, maxSignatures, profileId,
     set.error = null;
   }
   if (Object.keys(set).length > 0) await BacktestRun.updateOne({ _id: runId }, { $set: set });
-  return { run: await BacktestRun.findById(runId).lean(), requeuedSkipped, resimulated };
+  invalidateRun(runId);
+  return { run: await BacktestRun.findById(runId, RUN_FIELDS).lean(), requeuedSkipped, resimulated };
 }
 
 export async function deleteBacktestRun(runId) {
@@ -504,67 +562,10 @@ export async function deleteBacktestRun(runId) {
   if (ACTIVE_STATUSES.includes(run.status) && run.control === "run") throw new Error("Pause or cancel the backtest before deleting it");
   await Promise.all([BacktestPosition.deleteMany({ runId }), BacktestRunTrader.deleteMany({ runId })]);
   await BacktestRun.deleteOne({ _id: runId });
+  invalidateRun(runId);
 }
 
 // ---------------------------------------------------------------- stats
-
-const POSITION_STATS_GROUP = {
-  closed: { $sum: { $cond: [{ $eq: ["$status", "closed"] }, 1, 0] } },
-  open: { $sum: { $cond: [{ $eq: ["$status", "open"] }, 1, 0] } },
-  skipped: { $sum: { $cond: [{ $eq: ["$status", "skipped"] }, 1, 0] } },
-  wins: { $sum: { $cond: [{ $and: [{ $eq: ["$status", "closed"] }, { $gt: ["$realizedPnlUsd", 0] }] }, 1, 0] } },
-  losses: { $sum: { $cond: [{ $and: [{ $eq: ["$status", "closed"] }, { $lt: ["$realizedPnlUsd", 0] }] }, 1, 0] } },
-  realizedPnlUsd: { $sum: { $cond: [{ $eq: ["$status", "closed"] }, "$realizedPnlUsd", 0] } },
-  combinedPercent: { $sum: { $cond: [{ $eq: ["$status", "closed"] }, "$realizedPnlPercent", 0] } },
-  bestPercent: { $max: { $cond: [{ $eq: ["$status", "closed"] }, "$realizedPnlPercent", null] } },
-  worstPercent: { $min: { $cond: [{ $eq: ["$status", "closed"] }, "$realizedPnlPercent", null] } },
-  unrealizedUsd: { $sum: { $cond: [{ $eq: ["$status", "open"] }, "$unrealizedPnlUsd", 0] } },
-};
-
-function finishStats(row) {
-  const decided = (row?.wins || 0) + (row?.losses || 0);
-  const closed = row?.closed || 0;
-  return {
-    closed,
-    open: row?.open || 0,
-    skipped: row?.skipped || 0,
-    wins: row?.wins || 0,
-    losses: row?.losses || 0,
-    winRatePercent: decided > 0 ? (row.wins / decided) * 100 : null,
-    realizedPnlUsd: row?.realizedPnlUsd || 0,
-    combinedPercent: row?.combinedPercent || 0,
-    avgPercent: closed > 0 ? row.combinedPercent / closed : null,
-    bestPercent: row?.bestPercent ?? null,
-    worstPercent: row?.worstPercent ?? null,
-    unrealizedUsd: row?.unrealizedUsd || 0,
-  };
-}
-
-const EMPTY_STATS = { ...finishStats(null), daily: summariseDays([]) };
-
-/** Per address: the headline stats plus the day-by-day quality figures (loss days, profit margin, without the best day). `runId` must be an ObjectId. */
-async function statsByAddress(runId, address) {
-  const match = address ? { runId, address } : { runId };
-  const [rows, dayRows] = await Promise.all([
-    BacktestPosition.aggregate([{ $match: match }, { $group: { _id: "$address", ...POSITION_STATS_GROUP } }]),
-    BacktestPosition.aggregate([
-      { $match: { ...match, status: "closed", closedAt: { $ne: null } } },
-      {
-        $group: {
-          _id: { address: "$address", day: { $dateToString: { format: "%Y-%m-%d", date: "$closedAt", timezone: "UTC" } } },
-          pnlUsd: { $sum: "$realizedPnlUsd" },
-          pct: { $sum: "$realizedPnlPercent" },
-        },
-      },
-    ]),
-  ]);
-  const daysBy = new Map();
-  for (const r of dayRows) {
-    if (!daysBy.has(r._id.address)) daysBy.set(r._id.address, []);
-    daysBy.get(r._id.address).push({ date: r._id.day, pnlUsd: r.pnlUsd || 0, pct: r.pct || 0 });
-  }
-  return new Map(rows.map((r) => [r._id, { ...finishStats(r), daily: summariseDays((daysBy.get(r._id) ?? []).sort((a, b) => (a.date < b.date ? -1 : 1))) }]));
-}
 
 /** One address of a run: its progress, stats and simulated wallet - for the address page. */
 export function getRunAddress(runId, address) {
@@ -573,70 +574,173 @@ export function getRunAddress(runId, address) {
 
 export { getRunAddressPnl } from "./addressView.js";
 
-function runProgress(run, runTraders) {
-  const percent = run.status === "completed" ? 100 : runProgressPercent(runTraders);
-  const settled = runTraders.filter((rt) => rt.stage === "done" || rt.stage === "failed" || rt.stage === "skipped").length;
+/** The run document as the API returns it: without the (legacy) address list, which can be tens of thousands of strings. */
+const RUN_FIELDS = { addresses: 0 };
+const withCount = (run, counted) => ({ ...run, addressCount: counted ?? run.addressCount ?? run.addresses?.length ?? 0 });
+
+function runProgress(run, summary) {
+  const total = summary?.addressesTotal ?? 0;
+  const percent = run.status === "completed" ? 100 : (summary?.percent ?? 0);
+  const done = summary?.addressesDone ?? 0;
+  const failed = summary?.addressesFailed ?? 0;
+  const skipped = summary?.addressesSkipped ?? 0;
   return {
     percent,
-    addressesTotal: runTraders.length,
-    addressesDone: runTraders.filter((rt) => rt.stage === "done").length,
-    addressesFailed: runTraders.filter((rt) => rt.stage === "failed").length,
-    addressesSkipped: runTraders.filter((rt) => rt.stage === "skipped").length,
-    addressesStoppedEarly: runTraders.filter((rt) => rt.stage === "skipped" && rt.stopReason).length, // part of addressesSkipped: dropped as loss traders
-    addressesSettled: settled,
+    addressesTotal: total,
+    addressesDone: done,
+    addressesFailed: failed,
+    addressesSkipped: skipped,
+    addressesStoppedEarly: summary?.addressesStoppedEarly ?? 0, // part of addressesSkipped: dropped as loss traders
+    addressesSettled: done + failed + skipped,
     etaMs: ACTIVE_STATUSES.includes(run.status) ? estimateRemainingMs(percent, run.activeMs || 0) : null,
   };
 }
 
-/** Every run with its progress and headline numbers - for the Runs tab. */
+/** Every run with its progress and headline numbers - for the Runs tab. One pass over the runs' address rows, done by the database. */
 export async function listBacktestRuns() {
-  const [runs, runTraders, totals] = await Promise.all([
-    BacktestRun.find({}).sort({ createdAt: -1 }).lean(),
-    BacktestRunTrader.find({}, { runId: 1, stage: 1, stopReason: 1, collect: 1, sim: 1 }).lean(),
-    BacktestPosition.aggregate([{ $group: { _id: "$runId", ...POSITION_STATS_GROUP } }]),
-  ]);
-  const tradersBy = new Map();
-  for (const rt of runTraders) {
-    const key = String(rt.runId);
-    if (!tradersBy.has(key)) tradersBy.set(key, []);
-    tradersBy.get(key).push(rt);
-  }
-  const totalsBy = new Map(totals.map((t) => [String(t._id), finishStats(t)]));
-  return runs.map((run) => ({
-    ...run,
-    progress: runProgress(run, tradersBy.get(String(run._id)) || []),
-    stats: totalsBy.get(String(run._id)) ?? EMPTY_STATS,
-  }));
+  const runs = await BacktestRun.find({}, RUN_FIELDS).sort({ createdAt: -1 }).lean();
+  for (const run of runs) await ensureRunStats(run);
+  const summaries = await summariseRuns(runs);
+  return runs.map((run) => {
+    const summary = summaries.get(String(run._id));
+    return { ...withCount(run, summary?.addressesTotal), progress: runProgress(run, summary), stats: summary?.stats ?? EMPTY_STATS };
+  });
 }
 
-/** One run: definition, progress, headline numbers, and every address with its own progress and partial results. */
+/**
+ * One run: definition, progress and headline numbers. The addresses are NOT in here - a run can have tens of thousands, so the page
+ * asks for them a page at a time (listRunTraders).
+ */
 export async function getBacktestRun(runId) {
-  const run = await BacktestRun.findById(runId).lean();
+  const run = await BacktestRun.findById(runId, RUN_FIELDS).lean();
   if (!run) return null;
-  const [runTraders, byAddress, labels, totalsRows] = await Promise.all([
-    BacktestRunTrader.find({ runId }).lean(),
-    statsByAddress(run._id),
-    BacktestAddress.find({ address: { $in: run.addresses } }, { address: 1, label: 1 }).lean(),
-    BacktestPosition.aggregate([{ $match: { runId: run._id } }, { $group: { _id: null, ...POSITION_STATS_GROUP } }]),
+  await ensureRunStats(run);
+  const summary = (await summariseRuns([run])).get(String(run._id));
+  return { run: withCount(run, summary?.addressesTotal), progress: runProgress(run, summary), stats: summary?.stats ?? finishStats(null) };
+}
+
+// ----------------------------------------------------- the addresses of a run
+
+const TRADER_STAGES_RUNNING = ["pending", "collecting", "simulating"];
+
+/** The run page's status filters. Every address is under exactly one of running / failed / skipped / done; profitable and losing split "done". */
+const FILTER_QUERIES = {
+  all: {},
+  running: { stage: { $in: TRADER_STAGES_RUNNING } },
+  failed: { stage: "failed" },
+  skipped: { stage: "skipped" },
+  profitable: { stage: "done", "stats.closed": { $gt: 0 }, "stats.realizedPnlUsd": { $gt: 0 } },
+  losing: { stage: "done", "stats.closed": { $gt: 0 }, "stats.realizedPnlUsd": { $lt: 0 } },
+};
+
+const SORT_FIELDS = {
+  pnl: "stats.realizedPnlUsd",
+  combined: "stats.combinedPercent",
+  avgPnl: "stats.avgPnlUsd",
+  winRate: "stats.winRatePercent",
+  trades: "stats.closed",
+  lossDays: "stats.daily.lossDays",
+  margin: "stats.daily.profitMarginPercent",
+  withoutBest: "stats.daily.withoutBestDay.combinedPercent",
+};
+
+const finite = (v) => (v === undefined || v === null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+
+/** The "at least / at most" limits of the run page as a query (they match what the table used to do in the browser). */
+function limitQuery(limits = {}) {
+  const q = {};
+  const minWin = finite(limits.minWinRate);
+  const minMargin = finite(limits.minMargin);
+  const maxLoss = finite(limits.maxLossDays);
+  const minTrades = finite(limits.minTrades);
+  const maxTrades = finite(limits.maxTrades);
+  const minAvg = finite(limits.minAvgPnl);
+  if (minWin != null) q["stats.winRatePercent"] = { $gte: minWin }; // no win rate yet never matches
+  if (minMargin != null) q["stats.daily.profitMarginPercent"] = { $gte: minMargin };
+  if (maxLoss != null) q["stats.daily.lossDays"] = { $not: { $gt: maxLoss } }; // none counted yet is 0 loss days
+  if (minTrades != null || maxTrades != null) q["stats.closed"] = { ...(minTrades != null ? { $gte: minTrades } : {}), ...(maxTrades != null ? { $lte: maxTrades } : {}) };
+  if (minAvg != null) q["stats.avgPnlUsd"] = { $gte: minAvg };
+  if (limits.holdsWithoutBest === true || limits.holdsWithoutBest === "true") q["stats.daily.withoutBestDay.stillProfitable"] = true;
+  return q;
+}
+
+const and = (...parts) => {
+  const real = parts.filter((p) => p && Object.keys(p).length > 0);
+  return real.length === 0 ? {} : real.length === 1 ? real[0] : { $and: real };
+};
+
+/**
+ * A page of a run's addresses, filtered and sorted by the database. `counts` is how many addresses are under each status filter
+ * (ignoring the limits), for the filter buttons; `total` is how many match the current filter AND limits.
+ * @param {string} runId
+ * @param {{filter?: string, sort?: string, dir?: "asc"|"desc", page?: number, limit?: number, limits?: object, addressesOnly?: boolean}} [opts]
+ *   addressesOnly: just the addresses that match (up to MAX_ADDRESSES_ONLY), for "select everything that matches".
+ */
+export async function listRunTraders(runId, { filter = "all", sort = "pnl", dir = "desc", page = 1, limit = 50, limits, addressesOnly = false } = {}) {
+  const run = await BacktestRun.findById(runId, RUN_FIELDS).lean();
+  if (!run) return null;
+  await ensureRunStats(run);
+  const base = { runId: run._id };
+  const match = and(base, FILTER_QUERIES[filter] ?? FILTER_QUERIES.all, limitQuery(limits));
+
+  if (addressesOnly) {
+    const rows = await BacktestRunTrader.find(match, { address: 1 }).sort({ _id: 1 }).limit(MAX_ADDRESSES_ONLY).lean();
+    return { addresses: rows.map((r) => r.address) };
+  }
+
+  const pageSize = Math.min(200, Math.max(1, Math.floor(limit) || 50));
+  const pageNo = Math.max(1, Math.floor(page) || 1);
+  const sortField = SORT_FIELDS[sort] ?? SORT_FIELDS.pnl;
+  const direction = dir === "asc" ? 1 : -1;
+  const [rows, total, countRows] = await Promise.all([
+    BacktestRunTrader.find(match)
+      .sort({ [sortField]: direction, _id: 1 })
+      .skip((pageNo - 1) * pageSize)
+      .limit(pageSize)
+      .lean(),
+    BacktestRunTrader.countDocuments(match),
+    // How many addresses are under each filter button: the same for every page and sort, so it is worked out once for a few seconds.
+    remembered(run._id, "filter-counts", summaryTtl(run.status), () =>
+      BacktestRunTrader.aggregate([
+        { $match: base },
+        {
+          $group: {
+            _id: null,
+            all: { $sum: 1 },
+            running: { $sum: { $cond: [{ $in: ["$stage", TRADER_STAGES_RUNNING] }, 1, 0] } },
+            failed: { $sum: { $cond: [{ $eq: ["$stage", "failed"] }, 1, 0] } },
+            skipped: { $sum: { $cond: [{ $eq: ["$stage", "skipped"] }, 1, 0] } },
+            profitable: { $sum: { $cond: [{ $and: [{ $eq: ["$stage", "done"] }, { $gt: ["$stats.closed", 0] }, { $gt: ["$stats.realizedPnlUsd", 0] }] }, 1, 0] } },
+            losing: { $sum: { $cond: [{ $and: [{ $eq: ["$stage", "done"] }, { $gt: ["$stats.closed", 0] }, { $lt: ["$stats.realizedPnlUsd", 0] }] }, 1, 0] } },
+          },
+        },
+      ])
+    ),
   ]);
+  const labels = await BacktestAddress.find({ address: { $in: rows.map((r) => r.address) } }, { address: 1, label: 1 }).lean();
   const labelBy = new Map(labels.map((l) => [l.address, l.label]));
-  const traders = runTraders.map((rt) => ({
-    address: rt.address,
-    label: labelBy.get(rt.address) || "",
-    stage: rt.stage,
-    error: rt.error,
-    progressPercent: traderProgressPercent(rt),
-    collect: rt.collect,
-    sim: rt.sim,
-    stats: byAddress.get(rt.address) ?? EMPTY_STATS,
-  }));
+  const { _id, ...counts } = countRows[0] ?? { all: 0, running: 0, failed: 0, skipped: 0, profitable: 0, losing: 0 };
+  void _id;
   return {
-    run,
-    progress: runProgress(run, runTraders),
-    stats: finishStats(totalsRows[0] ?? null),
-    traders,
+    traders: rows.map((rt) => ({
+      address: rt.address,
+      label: labelBy.get(rt.address) || "",
+      stage: rt.stage,
+      error: rt.error,
+      progressPercent: traderProgressPercent(rt),
+      collect: rt.collect,
+      sim: rt.sim,
+      stats: viewStats(rt.stats),
+    })),
+    total,
+    page: pageNo,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    counts,
   };
 }
+
+const MAX_ADDRESSES_ONLY = 100_000;
 
 // ------------------------------------------------------ positions / daily
 
@@ -658,21 +762,34 @@ export async function listRunPositions(runId, { address, status, page = 1, limit
 }
 
 const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
+const DAY_GROUP = { $dateToString: { format: "%Y-%m-%d", date: "$closedAt", timezone: "UTC" } };
 
 /**
- * Per-day results of the positions closed so far, by UTC day of the exit.
- * `through` is, per address, the instant before which everything has been
- * simulated - so the UI can tell a finished day from one that is still filling in.
+ * Per-day results of the positions closed so far, by UTC day of the exit - for ONE PAGE of the run's addresses (best P&L first), plus the
+ * day totals of ALL addresses so the "All addresses" row stays complete.
+ * `through` is, per address on the page, the instant before which everything has been simulated - so the UI can tell a finished day from
+ * one that is still filling in.
+ * @param {string} runId @param {{page?: number, limit?: number}} [opts]
  */
-export async function getRunDaily(runId) {
-  const run = await BacktestRun.findById(runId).lean();
+export async function getRunDaily(runId, { page = 1, limit = 50 } = {}) {
+  const run = await BacktestRun.findById(runId, RUN_FIELDS).lean();
   if (!run) return null;
-  const [rows, runTraders] = await Promise.all([
+  await ensureRunStats(run);
+  const pageSize = Math.min(200, Math.max(1, Math.floor(limit) || 50));
+  const pageNo = Math.max(1, Math.floor(page) || 1);
+  const [runTraders, total, unfinished, totalRows] = await Promise.all([
+    BacktestRunTrader.find({ runId: run._id }, { address: 1, stage: 1, "sim.simulatedThrough": 1 })
+      .sort({ "stats.realizedPnlUsd": -1, _id: 1 })
+      .skip((pageNo - 1) * pageSize)
+      .limit(pageSize)
+      .lean(),
+    BacktestRunTrader.countDocuments({ runId: run._id }),
+    BacktestRunTrader.countDocuments({ runId: run._id, stage: { $in: TRADER_STAGES_RUNNING } }),
     BacktestPosition.aggregate([
       { $match: { runId: run._id, status: "closed" } },
       {
         $group: {
-          _id: { address: "$address", day: { $dateToString: { format: "%Y-%m-%d", date: "$closedAt", timezone: "UTC" } } },
+          _id: DAY_GROUP,
           pnlUsd: { $sum: "$realizedPnlUsd" },
           combinedPercent: { $sum: "$realizedPnlPercent" },
           trades: { $sum: 1 },
@@ -681,7 +798,23 @@ export async function getRunDaily(runId) {
         },
       },
     ]),
-    BacktestRunTrader.find({ runId }, { address: 1, stage: 1, "sim.simulatedThrough": 1, "sim.done": 1 }).lean(),
+  ]);
+  const addresses = runTraders.map((rt) => rt.address);
+  const [rows, labels] = await Promise.all([
+    BacktestPosition.aggregate([
+      { $match: { runId: run._id, status: "closed", address: { $in: addresses } } },
+      {
+        $group: {
+          _id: { address: "$address", day: DAY_GROUP },
+          pnlUsd: { $sum: "$realizedPnlUsd" },
+          combinedPercent: { $sum: "$realizedPnlPercent" },
+          trades: { $sum: 1 },
+          wins: { $sum: { $cond: [{ $gt: ["$realizedPnlUsd", 0] }, 1, 0] } },
+          losses: { $sum: { $cond: [{ $lt: ["$realizedPnlUsd", 0] }, 1, 0] } },
+        },
+      },
+    ]),
+    BacktestAddress.find({ address: { $in: addresses } }, { address: 1, label: 1 }).lean(),
   ]);
 
   const days = [];
@@ -689,40 +822,55 @@ export async function getRunDaily(runId) {
 
   const byAddress = {};
   for (const r of rows) {
-    (byAddress[r._id.address] ??= {})[r._id.day] = {
-      pnlUsd: r.pnlUsd,
-      combinedPercent: r.combinedPercent,
-      trades: r.trades,
-      wins: r.wins,
-      losses: r.losses,
-    };
+    (byAddress[r._id.address] ??= {})[r._id.day] = { pnlUsd: r.pnlUsd, combinedPercent: r.combinedPercent, trades: r.trades, wins: r.wins, losses: r.losses };
   }
+  const totalsByDay = {};
+  for (const r of totalRows) totalsByDay[r._id] = { pnlUsd: r.pnlUsd, combinedPercent: r.combinedPercent, trades: r.trades, wins: r.wins, losses: r.losses };
   const through = {};
   for (const rt of runTraders) {
     through[rt.address] = rt.stage === "done" || rt.stage === "failed" || rt.stage === "skipped" ? null : rt.sim?.simulatedThrough ? dayKey(rt.sim.simulatedThrough) : "";
   }
+  const labelBy = new Map(labels.map((l) => [l.address, l.label]));
   // `through[address]`: null = fully simulated; "" = nothing simulated yet; "YYYY-MM-DD" = days strictly before it are complete.
-  return { days, byAddress, through };
+  return {
+    days,
+    byAddress,
+    through,
+    totalsByDay,
+    allDone: unfinished === 0,
+    rows: addresses.map((address) => ({ address, label: labelBy.get(address) || "" })),
+    total,
+    page: pageNo,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  };
 }
 
-/** Cumulative realized P&L over time, as chart points (downsampled). */
-/** @param {string} runId @param {{address?: string}} [opts] */
+const MAX_POINTS = 400;
+
+/**
+ * Cumulative realized P&L over time, as chart points (at most MAX_POINTS). The closed trades are cut into time-ordered buckets by the
+ * database, so a run with hundreds of thousands of trades never has to be loaded into memory to be drawn.
+ * @param {string} runId @param {{address?: string}} [opts]
+ */
 export async function getRunEquity(runId, { address } = {}) {
-  const match = { runId, status: "closed" };
+  const match = { runId: new mongoose.Types.ObjectId(String(runId)), status: "closed", closedAt: { $ne: null } };
   if (address) match.address = address;
-  const closed = await BacktestPosition.find(match, { closedAt: 1, realizedPnlUsd: 1 }).sort({ closedAt: 1 }).lean();
+  const buckets = await BacktestPosition.aggregate(
+    [
+      { $match: match },
+      { $bucketAuto: { groupBy: { $toLong: "$closedAt" }, buckets: MAX_POINTS, output: { pnlUsd: { $sum: "$realizedPnlUsd" }, n: { $sum: 1 } } } },
+    ],
+    { allowDiskUse: true }
+  );
   let cumulative = 0;
-  const points = closed.map((p, i) => {
-    cumulative += p.realizedPnlUsd || 0;
-    return { t: p.closedAt, cumulativeUsd: cumulative, n: i + 1 };
+  let count = 0;
+  const points = buckets.map((b) => {
+    cumulative += b.pnlUsd || 0;
+    count += b.n;
+    return { t: new Date(b._id.max), cumulativeUsd: cumulative, n: count };
   });
-  const MAX_POINTS = 400;
-  if (points.length <= MAX_POINTS) return { points };
-  const step = points.length / MAX_POINTS;
-  const sampled = [];
-  for (let i = 0; i < MAX_POINTS; i++) sampled.push(points[Math.floor(i * step)]);
-  sampled.push(points[points.length - 1]);
-  return { points: sampled };
+  return { points };
 }
 
 /** Adds backtest addresses to the LIVE trader list (duplicate-protected, blacklisted ones are not revived). */

@@ -12,6 +12,8 @@ import type {
   BacktestRunDetail,
   BacktestRunSummary,
   BacktestSettingsView,
+  BacktestTraderQuery,
+  BacktestTradersPage,
   BacktestStoredSettings,
 } from "./backtest-types";
 
@@ -78,8 +80,35 @@ export function getBacktestRun(id: string): Promise<BacktestRunDetail> {
   return request(`/api/backtest/runs/${id}`);
 }
 
-export function controlBacktestRun(id: string, action: "pause" | "resume" | "cancel" | "retry_failed" | "retry_skipped"): Promise<{ run: BacktestRunSummary }> {
-  return request(`/api/backtest/runs/${id}`, { method: "PATCH", body: JSON.stringify({ action }) });
+/** "restart" starts the whole backtest again from the first address (optionally reading the trades the other way); the others are as their names say. */
+export function controlBacktestRun(
+  id: string,
+  action: "pause" | "resume" | "cancel" | "retry_failed" | "retry_skipped" | "restart",
+  options: { collectMethod?: "api" | "rpc" } = {}
+): Promise<{ run: BacktestRunSummary }> {
+  return request(`/api/backtest/runs/${id}`, { method: "PATCH", body: JSON.stringify({ action, ...options }) });
+}
+
+function tradersQuery(q: BacktestTraderQuery): URLSearchParams {
+  const qs = new URLSearchParams({ filter: q.filter, sort: q.sort, dir: q.dir, page: String(q.page), limit: String(q.limit) });
+  for (const key of ["minWinRate", "minMargin", "maxLossDays", "minTrades", "maxTrades", "minAvgPnl"] as const) {
+    if (q.limits[key].trim() !== "") qs.set(key, q.limits[key].trim());
+  }
+  if (q.limits.holdsWithoutBest) qs.set("holdsWithoutBest", "true");
+  return qs;
+}
+
+/** A page of a backtest's addresses, filtered and sorted by the server. */
+export function getBacktestRunTraders(id: string, query: BacktestTraderQuery): Promise<BacktestTradersPage> {
+  return request(`/api/backtest/runs/${id}/traders?${tradersQuery(query)}`);
+}
+
+/** Every address that matches the filter and limits (not just the page), to select them all. */
+export async function getBacktestMatchingAddresses(id: string, query: BacktestTraderQuery): Promise<string[]> {
+  const qs = tradersQuery(query);
+  qs.set("addressesOnly", "1");
+  const res: { addresses: string[] } = await request(`/api/backtest/runs/${id}/traders?${qs}`);
+  return res.addresses;
 }
 
 /** Edits a backtest - see updateBacktestRun in db/backtest/service.js for what each field does. */
@@ -106,8 +135,8 @@ export function getBacktestPositions(
   return request(`/api/backtest/runs/${id}/positions?${qs.toString()}`);
 }
 
-export function getBacktestDaily(id: string): Promise<BacktestDaily> {
-  return request(`/api/backtest/runs/${id}/daily`);
+export function getBacktestDaily(id: string, page = 1, limit = 50): Promise<BacktestDaily> {
+  return request(`/api/backtest/runs/${id}/daily?page=${page}&limit=${limit}`);
 }
 
 /** The shared wallet of a combined backtest. */

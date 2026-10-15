@@ -23,7 +23,12 @@ const BacktestRunSchema = new Schema({
   // (or running) backtest. See db/backtest/service.js's snapshotProfileSettings.
   settings: { type: Schema.Types.Mixed, required: true },
 
+  // Legacy: runs made before `addressCount` kept their address list here. New runs keep it only in BacktestRunTrader (one row per address),
+  // so a run with tens of thousands of addresses is not one huge document that every poll has to load. Never read this in a hot path.
   addresses: { type: [String], default: [] },
+  addressCount: { type: Number, default: 0 },
+  // 1 = every BacktestRunTrader of the run carries its own `stats` (kept up to date by the worker). Older runs get them filled in on first read.
+  statsVersion: { type: Number, default: 0 },
   // "separate": every address is judged on its own wallet. "combined": all addresses trade as ONE wallet with a shared starting balance
   // (see db/backtest/combined.js) - the trades are still simulated per address, the shared balance is worked out from them in time order.
   mode: { type: String, enum: ["separate", "combined"], default: "separate" },
