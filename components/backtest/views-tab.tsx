@@ -100,7 +100,7 @@ export function ViewsTab({ runId, suggestedBalanceUsd, refreshKey = 0 }: { runId
             </Select>
           )}
           <Button size="sm" className="gap-1.5" onClick={() => setNewOpen(true)}>
-            <Plus className="size-4" /> New combined view
+            <Plus className="size-4" /> New combined backtest
           </Button>
         </div>
       </div>
