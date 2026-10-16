@@ -307,6 +307,83 @@ export async function deleteView(runId, viewId) {
   if (res.deletedCount === 0) throw new Error("View not found");
 }
 
+/** The addresses of `addresses` that are part of `runId`. */
+async function addressesInRun(runId, addresses) {
+  const found = new Set();
+  for (let i = 0; i < addresses.length; i += 2000) {
+    const rows = await BacktestRunTrader.find({ runId, address: { $in: addresses.slice(i, i + 2000) } }, { address: 1 }).lean();
+    for (const r of rows) found.add(r.address);
+  }
+  return found;
+}
+
+/** Same name, same set of addresses and same settings - what makes an import of an already-imported view a no-op. */
+const signature = (v) =>
+  JSON.stringify([v.name, [...v.addresses].sort(), v.startingBalanceUsd, v.tradeSizeUsd, v.pumpFeePercent, v.jitoFeeUsd, !!v.resetDaily, v.allowNegativeBalance !== false]);
+
+/**
+ * The combined views of `sourceRunId`, each with how many of its addresses `targetRunId` also has - what the import dialog shows. A view of "every address"
+ * of the source is always importable (it becomes "every address" of the target).
+ */
+export async function previewImport(targetRunId, sourceRunId) {
+  const [target, source] = await Promise.all([BacktestRun.findById(targetRunId, { _id: 1 }).lean(), BacktestRun.findById(sourceRunId, { name: 1 }).lean()]);
+  if (!target) throw new Error("Backtest not found");
+  if (!source) throw new Error("The backtest to import from was not found");
+  const views = await BacktestView.find({ runId: sourceRunId }).sort({ createdAt: 1, _id: 1 }).lean();
+  const present = await addressesInRun(targetRunId, [...new Set(views.flatMap((v) => v.addresses))]);
+  return {
+    sourceName: source.name,
+    views: views.map((v) => ({ ...dto(v), presentCount: v.addresses.filter((a) => present.has(a)).length })),
+  };
+}
+
+/**
+ * Copies views (name, addresses and settings - never trades) from another backtest onto this one, where they are worked out from THIS backtest's trades.
+ * A view whose addresses are all in this backtest is copied as it is. One that is missing some is skipped, unless `allowPartial`: then it is copied with
+ * the addresses that do exist (and skipped only when none do). A view identical to one already here is not copied twice.
+ * @param {{viewIds?: string[], allowPartial?: boolean}} [opts]  viewIds = which views of the source (default: all of them)
+ */
+export async function importViews(targetRunId, sourceRunId, opts = {}) {
+  const { viewIds, allowPartial = false } = opts;
+  if (String(targetRunId) === String(sourceRunId)) throw new Error("Pick a different backtest to import from");
+  const { views } = await previewImport(targetRunId, sourceRunId);
+  const chosen = Array.isArray(viewIds) ? views.filter((v) => viewIds.includes(v._id)) : views;
+  if (chosen.length === 0) throw new Error("Nothing to import");
+  const sourceDocs = await BacktestView.find({ _id: { $in: chosen.map((v) => v._id) } }).lean();
+  const here = await BacktestView.find({ runId: targetRunId }).lean();
+  if (here.length + chosen.length > MAX_VIEWS_PER_RUN) throw new Error(`A backtest can have at most ${MAX_VIEWS_PER_RUN} combined views`);
+  const have = new Set(here.map(signature));
+
+  const docs = [];
+  const skipped = [];
+  let duplicates = 0;
+  let partial = 0;
+  const allAddresses = [...new Set(sourceDocs.flatMap((d) => d.addresses))];
+  const present = await addressesInRun(targetRunId, allAddresses);
+  for (const d of sourceDocs) {
+    const keep = d.addresses.filter((a) => present.has(a));
+    const missing = d.addresses.length - keep.length;
+    if (d.addresses.length > 0 && keep.length === 0) {
+      skipped.push({ name: d.name, reason: "none of its addresses are in this backtest" });
+      continue;
+    }
+    if (missing > 0 && !allowPartial) {
+      skipped.push({ name: d.name, reason: `${missing} of its ${d.addresses.length} addresses ${missing === 1 ? "is" : "are"} not in this backtest` });
+      continue;
+    }
+    const doc = { runId: targetRunId, name: d.name, addresses: keep, startingBalanceUsd: d.startingBalanceUsd, tradeSizeUsd: d.tradeSizeUsd, pumpFeePercent: d.pumpFeePercent, jitoFeeUsd: d.jitoFeeUsd, resetDaily: !!d.resetDaily, allowNegativeBalance: d.allowNegativeBalance !== false };
+    if (have.has(signature(doc))) {
+      duplicates += 1;
+      continue;
+    }
+    have.add(signature(doc));
+    if (missing > 0) partial += 1;
+    docs.push(doc);
+  }
+  const created = docs.length > 0 ? await BacktestView.insertMany(docs) : [];
+  return { imported: created.map((c) => dto(c)), skipped, duplicates, partial };
+}
+
 /** A run is gone: so are its views. */
 export const deleteViewsOfRun = (runId) => BacktestView.deleteMany({ runId });
 

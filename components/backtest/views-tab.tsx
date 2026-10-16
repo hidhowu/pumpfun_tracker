@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Layers, Plus, Trash2 } from "lucide-react";
+import { Download, Layers, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -22,6 +22,7 @@ import { deleteBacktestView, listBacktestViews } from "@/lib/backtest-api";
 import { formatUsd } from "@/lib/format";
 import type { BacktestViewList } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
+import { ImportViewsDialog } from "./import-views-dialog";
 import { NewViewDialog } from "./new-view-dialog";
 import { formatSignedPercent, pnlTone } from "./shared";
 
@@ -42,6 +43,7 @@ export function ViewsTab({ runId, suggestedBalanceUsd, refreshKey = 0 }: { runId
   const [data, setData] = useState<BacktestViewList | null>(null);
   const [sort, setSort] = useState<SortKey>("created");
   const [newOpen, setNewOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [removing, setRemoving] = useState<{ _id: string; name: string } | null>(null);
 
   // Bumped after a change made here (a view created or deleted) so the list is read again.
@@ -99,6 +101,9 @@ export function ViewsTab({ runId, suggestedBalanceUsd, refreshKey = 0 }: { runId
               </SelectContent>
             </Select>
           )}
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setImportOpen(true)}>
+            <Download className="size-4" /> Import from another backtest
+          </Button>
           <Button size="sm" className="gap-1.5" onClick={() => setNewOpen(true)}>
             <Plus className="size-4" /> New combined backtest
           </Button>
@@ -171,6 +176,8 @@ export function ViewsTab({ runId, suggestedBalanceUsd, refreshKey = 0 }: { runId
           </Table>
         </div>
       )}
+
+      {importOpen && <ImportViewsDialog runId={runId} open onOpenChange={setImportOpen} onImported={() => setReloadKey((k) => k + 1)} />}
 
       {newOpen && (
         <NewViewDialog

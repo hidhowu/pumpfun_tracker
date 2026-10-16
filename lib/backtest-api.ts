@@ -8,6 +8,8 @@ import type {
   BacktestCombinedWallet,
   BacktestViewConfig,
   BacktestViewDefinition,
+  BacktestViewImportPreview,
+  BacktestViewImportResult,
   BacktestViewList,
   BacktestViewWallet,
   BacktestDaily,
@@ -265,6 +267,16 @@ export function listBacktestViews(id: string): Promise<BacktestViewList> {
 /** Creates one view per entry (no addresses = the whole backtest), all with the same trade amount / fees / balance. Nothing is simulated again. */
 export function createBacktestViews(id: string, body: { views: Array<{ name?: string; addresses?: string[] }>; config: BacktestViewConfig }): Promise<{ views: BacktestViewDefinition[] }> {
   return request(`/api/backtest/runs/${id}/views`, { method: "POST", body: JSON.stringify(body) });
+}
+
+/** The combined backtests of another backtest, with how many of their addresses `id` also has. */
+export function previewBacktestViewImport(id: string, sourceRunId: string): Promise<BacktestViewImportPreview> {
+  return request(`/api/backtest/runs/${id}/views/import?sourceRunId=${encodeURIComponent(sourceRunId)}`);
+}
+
+/** Copies combined backtests (name, addresses, settings - no trades) from another backtest onto `id`, which uses its own trades for them. */
+export function importBacktestViews(id: string, body: { sourceRunId: string; viewIds?: string[]; allowPartial?: boolean }): Promise<BacktestViewImportResult> {
+  return request(`/api/backtest/runs/${id}/views/import`, { method: "POST", body: JSON.stringify(body) });
 }
 
 export function getBacktestViewWallet(id: string, viewId: string): Promise<BacktestViewWallet> {

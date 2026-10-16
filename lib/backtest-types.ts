@@ -473,3 +473,18 @@ export type BacktestViewWallet = BacktestCombinedWallet & {
   perAddress: BacktestViewAddressRow[];
   warnings: string[];
 };
+
+/** The combined backtests of another backtest, as the import dialog lists them: `presentCount` of the view's addresses exist in the backtest being imported into. */
+export type BacktestViewImportPreview = {
+  sourceName: string;
+  views: Array<BacktestViewDefinition & { presentCount: number }>;
+};
+
+export type BacktestViewImportResult = {
+  imported: BacktestViewDefinition[];
+  skipped: Array<{ name: string; reason: string }>;
+  /** Already here (same name, addresses and settings), so not copied again. */
+  duplicates: number;
+  /** Copied with only the addresses this backtest has. */
+  partial: number;
+};
