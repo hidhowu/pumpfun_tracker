@@ -4,6 +4,7 @@ import { BacktestRunTrader } from "../models/BacktestRunTrader.js";
 import { BacktestPosition } from "../models/BacktestPosition.js";
 import { freshAddressState } from "./rows.js";
 import { invalidateRun } from "./runStats.js";
+import { moveViewsToRun } from "./views.js";
 
 /**
  * Merging backtests: the addresses of one or more SOURCE backtests are moved into a TARGET backtest, with their results, and the sources are
@@ -183,6 +184,7 @@ export async function finishMerge(targetId, sourceId) {
   }
   const leftover = await BacktestRunTrader.countDocuments({ runId: source._id });
   await Promise.all([BacktestPosition.deleteMany({ runId: source._id }), BacktestRunTrader.deleteMany({ runId: source._id })]);
+  await moveViewsToRun(source._id, target._id);
   await BacktestRun.deleteOne({ _id: source._id });
   invalidateRun(target._id);
   invalidateRun(source._id);

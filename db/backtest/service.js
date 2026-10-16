@@ -15,6 +15,7 @@ import { getRunAddress as getRunAddressDetail } from "./addressView.js";
 import { byQueueOrder } from "./queue.js";
 import { freshAddressState, insertAddressRows } from "./rows.js";
 import { addTradersToList } from "../listService.js";
+import { deleteViewsOfRun } from "./views.js";
 import { EMPTY_STATS, emptyStoredStats, ensureRunStats, finishStats, invalidateRun, remembered, rememberedWithAge, statsByAddress, summariseRuns, summaryTtl, viewStats } from "./runStats.js";
 
 const DAY_MS = 86_400_000;
@@ -688,7 +689,7 @@ export async function deleteBacktestRun(runId) {
   const run = await BacktestRun.findById(runId);
   if (!run) throw new Error("Backtest not found");
   if (ACTIVE_STATUSES.includes(run.status) && run.control === "run") throw new Error("Pause or cancel the backtest before deleting it");
-  await Promise.all([BacktestPosition.deleteMany({ runId }), BacktestRunTrader.deleteMany({ runId })]);
+  await Promise.all([BacktestPosition.deleteMany({ runId }), BacktestRunTrader.deleteMany({ runId }), deleteViewsOfRun(runId)]);
   await BacktestRun.deleteOne({ _id: runId });
   invalidateRun(runId);
 }

@@ -26,7 +26,7 @@ export type CombinedNumbers = {
 
 type NumberKey = "startingBalanceUsd" | "tradeSizeUsd" | "pumpFeePercent" | "jitoFeeUsd";
 
-const FIELDS: Array<{ key: NumberKey; label: string; help: string; min: number; max: number; strictlyAbove?: boolean; width?: string }> = [
+const FIELDS: Array<{ key: NumberKey; label: string; help: string; viewHelp?: string; min: number; max: number; strictlyAbove?: boolean; width?: string }> = [
   {
     key: "startingBalanceUsd",
     label: "Starting balance ($)",
@@ -39,6 +39,7 @@ const FIELDS: Array<{ key: NumberKey; label: string; help: string; min: number; 
     key: "tradeSizeUsd",
     label: "Trade amount ($)",
     help: "Capital used for every single trade, whichever address it comes from. Changing it clears the results and simulates every address again.",
+    viewHelp: "Capital used for every single trade. Every stored trade is scaled to this amount (a trade that made +50% on $20 makes +50% on $10), so it need not match the backtest's own amount.",
     min: 0,
     max: 1_000_000_000,
     strictlyAbove: true,
@@ -47,6 +48,7 @@ const FIELDS: Array<{ key: NumberKey; label: string; help: string; min: number; 
     key: "pumpFeePercent",
     label: "Pump fee (% of each trade)",
     help: "Charged on every buy and every sell. Copied from the profile (1.25% on pump.fun); change it to test another number. Changing it clears the results and simulates again.",
+    viewHelp: "Charged on every buy and every sell, on this view's trade amounts. Independent of the fee the backtest was simulated with.",
     min: 0,
     max: 100,
   },
@@ -54,6 +56,7 @@ const FIELDS: Array<{ key: NumberKey; label: string; help: string; min: number; 
     key: "jitoFeeUsd",
     label: "Jito fee ($ per transaction)",
     help: "A flat amount charged on every buy and every sell to land the transaction. Copied from the profile; lower or raise it to see what it does to the result. Changing it clears the results and simulates again.",
+    viewHelp: "A flat amount charged on every buy and every sell. Independent of the fee the backtest was simulated with - a smaller trade amount usually deserves a smaller tip.",
     min: 0,
     max: 1000,
   },
@@ -95,11 +98,14 @@ export function CombinedFields({
   onChange,
   lockedKeys = [],
   idPrefix = "bt-combined",
+  recalculated = false,
 }: {
   values: CombinedValues;
   onChange: (next: CombinedValues) => void;
   lockedKeys?: NumberKey[];
   idPrefix?: string;
+  /** true for a combined view: the stored trades are re-priced instead of simulated, so the help texts say that. */
+  recalculated?: boolean;
 }) {
   return (
     <div className="space-y-3">
@@ -115,7 +121,7 @@ export function CombinedFields({
             className={cn("w-32", bad(f, values[f.key]) && "border-negative")}
             aria-invalid={bad(f, values[f.key])}
           />
-          <p className="text-xs text-muted-foreground">{f.help}</p>
+          <p className="text-xs text-muted-foreground">{recalculated ? (f.viewHelp ?? f.help) : f.help}</p>
         </div>
       ))}
 

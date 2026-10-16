@@ -6,6 +6,10 @@ import type {
   BacktestAddressView,
   BacktestCombinedConfig,
   BacktestCombinedWallet,
+  BacktestViewConfig,
+  BacktestViewDefinition,
+  BacktestViewList,
+  BacktestViewWallet,
   BacktestDaily,
   BacktestEquityPoint,
   BacktestPnlPeriod,
@@ -251,6 +255,28 @@ export function getBacktestDaily(id: string, page = 1, limit = 50): Promise<Back
 /** The shared wallet of a combined backtest. */
 export function getBacktestCombined(id: string): Promise<BacktestCombinedWallet> {
   return request(`/api/backtest/runs/${id}/combined`);
+}
+
+/** Every combined view of a backtest with its headline numbers. */
+export function listBacktestViews(id: string): Promise<BacktestViewList> {
+  return request(`/api/backtest/runs/${id}/views`);
+}
+
+/** Creates one view per entry (no addresses = the whole backtest), all with the same trade amount / fees / balance. Nothing is simulated again. */
+export function createBacktestViews(id: string, body: { views: Array<{ name?: string; addresses?: string[] }>; config: BacktestViewConfig }): Promise<{ views: BacktestViewDefinition[] }> {
+  return request(`/api/backtest/runs/${id}/views`, { method: "POST", body: JSON.stringify(body) });
+}
+
+export function getBacktestViewWallet(id: string, viewId: string): Promise<BacktestViewWallet> {
+  return request(`/api/backtest/runs/${id}/views/${viewId}`);
+}
+
+export function updateBacktestView(id: string, viewId: string, patch: { name?: string; addresses?: string[]; config?: Partial<BacktestViewConfig> }): Promise<{ view: BacktestViewDefinition }> {
+  return request(`/api/backtest/runs/${id}/views/${viewId}`, { method: "PATCH", body: JSON.stringify(patch) });
+}
+
+export function deleteBacktestView(id: string, viewId: string): Promise<{ deleted: true }> {
+  return request(`/api/backtest/runs/${id}/views/${viewId}`, { method: "DELETE" });
 }
 
 export function getBacktestEquity(id: string, address?: string): Promise<{ points: BacktestEquityPoint[] }> {

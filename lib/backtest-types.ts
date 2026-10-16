@@ -415,3 +415,61 @@ export type BacktestCombinedWallet = {
   /** false while addresses are still being worked on: the figures then cover only the trades simulated so far. */
   complete: boolean;
 };
+
+/** The numbers a combined view is priced with (see db/backtest/views.js). */
+export type BacktestViewConfig = {
+  startingBalanceUsd: number;
+  tradeSizeUsd: number;
+  pumpFeePercent: number;
+  jitoFeeUsd: number;
+  resetDaily: boolean;
+  allowNegativeBalance: boolean;
+};
+
+/** A combined view of a backtest: some (or all) of its addresses, re-priced with its own trade amount and fees and traded as one wallet. */
+export type BacktestViewDefinition = BacktestViewConfig & {
+  _id: string;
+  runId: string;
+  name: string;
+  /** true = every address of the backtest (also the ones added later). */
+  allAddresses: boolean;
+  addressCount: number;
+  /** Only in a single view's answer, not in the list. */
+  addresses?: string[];
+  createdAt: string;
+};
+
+export type BacktestViewSummary = {
+  realizedPnlUsd: number;
+  returnPercent: number;
+  balanceUsd: number;
+  lowestBalanceUsd: number;
+  closedPositionCount: number;
+  openPositionCount: number;
+  winRatePercent: number | null;
+  lossDays: number;
+  profitDays: number;
+  negativeBalanceEventCount: number;
+  testedStartDays: number;
+  lostCapitalDays: number;
+  feesUsd: number;
+};
+
+/** What the backtest itself was simulated with - the numbers a view is a "what if" against (null on very old backtests). */
+export type BacktestViewSource = { tradeSizeUsd: number | null; pumpFeePercent: number | null; jitoFeeUsd: number | null };
+
+export type BacktestViewList = {
+  source: BacktestViewSource;
+  views: Array<BacktestViewDefinition & { summary: BacktestViewSummary }>;
+};
+
+export type BacktestViewAddressRow = { address: string; trades: number; wins: number; losses: number; open: number; pnlUsd: number; feesUsd: number };
+
+export type BacktestViewWallet = BacktestCombinedWallet & {
+  view: BacktestViewDefinition;
+  source: BacktestViewSource;
+  sourceStatus: BacktestStatus;
+  feesUsd: number;
+  perAddress: BacktestViewAddressRow[];
+  warnings: string[];
+};

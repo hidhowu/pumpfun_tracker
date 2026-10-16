@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, CalendarDays, ListPlus, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, Pencil, RotateCcw, RefreshCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, Wallet, XCircle } from "lucide-react";
+import { ArrowLeft, CalendarDays, Layers, ListPlus, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, Pencil, RotateCcw, RefreshCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, Wallet, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,6 +28,7 @@ import { DailyGrid } from "./daily-grid";
 import { EquityChart } from "./equity-chart";
 import { PositionsTable } from "./positions-table";
 import { RunTradersTable } from "./run-traders-table";
+import { ViewsTab } from "./views-tab";
 import { WorkerStatus } from "./worker-status";
 import { BlacklistDialog } from "./blacklist-dialog";
 import { EditRunDialog } from "./edit-run-dialog";
@@ -331,6 +332,9 @@ export function RunDashboard({ runId }: { runId: string }) {
           <TabsTrigger value="trades" className="gap-1.5">
             <Coins className="size-3.5" /> Trades
           </TabsTrigger>
+          <TabsTrigger value="views" className="gap-1.5">
+            <Layers className="size-3.5" /> Combined views
+          </TabsTrigger>
         </TabsList>
 
         {isCombined && (
@@ -374,6 +378,10 @@ export function RunDashboard({ runId }: { runId: string }) {
 
         <TabsContent value="trades">
           <PositionsTable runId={runId} refreshKey={refreshKey} />
+        </TabsContent>
+
+        <TabsContent value="views">
+          <ViewsTab runId={runId} suggestedBalanceUsd={run.combined?.startingBalanceUsd ?? run.settings.allocationUsd ?? 100} refreshKey={refreshKey} />
         </TabsContent>
       </Tabs>
 

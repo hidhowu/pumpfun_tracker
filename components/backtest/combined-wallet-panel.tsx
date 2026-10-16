@@ -1,15 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ReferenceArea, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from "recharts";
 import { AlertTriangle, CalendarDays, Coins, ShieldAlert, Target, TrendingDown, Wallet } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatTile } from "@/components/traders/stat-tile";
-import { getBacktestCombined } from "@/lib/backtest-api";
+import { getBacktestCombined, getBacktestViewWallet } from "@/lib/backtest-api";
 import { formatUsd } from "@/lib/format";
-import type { BacktestCombinedWallet } from "@/lib/backtest-types";
+import type { BacktestCombinedWallet, BacktestViewWallet } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
 import { formatDateTime, formatSignedPercent, pnlTone } from "./shared";
 
@@ -104,20 +104,26 @@ function DailyPnlChart({ days }: { days: BacktestCombinedWallet["days"] }) {
 
 /**
  * The shared wallet of a combined backtest: every address's trades added up on ONE balance in the order they happened. Refetches whenever
- * `refreshKey` changes, so it follows the backtest while it runs.
+ * `refreshKey` changes, so it follows the backtest while it runs. With `viewId` it shows a combined VIEW of the backtest instead (same wallet,
+ * worked out from the backtest's stored trades re-priced with the view's own amount and fees); `onLoaded` hands the view's full answer to the page.
  */
-export function CombinedWalletPanel({ runId, refreshKey = 0 }: { runId: string; refreshKey?: number }) {
+export function CombinedWalletPanel({ runId, viewId, refreshKey = 0, onLoaded }: { runId: string; viewId?: string; refreshKey?: number; onLoaded?: (wallet: BacktestViewWallet) => void }) {
   const [data, setData] = useState<BacktestCombinedWallet | null>(null);
+  const loaded = useRef(onLoaded);
+  useEffect(() => {
+    loaded.current = onLoaded;
+  });
 
   useEffect(() => {
     let cancelled = false;
-    getBacktestCombined(runId)
+    const load: Promise<BacktestCombinedWallet> = viewId ? getBacktestViewWallet(runId, viewId).then((res) => (loaded.current?.(res), res)) : getBacktestCombined(runId);
+    load
       .then((res) => !cancelled && setData(res))
       .catch((e) => !cancelled && toast.error(e instanceof Error ? e.message : "Failed to load the combined wallet"));
     return () => {
       cancelled = true;
     };
-  }, [runId, refreshKey]);
+  }, [runId, viewId, refreshKey]);
 
   const totals = useMemo(() => {
     if (!data) return null;
