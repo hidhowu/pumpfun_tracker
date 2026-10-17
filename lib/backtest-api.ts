@@ -441,3 +441,13 @@ export function getBacktestSettings(): Promise<BacktestSettingsView> {
 export function updateBacktestSettings(patch: Partial<Record<keyof BacktestStoredSettings, number | string | null>>): Promise<BacktestSettingsView> {
   return request(`/api/backtest/settings`, { method: "PUT", body: JSON.stringify(patch) });
 }
+
+export type WalletsFromViewsResult = {
+  created: Array<{ walletId: string; name: string; viewId: string; addresses: number; added: number; blacklisted: number; invalid: number }>;
+  skipped: Array<{ viewId: string; name: string; reason: string }>;
+};
+
+/** Creates one live-tracking wallet per combined view (fresh from its starting balance, no trade history). */
+export function createWalletsFromViews(body: { runId: string; viewIds?: string[]; settingsFromWalletId?: string; useWalletMoneySettings?: boolean }): Promise<WalletsFromViewsResult> {
+  return request(`/api/wallets/from-backtest`, { method: "POST", body: JSON.stringify(body) });
+}

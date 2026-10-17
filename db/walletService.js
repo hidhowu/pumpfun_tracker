@@ -7,6 +7,8 @@ import { WalletPendingExecution } from "./models/WalletPendingExecution.js";
 import { WalletDailySnapshot } from "./models/WalletDailySnapshot.js";
 import { WalletHourlySnapshot } from "./models/WalletHourlySnapshot.js";
 import { todayUtcString } from "./simulation/snapshot.js";
+import { BacktestView } from "./models/BacktestView.js";
+import { BacktestRunTrader } from "./models/BacktestRunTrader.js";
 
 /** Creates a Wallet with its starting balance as both startingBalanceUsd (reference) and balanceUsd (current, spendable). */
 export async function createWallet({ name, startingBalanceUsd, settings = {} }) {
@@ -302,4 +304,71 @@ export async function listWallets() {
     traderCount: countByWallet.get(String(w._id)) || 0,
     todayRealizedPnlUsd: todayPnlByWallet.get(String(w._id)) || 0,
   }));
+}
+
+/**
+ * Turns combined views of a backtest into live-tracking Wallets. Each view becomes one Wallet: its name, its addresses (as the wallet's traders - added
+ * to tracking if not yet tracked, blacklisted ones skipped) and its settings (starting balance, trade amount, fees, daily reset). Nothing of the
+ * backtest's trades is copied - the wallet starts clean from its starting balance and follows new trades only.
+ *
+ * With `settingsFromWalletId`, the exit/execution settings (stop-loss, take-profit, trailing stops, max trade time, delay, dust) are taken from that
+ * existing wallet; the view's own balance, trade amount and fees are kept unless `useWalletMoneySettings` is true, which takes those from the wallet too.
+ *
+ * Returns { created: [{ walletId, name, viewId, addresses, added, blacklisted, invalid }], skipped: [{ viewId, name, reason }] }.
+ */
+export async function createWalletsFromBacktestViews(runId, { viewIds, settingsFromWalletId = null, useWalletMoneySettings = false }) {
+  const views = await BacktestView.find({ runId, ...(viewIds?.length ? { _id: { $in: viewIds } } : {}) })
+    .sort({ createdAt: 1, _id: 1 })
+    .lean();
+  if (views.length === 0) throw new Error("No combined views to add");
+
+  let source = null;
+  if (settingsFromWalletId) {
+    source = await Wallet.findById(settingsFromWalletId).lean();
+    if (!source) throw new Error("The wallet to import settings from was not found");
+  }
+
+  let wholeRun = null; // loaded once, only if a view covers the whole backtest
+  const created = [];
+  const skipped = [];
+  for (const view of views) {
+    let addresses = view.addresses;
+    if (addresses.length === 0) {
+      wholeRun ??= (await BacktestRunTrader.find({ runId }, { address: 1 }).lean()).map((t) => t.address);
+      addresses = wholeRun;
+    }
+    if (addresses.length === 0) {
+      skipped.push({ viewId: String(view._id), name: view.name, reason: "No addresses" });
+      continue;
+    }
+
+    const own = {
+      tradeSizeUsd: view.tradeSizeUsd,
+      pumpFeePercent: view.pumpFeePercent,
+      jitoFeeUsd: view.jitoFeeUsd,
+      autoResetBalanceDaily: !!view.resetDaily,
+    };
+    let startingBalanceUsd = view.startingBalanceUsd;
+    let settings = own;
+    if (source) {
+      const { autoResetBalanceDaily, tradeSizeUsd, pumpFeePercent, jitoFeeUsd, ...rest } = source.settings || {};
+      settings = useWalletMoneySettings
+        ? { ...rest, autoResetBalanceDaily, tradeSizeUsd, pumpFeePercent, jitoFeeUsd }
+        : { ...rest, ...own };
+      if (useWalletMoneySettings) startingBalanceUsd = source.startingBalanceUsd;
+    }
+
+    const wallet = await createWallet({ name: view.name, startingBalanceUsd, settings });
+    const result = await addTradersToWallet(wallet._id, addresses, { trackNew: true });
+    created.push({
+      walletId: String(wallet._id),
+      name: wallet.name,
+      viewId: String(view._id),
+      addresses: addresses.length,
+      added: result.added.length,
+      blacklisted: result.blacklisted.length,
+      invalid: result.invalid.length,
+    });
+  }
+  return { created, skipped };
 }
