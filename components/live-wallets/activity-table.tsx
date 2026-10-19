@@ -37,6 +37,16 @@ const FILTERS = [
   { value: "failed", label: "Failed" },
 ];
 
+// The SOL panel has no token transfers, so it offers SOL-shaped filters instead.
+const SOL_FILTERS = [
+  { value: "all", label: "All" },
+  { value: "buy", label: "Bought" },
+  { value: "sell", label: "Sold" },
+  { value: "sol_in", label: "SOL in" },
+  { value: "sol_out", label: "SOL out" },
+  { value: "failed", label: "Failed" },
+];
+
 const PAGE_SIZE = 25;
 
 /** The figures shown for one transaction, shared by the table and the list so they never disagree. */
@@ -82,10 +92,25 @@ function TxLink({ signature }: { signature: string }) {
   );
 }
 
-function ListRow({ tx, showToken, onSelectToken }: { tx: LiveTransaction; showToken: boolean; onSelectToken?: (mint: string) => void }) {
+/** The same transaction seen from the wallet's SOL balance: what SOL went out or came in, and what it was for. */
+function describeSol(tx: LiveTransaction) {
+  const d = describe(tx);
+  const token = tx.symbol ?? (tx.mint ? tx.mint.slice(0, 6) : "");
+  const moved = tx.kind === "other" || tx.kind === "failed" ? -tx.feeSol : tx.solDelta;
+  const title = tx.kind === "buy" ? `Bought ${token}` : tx.kind === "sell" ? `Sold ${token}` : tx.kind === "sol_in" ? "SOL received" : tx.kind === "sol_out" ? "SOL sent" : tx.kind === "failed" ? "Failed transaction" : "Network fee";
+  const amount = `${moved > 0 ? "+" : ""}${formatSol(moved)}`;
+  const detail = d.swapped ? `${tx.tokenDelta > 0 ? "+" : ""}${formatAmount(tx.tokenDelta)} ${token}` : d.value === "No price" || d.value === "-" ? "" : d.value;
+  return { title, amount, detail, moved };
+}
+
+function ListRow({ tx, showToken, onSelectToken, solView }: { tx: LiveTransaction; showToken: boolean; onSelectToken?: (mint: string) => void; solView?: boolean }) {
   const meta = KIND_META[tx.kind];
   const d = describe(tx);
-  const title = showToken ? `${meta.label} ${d.hasToken ? d.symbol : ""}`.trim() : meta.label;
+  const sol = solView ? describeSol(tx) : null;
+  const title = sol ? sol.title : showToken ? `${meta.label} ${d.hasToken ? d.symbol : ""}`.trim() : meta.label;
+  const amountText = sol ? sol.amount : d.amount;
+  const amountClass = sol ? (sol.moved > 0 ? "text-positive" : "text-foreground") : amountTone(tx);
+  const subText = sol ? sol.detail : d.sol ? `${d.sol} · ${d.value}` : d.value;
   const content = (
     <>
       <KindIcon kind={tx.kind} />
@@ -96,13 +121,13 @@ function ListRow({ tx, showToken, onSelectToken }: { tx: LiveTransaction; showTo
         </div>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-0.5 text-right">
-        <div className={cn("text-[15px] font-bold tabular-nums", amountTone(tx))}>{d.amount}</div>
-        <div className="text-xs text-muted-foreground tabular-nums">{d.sol ? `${d.sol} · ${d.value}` : d.value}</div>
+        <div className={cn("text-[15px] font-bold tabular-nums", amountClass)}>{amountText}</div>
+        {subText ? <div className="text-xs text-muted-foreground tabular-nums">{subText}</div> : null}
         {tx.kind === "sell" && tx.realizedPnlUsd !== null ? <PnlPill usd={tx.realizedPnlUsd} pct={tx.realizedPnlPct} className="mt-1" /> : null}
       </div>
     </>
   );
-  const clickable = d.hasToken && onSelectToken && showToken;
+  const clickable = d.hasToken && onSelectToken && showToken && !solView;
   return (
     <li className="border-b border-border last:border-0">
       {clickable ? (
@@ -199,7 +224,7 @@ export function ActivityTable({
 
   const s = data?.summary;
   const decided = s ? s.wins + s.losses : 0;
-  const showToken = !mint;
+  const showToken = !mint || mint === "SOL";
   const listOnly = layout === "list";
 
   return (
@@ -216,7 +241,7 @@ export function ActivityTable({
       {/* Filter chips: one row that scrolls sideways on narrow screens instead of wrapping into a mess. */}
       <div className="flex items-center gap-2">
         <div role="group" aria-label="Filter activity" className="-mx-1 flex min-w-0 flex-1 gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {FILTERS.map((f) => (
+          {(mint === "SOL" ? SOL_FILTERS : FILTERS).map((f) => (
             <button
               key={f.value}
               type="button"
@@ -255,7 +280,7 @@ export function ActivityTable({
           <>
             <ul className={cn("px-4", !listOnly && "md:hidden")}>
               {data.transactions.map((tx) => (
-                <ListRow key={`${tx.signature}-${tx.mint ?? "sol"}`} tx={tx} showToken={showToken} onSelectToken={onSelectToken} />
+                <ListRow key={`${tx.signature}-${tx.mint ?? "sol"}`} tx={tx} showToken={showToken} onSelectToken={onSelectToken} solView={mint === "SOL"} />
               ))}
             </ul>
             {!listOnly ? (

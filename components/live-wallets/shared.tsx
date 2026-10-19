@@ -119,3 +119,19 @@ export function AddressChip({ value, label = "address", kind = "account", chars 
     </span>
   );
 }
+
+/** What to call a token: its symbol, or its shortened mint address when nothing on the internet or the chain names it. */
+export function tokenLabel(symbol: string | null | undefined, mint: string): string {
+  return symbol || formatAddress(mint, 4);
+}
+
+/** A small bordered box with a label and a value, used in the token and SOL panels. */
+export function StatBox({ label, value, hint, className }: { label: string; value: string; hint?: string; className?: string }) {
+  return (
+    <div className="min-w-0 rounded-2xl border border-border bg-card p-3.5">
+      <div className="text-xs font-semibold text-muted-foreground">{label}</div>
+      <div className={cn("mt-1 truncate text-[17px] font-extrabold tabular-nums", className)}>{value}</div>
+      {hint ? <div className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</div> : null}
+    </div>
+  );
+}

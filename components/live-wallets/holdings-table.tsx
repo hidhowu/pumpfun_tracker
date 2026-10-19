@@ -2,12 +2,14 @@
 
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { AddressChip, formatAmount, formatPrice, signedPercent, toneClass, TokenAvatar, TypePill } from "./shared";
+import { AddressChip, formatAmount, formatPrice, signedPercent, toneClass, tokenLabel, TokenAvatar, TypePill } from "./shared";
 import { formatSol, formatUsd } from "@/lib/format";
 import type { LiveChain, LiveHolding, LiveTokenAccount } from "@/lib/live-wallet-types";
 import { cn } from "@/lib/utils";
 
 const HIDDEN = "••••";
+/** What the wallet's SOL row passes to onSelect - SOL has no mint address. */
+export const SOL = "SOL";
 
 function Empty({ children }: { children: React.ReactNode }) {
   return <div className="flex min-h-40 items-center justify-center px-6 text-center text-sm text-muted-foreground">{children}</div>;
@@ -31,23 +33,25 @@ export function HoldingsTable({ chain, onSelect, masked = false }: { chain: Live
     <Card className="gap-0 py-0">
       {/* Phones */}
       <ul className="divide-y divide-border px-4 md:hidden">
-        <li className="flex items-center gap-3 py-3">
-          <TokenAvatar symbol="SOL" className="size-11" />
-          <div className="min-w-0 flex-1">
-            <div className="text-base font-bold">Solana</div>
-            <div className="truncate text-[13px] text-muted-foreground tabular-nums">{hide(formatSol(chain.solBalance))}</div>
-          </div>
-          <div className="text-right">
-            <div className="text-base font-bold tabular-nums">{hide(formatUsd(chain.solValueUsd))}</div>
-            <div className="text-[13px] text-muted-foreground tabular-nums">{formatPrice(chain.solUsd)}</div>
-          </div>
+        <li>
+          <button type="button" onClick={() => onSelect(SOL)} className="flex min-h-16 w-full items-center gap-3 py-3 text-left">
+            <TokenAvatar symbol="SOL" className="size-11" />
+            <div className="min-w-0 flex-1">
+              <div className="text-base font-bold">Solana</div>
+              <div className="truncate text-[13px] text-muted-foreground tabular-nums">{hide(formatSol(chain.solBalance))}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-base font-bold tabular-nums">{hide(formatUsd(chain.solValueUsd))}</div>
+              <div className="text-[13px] text-muted-foreground tabular-nums">{formatPrice(chain.solUsd)}</div>
+            </div>
+          </button>
         </li>
         {chain.tokens.map((t) => (
           <li key={t.mint}>
             <button type="button" onClick={() => onSelect(t.mint)} className="flex min-h-16 w-full items-center gap-3 py-3 text-left">
               <TokenAvatar icon={t.icon} symbol={t.symbol} className="size-11" />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-base font-bold">{t.symbol ?? "Unknown token"}</div>
+                <div className="truncate text-base font-bold">{tokenLabel(t.symbol, t.mint)}</div>
                 <div className="truncate text-[13px] text-muted-foreground tabular-nums">{hide(`${formatAmount(t.balance)} ${t.symbol ?? ""}`.trim())}</div>
               </div>
               <div className="text-right">
@@ -75,7 +79,14 @@ export function HoldingsTable({ chain, onSelect, masked = false }: { chain: Live
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow className="h-16 hover:bg-transparent">
+            <TableRow
+              tabIndex={0}
+              role="button"
+              aria-label="Open Solana"
+              className="h-16 cursor-pointer focus-visible:bg-accent/30 focus-visible:outline-none"
+              onClick={() => onSelect(SOL)}
+              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect(SOL))}
+            >
               <TableCell className="pl-5">
                 <div className="flex items-center gap-3">
                   <TokenAvatar symbol="SOL" />
@@ -101,7 +112,7 @@ export function HoldingsTable({ chain, onSelect, masked = false }: { chain: Live
                   <div className="flex min-w-0 items-center gap-3">
                     <TokenAvatar icon={t.icon} symbol={t.symbol} />
                     <div className="flex min-w-0 flex-col leading-tight">
-                      <span className="max-w-44 truncate text-[15px] font-extrabold">{t.symbol ?? "Unknown token"}</span>
+                      <span className="max-w-44 truncate text-[15px] font-extrabold">{tokenLabel(t.symbol, t.mint)}</span>
                       {t.name ? <span className="max-w-44 truncate text-xs text-muted-foreground">{t.name}</span> : null}
                     </div>
                   </div>
@@ -146,7 +157,7 @@ export function TokenAccountsTable({ accounts, onSelect }: { accounts: LiveToken
             <div className="flex items-center justify-between gap-3">
               <button type="button" onClick={() => onSelect(a.mint)} className="flex min-w-0 items-center gap-2.5 text-left">
                 <TokenAvatar icon={a.icon} symbol={a.symbol} className="size-8" />
-                <span className="truncate text-[15px] font-bold">{a.symbol ?? "Unknown"}</span>
+                <span className="truncate text-[15px] font-bold">{tokenLabel(a.symbol, a.mint)}</span>
               </button>
               <TypePill label={a.program === "token-2022" ? "Token-2022" : "Token"} tone="receive" />
             </div>
@@ -188,7 +199,7 @@ export function TokenAccountsTable({ accounts, onSelect }: { accounts: LiveToken
                 <TableCell className="pl-5">
                   <button type="button" onClick={() => onSelect(a.mint)} className="flex items-center gap-2.5 text-left hover:text-brand-soft">
                     <TokenAvatar icon={a.icon} symbol={a.symbol} className="size-7" />
-                    <span className="max-w-32 truncate font-extrabold">{a.symbol ?? "Unknown"}</span>
+                    <span className="max-w-32 truncate font-extrabold">{tokenLabel(a.symbol, a.mint)}</span>
                   </button>
                 </TableCell>
                 <TableCell>

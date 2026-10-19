@@ -11,7 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ActivityTable } from "@/components/live-wallets/activity-table";
-import { HoldingsTable, TokenAccountsTable } from "@/components/live-wallets/holdings-table";
+import { HoldingsTable, SOL, TokenAccountsTable } from "@/components/live-wallets/holdings-table";
+import { SolSheet } from "@/components/live-wallets/sol-sheet";
 import { ReceiveDialog } from "@/components/live-wallets/receive-dialog";
 import { TokenSheet } from "@/components/live-wallets/token-sheet";
 import { ViewKeyDialog } from "@/components/live-wallets/view-key-dialog";
@@ -111,6 +112,7 @@ export default function LiveWalletDetailPage() {
   const chain = detail?.chain;
   const pnl = detail?.pnl;
   const selectedHolding = chain?.tokens.find((t) => t.mint === selectedMint) ?? null;
+  const solOpen = selectedMint === SOL;
   const hide = (text: string) => (masked ? HIDDEN : text);
 
   return (
@@ -260,7 +262,8 @@ export default function LiveWalletDetailPage() {
             </aside>
           </div>
 
-          <TokenSheet walletId={wallet._id} mint={selectedMint} holding={selectedHolding} onClose={() => setSelectedMint(null)} />
+          <TokenSheet walletId={wallet._id} mint={solOpen ? null : selectedMint} holding={selectedHolding} onClose={() => setSelectedMint(null)} />
+          <SolSheet walletId={wallet._id} open={solOpen} chain={chain} onClose={() => setSelectedMint(null)} />
         </>
       ) : null}
     </div>

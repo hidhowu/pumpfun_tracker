@@ -164,6 +164,8 @@ export async function getLiveWalletDetail(id) {
   };
 }
 
+const SOL_KINDS = new Set(["sol_in", "sol_out", "buy", "sell", "other", "failed"]);
+
 /**
  * One page of the wallet's transactions, newest first, each sell carrying its realised profit or loss. Optionally one token / kind.
  * @param {string} id
@@ -176,7 +178,9 @@ export async function getLiveWalletTransactions(id, { mint = null, kind = null, 
 
   const ledger = await loadLedger(found._id);
   let rows = ledger.rows;
-  if (mint) rows = rows.filter((r) => r.mint === mint);
+  // "SOL" is not a mint: it asks for every movement of SOL itself - swaps against a token, plain transfers, and network fees.
+  if (mint === "SOL") rows = rows.filter((r) => SOL_KINDS.has(r.kind));
+  else if (mint) rows = rows.filter((r) => r.mint === mint);
   if (kind) rows = rows.filter((r) => r.kind === kind);
   rows = rows.reverse(); // newest first
 
@@ -208,6 +212,6 @@ export async function getLiveWalletTransactions(id, { mint = null, kind = null, 
     };
   });
 
-  const summary = mint ? ledger.perMint.get(mint) ?? emptyStats() : ledger.totals;
+  const summary = mint && mint !== "SOL" ? ledger.perMint.get(mint) ?? emptyStats() : ledger.totals;
   return { transactions, page, totalPages, total, summary, syncError: syncError ?? found.lastSyncError ?? null };
 }

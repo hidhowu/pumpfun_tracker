@@ -1,10 +1,12 @@
 import { rpc, getOnchainPrice, getSolUsd } from "../onchainPrice.js";
 import { getTokenMeta, WSOL_MINT } from "./tokenMeta.js";
+import { getDexScreenerTokens } from "./dexscreener.js";
 
 /**
  * What a live wallet holds right now, read straight from the chain: SOL, every token account (classic SPL Token and
  * Token-2022), and a USD price for each token that has one. Token prices come from the same on-chain reads the rest of
- * the app uses (bonding curve / PumpSwap pool); Jupiter's price API covers tokens those can't price (USDC, other DEXes).
+ * the app uses (bonding curve / PumpSwap pool); Jupiter's price API covers tokens those can't price (USDC, other DEXes),
+ * and DexScreener covers whatever is left that trades in a pool with real liquidity. A token with no live market stays unpriced.
  */
 
 const TOKEN_PROGRAMS = [
@@ -69,6 +71,8 @@ async function load(address) {
   );
   const unpriced = heldMints.filter((m) => !prices.has(m));
   if (unpriced.length) for (const [mint, price] of await jupiterPrices(unpriced)) prices.set(mint, price);
+  const stillUnpriced = heldMints.filter((m) => !prices.has(m));
+  if (stillUnpriced.length) for (const [mint, t] of await getDexScreenerTokens(stillUnpriced)) if (t.priceUsd) prices.set(mint, t.priceUsd);
 
   const meta = await getTokenMeta([...new Set(accounts.map((a) => a.mint))]);
 
