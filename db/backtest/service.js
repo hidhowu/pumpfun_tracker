@@ -17,13 +17,13 @@ import { freshAddressState, insertAddressRows } from "./rows.js";
 import { addTradersToList } from "../listService.js";
 import { deleteViewsOfRun } from "./views.js";
 import { MAX_JITO_FEE_USD, MAX_PUMP_FEE_PERCENT } from "../settingsLimits.js";
-import { EMPTY_STATS, emptyStoredStats, ensureRunStats, finishStats, invalidateRun, remembered, rememberedWithAge, statsByAddress, summariseRuns, summaryTtl, viewStats } from "./runStats.js";
+import { EMPTY_STATS, STATS_VERSION, emptyStoredStats, ensureRunStats, finishStats, invalidateRun, remembered, rememberedWithAge, statsByAddress, summariseRuns, summaryTtl, viewStats } from "./runStats.js";
 
 const DAY_MS = 86_400_000;
-const INSERT_CHUNK = 1000;
+const INSERT_CHUNK = 5000;
 // Addresses are added in batches this big (the page sends them that way too); a bigger request is refused so one call can't hold the server.
-export const ADD_BATCH = 500;
-export const MAX_ADD_REQUEST = 2000;
+export const ADD_BATCH = 5000;
+export const MAX_ADD_REQUEST = 10_000;
 const USER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const MAX_BACKTEST_DAYS = 120;
 export const DEFAULT_MAX_SIGNATURES = 50_000;
@@ -252,7 +252,7 @@ export async function listBacktestAddresses({ page = 1, limit = 50, search = "",
   };
 }
 
-const MAX_IDS = 100_000;
+const MAX_IDS = 1_000_000;
 
 // ----------------------------------------------------------------- runs
 
@@ -427,7 +427,7 @@ export async function createBacktestRun({ name, days, profileId, addresses = [],
       mode,
       combined: wallet,
       addressCount: count,
-      statsVersion: 1,
+      statsVersion: STATS_VERSION,
       maxSignatures: Math.floor(maxSignatures),
       collectMethod,
       earlyStop: stopRules,
@@ -548,7 +548,7 @@ export async function controlBacktestRun(runId, action, options = {}) {
     await BacktestRunTrader.updateMany({ runId }, { $set: freshAddressState() });
     await BacktestRun.updateOne(
       { _id: runId },
-      { $set: { control: "run", status: "queued", queuedAt: new Date(), error: null, startedAt: null, finishedAt: null, activeMs: 0, statsVersion: 1, ...(collectMethod ? { collectMethod } : {}) } }
+      { $set: { control: "run", status: "queued", queuedAt: new Date(), error: null, startedAt: null, finishedAt: null, activeMs: 0, statsVersion: STATS_VERSION, ...(collectMethod ? { collectMethod } : {}) } }
     );
   } else if (action === "pause") {
     if (!ACTIVE_STATUSES.includes(run.status)) throw new Error("Only a queued or running backtest can be paused");
@@ -789,6 +789,9 @@ const SORT_FIELDS = {
   lossDays: "stats.daily.lossDays",
   margin: "stats.daily.profitMarginPercent",
   withoutBest: "stats.daily.withoutBestDay.combinedPercent",
+  avgPnlDay: "stats.daily.avgPnlPerDayUsd",
+  profitDays: "stats.daily.profitDaysPercent",
+  totalLoss: "stats.totalLossUsd",
 };
 
 const finite = (v) => (v === undefined || v === null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
@@ -824,6 +827,14 @@ function limitQuery(limits = {}) {
   if (maxLoss != null) q["stats.daily.lossDays"] = { $not: { $gt: maxLoss } }; // none counted yet is 0 loss days
   if (minTrades != null || maxTrades != null) q["stats.closed"] = { ...(minTrades != null ? { $gte: minTrades } : {}), ...(maxTrades != null ? { $lte: maxTrades } : {}) };
   if (minAvg != null) q["stats.avgPnlUsd"] = { $gte: minAvg };
+  const minPnl = finite(limits.minPnl);
+  const minPerDay = finite(limits.minAvgPnlPerDay);
+  const minProfitDays = finite(limits.minProfitDaysPercent);
+  const maxTotalLoss = finite(limits.maxTotalLoss);
+  if (minPnl != null) q["stats.realizedPnlUsd"] = { $gte: minPnl };
+  if (minPerDay != null) q["stats.daily.avgPnlPerDayUsd"] = { $gte: minPerDay }; // no trading day yet never matches
+  if (minProfitDays != null) q["stats.daily.profitDaysPercent"] = { $gte: minProfitDays };
+  if (maxTotalLoss != null) q["stats.totalLossUsd"] = { $not: { $gt: maxTotalLoss } }; // no loss counted yet is a loss of 0
   if (limits.holdsWithoutBest === true || limits.holdsWithoutBest === "true") q["stats.daily.withoutBestDay.stillProfitable"] = true;
   return q;
 }
@@ -916,7 +927,7 @@ export async function listRunTraders(runId, { filter = "all", sort = "pnl", dir 
   };
 }
 
-const MAX_ADDRESSES_ONLY = 100_000;
+const MAX_ADDRESSES_ONLY = 1_000_000;
 // No query on a run's addresses may hold the database longer than this.
 const QUERY_LIMIT_MS = 120_000;
 

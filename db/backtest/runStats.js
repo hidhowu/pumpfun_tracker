@@ -12,6 +12,9 @@ import { summariseDays } from "./dayStats.js";
  * and pages the addresses with an ordinary query, and a run's totals are one pass over its rows.
  */
 
+/** Bump when a figure is added to the stored stats: a run with an older version has every address's stats written again once (ensureRunStats). 2 = total loss, per-day averages. */
+export const STATS_VERSION = 2;
+
 export const POSITION_STATS_GROUP = {
   closed: { $sum: { $cond: [{ $eq: ["$status", "closed"] }, 1, 0] } },
   open: { $sum: { $cond: [{ $eq: ["$status", "open"] }, 1, 0] } },
@@ -19,6 +22,7 @@ export const POSITION_STATS_GROUP = {
   wins: { $sum: { $cond: [{ $and: [{ $eq: ["$status", "closed"] }, { $gt: ["$realizedPnlUsd", 0] }] }, 1, 0] } },
   losses: { $sum: { $cond: [{ $and: [{ $eq: ["$status", "closed"] }, { $lt: ["$realizedPnlUsd", 0] }] }, 1, 0] } },
   realizedPnlUsd: { $sum: { $cond: [{ $eq: ["$status", "closed"] }, "$realizedPnlUsd", 0] } },
+  totalLossUsd: { $sum: { $cond: [{ $and: [{ $eq: ["$status", "closed"] }, { $lt: ["$realizedPnlUsd", 0] }] }, { $subtract: [0, "$realizedPnlUsd"] }, 0] } },
   combinedPercent: { $sum: { $cond: [{ $eq: ["$status", "closed"] }, "$realizedPnlPercent", 0] } },
   bestPercent: { $max: { $cond: [{ $eq: ["$status", "closed"] }, "$realizedPnlPercent", null] } },
   worstPercent: { $min: { $cond: [{ $eq: ["$status", "closed"] }, "$realizedPnlPercent", null] } },
@@ -36,6 +40,7 @@ export function finishStats(row) {
     losses: row?.losses || 0,
     winRatePercent: decided > 0 ? (row.wins / decided) * 100 : null,
     realizedPnlUsd: row?.realizedPnlUsd || 0,
+    totalLossUsd: row?.totalLossUsd || 0, // every losing trade added up, as a positive dollar amount
     combinedPercent: row?.combinedPercent || 0,
     avgPercent: closed > 0 ? row.combinedPercent / closed : null,
     bestPercent: row?.bestPercent ?? null,
@@ -128,14 +133,14 @@ export async function backfillRunStats(runId) {
     }));
     await BacktestRunTrader.bulkWrite(ops, { ordered: false });
   }
-  await BacktestRun.updateOne({ _id: runId }, { $set: { statsVersion: 1 } });
+  await BacktestRun.updateOne({ _id: runId }, { $set: { statsVersion: STATS_VERSION } });
 }
 
 const backfilling = new Map(); // runId -> promise, so two requests at once do the work once
 
 /** Makes sure `run` (a lean BacktestRun) has its stats on the rows; does the one-time fill for an older run. */
 export async function ensureRunStats(run) {
-  if ((run.statsVersion ?? 0) >= 1) return;
+  if ((run.statsVersion ?? 0) >= STATS_VERSION) return;
   const key = String(run._id);
   if (!backfilling.has(key)) {
     backfilling.set(
@@ -144,7 +149,7 @@ export async function ensureRunStats(run) {
     );
   }
   await backfilling.get(key);
-  run.statsVersion = 1;
+  run.statsVersion = STATS_VERSION;
 }
 
 // ------------------------------------------------------------------ progress
@@ -293,6 +298,7 @@ async function summariseRunsNow(runs) {
         wins: { $sum: "$stats.wins" },
         losses: { $sum: "$stats.losses" },
         realizedPnlUsd: { $sum: "$stats.realizedPnlUsd" },
+        totalLossUsd: { $sum: "$stats.totalLossUsd" },
         combinedPercent: { $sum: "$stats.combinedPercent" },
         bestPercent: { $max: "$stats.bestPercent" },
         worstPercent: { $min: "$stats.worstPercent" },

@@ -109,7 +109,7 @@ async function withRetry<T>(call: () => Promise<T>): Promise<T> {
 }
 
 // Operations on many addresses are sent in batches, one after the other: one giant request would hang the page and the server.
-const OP_BATCH = 500;
+const OP_BATCH = 5000;
 const BLACKLIST_BATCH = 200; // blacklisting a live trader also sells its open positions, so each address can cost more
 const RETRY_DELAY_MS = 1500;
 export type BatchProgress = (done: number, total: number) => void;
@@ -206,7 +206,7 @@ export function controlBacktestRun(
 function tradersQuery(q: BacktestTraderQuery): URLSearchParams {
   const qs = new URLSearchParams({ filter: q.filter, sort: q.sort, dir: q.dir, page: String(q.page), limit: String(q.limit) });
   if (q.search.trim()) qs.set("search", q.search.trim());
-  for (const key of ["minWinRate", "minMargin", "maxLossDays", "minTrades", "maxTrades", "minAvgPnl"] as const) {
+  for (const key of ["minWinRate", "minMargin", "maxLossDays", "minTrades", "maxTrades", "minAvgPnl", "minPnl", "minAvgPnlPerDay", "minProfitDaysPercent", "maxTotalLoss"] as const) {
     if (q.limits[key].trim() !== "") qs.set(key, q.limits[key].trim());
   }
   if (q.limits.holdsWithoutBest) qs.set("holdsWithoutBest", "true");
@@ -355,7 +355,7 @@ export async function addListToRun(runId: string, options: { search?: string; ex
       break;
     }
     const res: AddToRunResult = await withRetry(() =>
-      request(`/api/backtest/runs/${runId}/addresses`, { method: "POST", body: JSON.stringify({ fromList: true, afterId, search: options.search, limit: OP_BATCH * 2 }) })
+      request(`/api/backtest/runs/${runId}/addresses`, { method: "POST", body: JSON.stringify({ fromList: true, afterId, search: options.search, limit: OP_BATCH }) })
     );
     total.added += res.added;
     total.alreadyInRun += res.alreadyInRun;

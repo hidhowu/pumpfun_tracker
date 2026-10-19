@@ -23,8 +23,8 @@ import { moveViewsToRun } from "./views.js";
  * can safely be repeated or the whole merge resumed after an interruption: rows that moved are simply no longer in the source.
  */
 
-const PAGE = 1000;
-const MAX_PAGE = 2000;
+const PAGE = 5000;
+const MAX_PAGE = 10_000;
 const WORKING = ["queued", "running"];
 
 /** Strategy fields that decide what a simulated trade looks like. A difference in any of these makes two sets of results incomparable. */
@@ -178,6 +178,7 @@ export async function finishMerge(targetId, sourceId) {
     BacktestRunTrader.countDocuments({ runId: target._id }),
     BacktestRunTrader.countDocuments({ runId: target._id, stage: { $in: ["pending", "collecting", "simulating"] } }),
   ]);
+  // statsVersion 1: moved rows may predate newer stats, so the next view of the backtest writes them all again.
   await BacktestRun.updateOne({ _id: target._id }, { $set: { addressCount: targetCount, statsVersion: 1 } });
   if (waiting > 0) {
     await BacktestRun.updateOne({ _id: target._id, status: { $in: ["completed", "failed"] } }, { $set: { status: "paused", control: "pause", finishedAt: null, error: null } });

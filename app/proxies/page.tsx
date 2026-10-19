@@ -175,6 +175,7 @@ export default function ProxiesPage() {
   const [proxies, setProxies] = useState<ProxyView[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [deletingInactive, setDeletingInactive] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkTest, setBulkTest] = useState<{ done: number; total: number; passed: number } | null>(null);
@@ -296,6 +297,22 @@ export default function ProxiesPage() {
     }
   }
 
+  /** Deletes every blacklisted or disabled proxy in one call - no need to tick or delete them one by one. */
+  async function handleDeleteInactive() {
+    const ids = inactiveProxies.map((p) => p._id);
+    if (ids.length === 0 || deletingInactive) return;
+    setDeletingInactive(true);
+    try {
+      await deleteProxiesBulk(ids);
+      toast.success(`${ids.length} blacklisted/disabled prox${ids.length === 1 ? "y" : "ies"} deleted`);
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeletingInactive(false);
+    }
+  }
+
   function toggleRow(id: string, checked: boolean) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -360,6 +377,34 @@ export default function ProxiesPage() {
               <RefreshCw className="size-3.5" />
               Re-test blacklisted &amp; disabled ({inactiveProxies.length})
             </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 text-negative hover:text-negative"
+                  disabled={inactiveProxies.length === 0 || deletingInactive}
+                  title="Deletes every blacklisted or disabled proxy at once"
+                >
+                  {deletingInactive ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                  Delete blacklisted &amp; disabled ({inactiveProxies.length})
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete {inactiveProxies.length} prox{inactiveProxies.length === 1 ? "y" : "ies"}?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Every blacklisted or disabled proxy is deleted. Active proxies are not touched. This can&apos;t be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction className="bg-negative text-negative-foreground hover:bg-negative/90" onClick={handleDeleteInactive}>
+                    Delete {inactiveProxies.length}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
             <Button
               variant="ghost"
               size="sm"

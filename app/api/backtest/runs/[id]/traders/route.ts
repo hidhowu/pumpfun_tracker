@@ -7,8 +7,9 @@ type Params = { params: Promise<{ id: string }> };
 
 /**
  * A page of the run's addresses, filtered and sorted by the database - a run can have tens of thousands, so they are never sent all at once.
- * Query: filter? (all | profitable | losing | running | failed | skipped), sort? (pnl | combined | avgPnl | winRate | trades | lossDays | margin | withoutBest),
- * dir? (asc | desc), page?, limit? (max 200), the limits minWinRate / minMargin / maxLossDays / minTrades / maxTrades / minAvgPnl / holdsWithoutBest,
+ * Query: filter? (all | profitable | losing | running | failed | skipped), sort? (pnl | combined | avgPnl | winRate | trades | lossDays | margin | withoutBest | avgPnlDay | profitDays | totalLoss),
+ * dir? (asc | desc), page?, limit? (max 200), the limits minWinRate / minMargin / maxLossDays / minTrades / maxTrades / minAvgPnl / minPnl /
+ * minAvgPnlPerDay / minProfitDaysPercent / maxTotalLoss / holdsWithoutBest,
  * and addressesOnly=1 for just the addresses that match (to select them all).
  */
 export async function GET(request: NextRequest, { params }: Params) {
@@ -32,6 +33,10 @@ export async function GET(request: NextRequest, { params }: Params) {
       minTrades: sp.get("minTrades"),
       maxTrades: sp.get("maxTrades"),
       minAvgPnl: sp.get("minAvgPnl"),
+      minPnl: sp.get("minPnl"),
+      minAvgPnlPerDay: sp.get("minAvgPnlPerDay"),
+      minProfitDaysPercent: sp.get("minProfitDaysPercent"),
+      maxTotalLoss: sp.get("maxTotalLoss"),
       holdsWithoutBest: sp.get("holdsWithoutBest"),
     },
   }).catch(() => null);

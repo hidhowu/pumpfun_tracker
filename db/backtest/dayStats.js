@@ -3,6 +3,8 @@
  * one trade closed; `pct` is the sum of that day's closed trades' percent results - the "combined %" of the daily breakdown).
  *
  *  lossDays            days that closed with a net loss
+ *  profitDaysPercent   profit days / trading days * 100 (3 profitable days of 7 -> 43%); null = no trading day yet
+ *  avgPnlPerDayUsd     the dollar P&L over all trading days / trading days; null = no trading day yet
  *  profitMarginPercent how much of the trader's profit is left after its losses:
  *                        (profitDaysTotal - lossDaysTotal) / profitDaysTotal * 100
  *                      +100 and -20 over two days -> (100 - 20) / 100 = 80%. 100% = no losing day at all; 0% = the losses ate
@@ -50,6 +52,8 @@ export function summariseDays(days) {
     tradingDays: days.length,
     lossDays: all.lossDays,
     profitDays,
+    profitDaysPercent: days.length > 0 ? (profitDays / days.length) * 100 : null,
+    avgPnlPerDayUsd: days.length > 0 ? all.pnlUsd / days.length : null,
     grossProfitPercent: all.profit,
     grossLossPercent: all.loss,
     profitMarginPercent: all.margin,

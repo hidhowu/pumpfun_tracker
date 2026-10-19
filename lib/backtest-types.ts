@@ -33,6 +33,10 @@ export type BacktestDaySummary = {
   tradingDays: number;
   lossDays: number;
   profitDays: number;
+  /** profit days / trading days * 100. null = no trading day yet. */
+  profitDaysPercent?: number | null;
+  /** Dollar P&L / trading days. null = no trading day yet. */
+  avgPnlPerDayUsd?: number | null;
   grossProfitPercent: number;
   grossLossPercent: number;
   /** (profit - loss) / profit * 100 over the days: how much of the profit is left after the losing days. null = no profitable day. */
@@ -50,6 +54,8 @@ export type BacktestStats = {
   losses: number;
   winRatePercent: number | null;
   realizedPnlUsd: number;
+  /** Every losing trade added up, as a positive dollar amount. */
+  totalLossUsd?: number;
   combinedPercent: number;
   avgPercent: number | null;
   // Realized P&L per closed trade, in dollars (only on a run's addresses).
@@ -176,10 +182,22 @@ export type BacktestRunDetail = {
 };
 
 export type BacktestTraderFilter = "all" | "profitable" | "losing" | "running" | "failed" | "skipped";
-export type BacktestTraderSort = "pnl" | "combined" | "avgPnl" | "winRate" | "trades" | "lossDays" | "margin" | "withoutBest";
+export type BacktestTraderSort = "pnl" | "combined" | "avgPnl" | "winRate" | "trades" | "lossDays" | "margin" | "withoutBest" | "avgPnlDay" | "profitDays" | "totalLoss";
 
 /** The "at least / at most" limits of the addresses table, as typed (empty = no limit). */
-export type BacktestTraderLimits = { minWinRate: string; minMargin: string; maxLossDays: string; minTrades: string; maxTrades: string; minAvgPnl: string; holdsWithoutBest: boolean };
+export type BacktestTraderLimits = {
+  minWinRate: string;
+  minMargin: string;
+  maxLossDays: string;
+  minTrades: string;
+  maxTrades: string;
+  minAvgPnl: string;
+  minPnl: string;
+  minAvgPnlPerDay: string;
+  minProfitDaysPercent: string;
+  maxTotalLoss: string;
+  holdsWithoutBest: boolean;
+};
 
 export type BacktestTraderQuery = {
   filter: BacktestTraderFilter;

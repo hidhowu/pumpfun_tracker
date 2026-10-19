@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 import { parseAddressInput } from "./add-addresses-dialog";
 import { BatchProgress, type BatchState } from "./batch-progress";
 
-const BATCH = 500;
+const BATCH = 5000;
 
 type Props = {
   run: { _id: string; name: string; status: string };

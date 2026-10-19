@@ -27,7 +27,7 @@ const FILTERS: Array<{ value: Filter; label: string }> = [
 ];
 
 const PAGE_SIZES = [25, 50, 100, 200];
-const NO_LIMITS: BacktestTraderLimits = { minWinRate: "", minMargin: "", maxLossDays: "", minTrades: "", maxTrades: "", minAvgPnl: "", holdsWithoutBest: false };
+const NO_LIMITS: BacktestTraderLimits = { minWinRate: "", minMargin: "", maxLossDays: "", minTrades: "", maxTrades: "", minAvgPnl: "", minPnl: "", minAvgPnlPerDay: "", minProfitDaysPercent: "", maxTotalLoss: "", holdsWithoutBest: false };
 // A query slower than this gets the "working on it" notice with an estimate (faster ones just update).
 const SLOW_AFTER_MS = 700;
 // Until this view has been used once there is nothing measured to go on: roughly this long per address in the backtest.
@@ -260,6 +260,10 @@ export function RunTradersTable({ runId, active, selected, onSelectedChange, onO
               ["minTrades", "Trades at least"],
               ["maxTrades", "Trades at most"],
               ["minAvgPnl", "Avg P&L per trade at least ($)"],
+              ["minPnl", "Total P&L at least ($)"],
+              ["minAvgPnlPerDay", "Avg P&L per day at least ($)"],
+              ["minProfitDaysPercent", "Profitable days at least (%)"],
+              ["maxTotalLoss", "Total loss at most ($)"],
             ] as const
           ).map(([key, label]) => (
             <label key={key} className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -268,7 +272,7 @@ export function RunTradersTable({ runId, active, selected, onSelectedChange, onO
                 inputMode="decimal"
                 value={limits[key]}
                 onChange={(e) => {
-                  const value = e.target.value.replace(key === "minMargin" || key === "minAvgPnl" ? /[^0-9.-]/g : /[^0-9.]/g, "");
+                  const value = e.target.value.replace(key === "minMargin" || key === "minAvgPnl" || key === "minPnl" || key === "minAvgPnlPerDay" ? /[^0-9.-]/g : /[^0-9.]/g, "");
                   setLimits((prev) => ({ ...prev, [key]: value }));
                   setPage(1);
                 }}
@@ -343,8 +347,11 @@ export function RunTradersTable({ runId, active, selected, onSelectedChange, onO
               <SortHead label="P&L" k="pnl" sort={sort} onSort={onSort} className="text-right" />
               <SortHead label="Combined" k="combined" sort={sort} onSort={onSort} className="hidden text-right md:table-cell" />
               <SortHead label="Avg P&L / trade" k="avgPnl" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
+              <SortHead label="Avg P&L / day" k="avgPnlDay" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
+              <SortHead label="Total loss" k="totalLoss" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
               <SortHead label="Win rate" k="winRate" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
               <SortHead label="Loss days" k="lossDays" sort={sort} onSort={onSort} className="hidden text-right xl:table-cell" />
+              <SortHead label="Profitable days" k="profitDays" sort={sort} onSort={onSort} className="hidden text-right xl:table-cell" />
               <SortHead label="Profit margin" k="margin" sort={sort} onSort={onSort} className="hidden text-right xl:table-cell" />
               <SortHead label="Without best day" k="withoutBest" sort={sort} onSort={onSort} className="hidden text-right xl:table-cell" />
               <SortHead label="Trades" k="trades" sort={sort} onSort={onSort} className="hidden pr-4 text-right sm:table-cell" />
@@ -353,7 +360,7 @@ export function RunTradersTable({ runId, active, selected, onSelectedChange, onO
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="py-10 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={13}className="py-10 text-center text-sm text-muted-foreground">
                   {data === null ? "Loading…" : "No address matches these filters."}
                 </TableCell>
               </TableRow>
@@ -420,6 +427,12 @@ export function RunTradersTable({ runId, active, selected, onSelectedChange, onO
                         "—"
                       )}
                     </TableCell>
+                    <TableCell className={cn("hidden text-right tabular-nums lg:table-cell", pnlTone(s.daily?.avgPnlPerDayUsd ?? 0))} title="Realized P&L divided by the days the trader traded">
+                      {s.daily?.avgPnlPerDayUsd != null ? formatUsd(s.daily.avgPnlPerDayUsd) : "—"}
+                    </TableCell>
+                    <TableCell className={cn("hidden text-right tabular-nums lg:table-cell", (s.totalLossUsd ?? 0) > 0 && "text-negative")} title="Every losing trade added up">
+                      {s.closed > 0 ? formatUsd(-(s.totalLossUsd ?? 0)) : "—"}
+                    </TableCell>
                     <TableCell className="hidden text-right tabular-nums lg:table-cell">
                       {s.winRatePercent != null ? `${s.winRatePercent.toFixed(0)}%` : "—"}
                     </TableCell>
@@ -428,6 +441,16 @@ export function RunTradersTable({ runId, active, selected, onSelectedChange, onO
                         <span className={s.daily.lossDays > 0 ? "text-negative" : undefined}>
                           {s.daily.lossDays}
                           <span className="text-xs text-muted-foreground"> / {s.daily.tradingDays}</span>
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
+                    <TableCell className="hidden text-right tabular-nums xl:table-cell" title="Days that closed in a profit, out of the days the trader traded">
+                      {s.daily?.profitDaysPercent != null ? (
+                        <span>
+                          {s.daily.profitDaysPercent.toFixed(0)}%
+                          <span className="text-xs text-muted-foreground"> ({s.daily.profitDays}/{s.daily.tradingDays})</span>
                         </span>
                       ) : (
                         "—"

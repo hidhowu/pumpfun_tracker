@@ -22,7 +22,7 @@ import { ProgressBar } from "./shared";
 const ADDRESS_LIKE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 // A big paste is sent in batches this size, one after the other: one huge request would hang the page while it builds and the server while it handles it.
-const BATCH_SIZE = 500;
+const BATCH_SIZE = 5000;
 const RETRY_DELAY_MS = 1500;
 
 type Tally = { done: number; total: number; added: number; updated: number; skipped: number; blacklisted: number; invalid: string[] };

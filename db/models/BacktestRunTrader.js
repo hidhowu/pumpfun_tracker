@@ -56,6 +56,7 @@ const BacktestRunTraderSchema = new Schema({
     losses: { type: Number, default: 0 },
     winRatePercent: { type: Number, default: null },
     realizedPnlUsd: { type: Number, default: 0 },
+    totalLossUsd: { type: Number, default: 0 }, // every losing trade added up, as a positive dollar amount
     combinedPercent: { type: Number, default: 0 },
     avgPercent: { type: Number, default: null },
     avgPnlUsd: { type: Number, default: null }, // realized P&L per closed trade
@@ -66,6 +67,8 @@ const BacktestRunTraderSchema = new Schema({
       tradingDays: { type: Number, default: 0 },
       lossDays: { type: Number, default: 0 },
       profitDays: { type: Number, default: 0 },
+      profitDaysPercent: { type: Number, default: null }, // profit days / trading days * 100
+      avgPnlPerDayUsd: { type: Number, default: null }, // dollar P&L / trading days
       grossProfitPercent: { type: Number, default: 0 },
       grossLossPercent: { type: Number, default: 0 },
       profitMarginPercent: { type: Number, default: null },
@@ -98,6 +101,9 @@ export const SORT_INDEX_FIELDS = [
   "stats.daily.lossDays",
   "stats.daily.profitMarginPercent",
   "stats.daily.withoutBestDay.combinedPercent",
+  "stats.daily.avgPnlPerDayUsd",
+  "stats.daily.profitDaysPercent",
+  "stats.totalLossUsd",
 ];
 for (const field of SORT_INDEX_FIELDS) BacktestRunTraderSchema.index({ runId: 1, [field]: -1, _id: -1 });
 
