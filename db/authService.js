@@ -328,7 +328,7 @@ export async function enableTwoFactor(userId, code, { ip = "" } = {}) {
 
   const recoveryCodes = generateRecoveryCodes();
   const enabled = await User.updateOne(
-    { _id: userId, "totp.enabled": false, "totp.pendingSecretEnc": user.totp.pendingSecretEnc },
+    { _id: userId, "totp.enabled": { $ne: true }, "totp.pendingSecretEnc": user.totp.pendingSecretEnc },
     {
       $set: {
         "totp.enabled": true,
