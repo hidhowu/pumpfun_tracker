@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Radar, ShieldBan, Settings, Activity, Trophy, ScrollText, Router, Shuffle, Wallet, Layers, ListChecks, UserRound, LogOut, FlaskConical } from "lucide-react";
+import { Radar, ShieldBan, Settings, Activity, Trophy, ScrollText, Router, Shuffle, Wallet, Layers, ListChecks, UserRound, LogOut, FlaskConical, WalletCards } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -24,6 +24,7 @@ import { OpenTradesBanner } from "@/components/open-trades-banner";
 
 const NAV_ITEMS = [
   { href: "/", label: "Traders", icon: Radar },
+  { href: "/live-wallets", label: "Live Wallet", icon: WalletCards },
   { href: "/wallets", label: "Wallets", icon: Wallet },
   { href: "/lists", label: "Lists", icon: ListChecks },
   { href: "/profiles", label: "Profiles", icon: Layers },

@@ -282,6 +282,35 @@ async function reauthenticateWithCode(userId, password, code, ip) {
   return re;
 }
 
+/** Whether this account has two-factor sign-in turned on. */
+export async function isTwoFactorEnabled(userId) {
+  const user = await User.findById(userId, { "totp.enabled": 1 }).lean();
+  return !!user?.totp?.enabled;
+}
+
+/**
+ * Asks a signed-in user for a fresh authenticator code before something sensitive (viewing a wallet's private key).
+ * Authenticator codes only - a recovery code is never accepted here. Throttled like the sign-in code step, and a code
+ * already used (at sign-in, say) is refused: wait for the next one.
+ * @returns {Promise<AuthFailure | { ok: true }>}
+ */
+export async function verifyTwoFactorStepUp(userId, code, { ip = "" } = {}) {
+  const { retryAfterMs, rows } = await beginAttempt([
+    [twoFactorKey(userId), MAX_FAILURES_PER_USER],
+    [ipKey(ip), MAX_FAILURES_PER_IP],
+  ]);
+  if (retryAfterMs > 0) return lockedResult(retryAfterMs);
+
+  const user = await User.findById(userId).select("+totp.secretEnc");
+  if (!user?.totp?.enabled) {
+    await LoginFailure.deleteMany({ _id: { $in: rows.map((r) => r._id) } });
+    return { ok: false, status: 403, error: "Turn on two-factor sign-in (Account page) first." };
+  }
+  if ((await consumeSecondFactor(user, code, { allowRecovery: false })) !== "totp") return { ok: false, status: 401, error: "Invalid code." };
+  await LoginFailure.deleteMany({ _id: { $in: rows.map((r) => r._id) } });
+  return { ok: true };
+}
+
 export async function getTwoFactorStatus(userId) {
   const user = await User.findById(userId).select("+totp.recoveryHashes").lean();
   return {

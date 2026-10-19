@@ -86,7 +86,7 @@ async function rpcUrls() {
 }
 
 /** JSON-RPC call, rotating endpoints and failing over to the next one on any error. */
-async function rpc(method, params) {
+export async function rpc(method, params) {
   const urls = await rpcUrls();
   let lastErr;
   for (let i = 0; i < Math.min(3, urls.length); i++) {
