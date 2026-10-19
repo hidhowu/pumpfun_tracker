@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connectDb } from "@/db/connect";
 import { authenticate } from "@/db/authService";
 import { endSession, startSession } from "@/lib/auth/session";
-import { clientIp, isSessionSecretConfigured } from "@/lib/auth/token";
+import { clientIp, isSessionSecretConfigured, issueTwoFactorChallenge } from "@/lib/auth/token";
 
 /**
  * Body: { username, password }. The only API route reachable without a
@@ -29,6 +29,11 @@ export async function POST(request: NextRequest) {
       );
     }
     return NextResponse.json({ error: "Invalid username or password." }, { status: 401 });
+  }
+
+  // Two-factor on: the password alone gets no session. Hand back a short-lived challenge to present with the code.
+  if (result.twoFactor) {
+    return NextResponse.json({ twoFactor: true, challenge: issueTwoFactorChallenge(result.user.id) });
   }
 
   // Always a brand-new session on sign-in, never a reused one (session fixation).

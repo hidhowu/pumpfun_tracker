@@ -266,6 +266,8 @@ export type GlobalSettings = {
   _id: string;
   profileId: string;
   defaultMuted: boolean;
+  /** Kill switch: while true no NEW buy is filled in any profile or wallet (exits keep working). */
+  tradingPaused: boolean;
   defaultAllocationUsd: number;
   defaultTradeSizeUsd: number;
   defaultDustBuyUsd: number;

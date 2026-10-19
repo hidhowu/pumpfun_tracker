@@ -27,12 +27,17 @@ const TrailingStopSchema = new Schema({
  */
 const WalletSchema = new Schema({
   name: { type: String, required: true },
+  // Only simulation wallets/profiles can be reset, topped up, forked or deleted - see db/mode.js.
+  mode: { type: String, enum: ["simulation", "live"], default: "simulation", immutable: true },
   startingBalanceUsd: { type: Number, required: true },
   balanceUsd: { type: Number, required: true }, // current available balance, always >= 0
   realizedPnlUsd: { type: Number, default: 0 }, // lifetime cumulative, across every trader ever assigned
   openPositionCount: { type: Number, default: 0 },
   closedPositionCount: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now },
+  // Keys of the balance/counter changes already applied to this wallet (newest 400) - what makes a re-run of a half-finished
+  // fill safe: each change is applied once per key, atomically with the change itself (see db/simulation/atomic.js).
+  appliedOps: { type: [String], default: [], select: false },
 
   // UTC date string ("YYYY-MM-DD", see db/simulation/snapshot.js's
   // todayUtcString) of the last automatic daily balance reset applied to

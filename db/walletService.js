@@ -9,14 +9,19 @@ import { WalletHourlySnapshot } from "./models/WalletHourlySnapshot.js";
 import { todayUtcString } from "./simulation/snapshot.js";
 import { BacktestView } from "./models/BacktestView.js";
 import { BacktestRunTrader } from "./models/BacktestRunTrader.js";
+import { validateField, validateSettingsPatch, validateTrailingStops } from "./settingsLimits.js";
+import { assertWalletSimulation, isLive, LiveModeError } from "./mode.js";
 
 /** Creates a Wallet with its starting balance as both startingBalanceUsd (reference) and balanceUsd (current, spendable). */
 export async function createWallet({ name, startingBalanceUsd, settings = {} }) {
+  const balance = validateField("startingBalanceUsd", startingBalanceUsd);
+  if (!balance.ok || !(startingBalanceUsd > 0)) throw new Error("startingBalanceUsd must be a positive number within range");
+  const clean = validateWalletSettings(settings);
   return Wallet.create({
     name,
     startingBalanceUsd,
     balanceUsd: startingBalanceUsd,
-    settings,
+    settings: clean,
     lastAutoResetDate: todayUtcString(), // starts with a full balance - first auto reset (if enabled) is tomorrow
   });
 }
@@ -25,9 +30,9 @@ export async function renameWallet(id, name) {
   return Wallet.findByIdAndUpdate(id, { $set: { name } }, { returnDocument: "after" });
 }
 
-// Every settable Wallet.settings field and how to validate it - anything
+// Every settable Wallet.settings field and how to validate it (ranges live in db/settingsLimits.js) - anything
 // else in a patch is ignored rather than written blindly into the document.
-const NON_NEGATIVE_NUMBER_FIELDS = [
+const NUMBER_FIELDS = [
   "tradeSizeUsd",
   "dustBuyUsd",
   "dustSellFractionPercent",
@@ -36,32 +41,40 @@ const NON_NEGATIVE_NUMBER_FIELDS = [
   "pumpFeePercent",
   "jitoFeeUsd",
 ];
-const NULLABLE_NUMBER_FIELDS = ["stopLossPercent", "takeProfitPercent"]; // null = disabled
+// null = disabled
+const NULLABLE_NUMBER_FIELDS = ["stopLossPercent", "takeProfitPercent"];
 const BOOLEAN_FIELDS = ["autoResetBalanceDaily"];
 
-function isValidTrailingStops(value) {
-  return Array.isArray(value) && value.every((r) => r && Number.isFinite(r.armPercent) && Number.isFinite(r.exitPercent));
+/** Validates a settings object (or partial patch) and returns only the accepted keys. THROWS an Error naming the first bad setting - callers turn that into a 400. */
+export function validateWalletSettings(patch) {
+  const checked = validateSettingsPatch(patch, [...NUMBER_FIELDS, ...NULLABLE_NUMBER_FIELDS], { nullable: NULLABLE_NUMBER_FIELDS });
+  if (!checked.ok) throw new Error(checked.error);
+  const out = { ...checked.values };
+  for (const key of BOOLEAN_FIELDS) {
+    if (key in patch && patch[key] !== undefined) {
+      if (typeof patch[key] !== "boolean") throw new Error(`${key} must be true or false`);
+      out[key] = patch[key];
+    }
+  }
+  if ("trailingStops" in patch) {
+    const rules = validateTrailingStops(patch.trailingStops);
+    if (!rules.ok) throw new Error(rules.error);
+    out.trailingStops = rules.value;
+  }
+  return out;
 }
 
-/** Body is a partial patch of Wallet.settings' fields - only provided, valid keys are touched. */
+/** Body is a partial patch of Wallet.settings' fields - only provided, valid keys are touched; an invalid value throws (see validateWalletSettings). */
 export async function updateWalletSettings(id, patch) {
+  const clean = validateWalletSettings(patch);
   const update = {};
-  for (const key of NON_NEGATIVE_NUMBER_FIELDS) {
-    if (typeof patch[key] === "number" && Number.isFinite(patch[key])) update[`settings.${key}`] = Math.max(0, patch[key]);
-  }
-  for (const key of NULLABLE_NUMBER_FIELDS) {
-    if (patch[key] === null) update[`settings.${key}`] = null;
-    else if (typeof patch[key] === "number" && Number.isFinite(patch[key])) update[`settings.${key}`] = patch[key];
-  }
-  for (const key of BOOLEAN_FIELDS) {
-    if (typeof patch[key] === "boolean") update[`settings.${key}`] = patch[key];
-  }
-  if (isValidTrailingStops(patch.trailingStops)) update["settings.trailingStops"] = patch.trailingStops;
+  for (const [key, value] of Object.entries(clean)) update[`settings.${key}`] = value;
 
   // Turning the daily reset ON shouldn't wipe today's balance mid-day: mark
   // today as already handled, so the first automatic reset is the next
   // day boundary. Turning it OFF clears the marker.
   if (patch.autoResetBalanceDaily === true) {
+    await assertWalletSimulation(id, "The daily balance reset");
     const current = await Wallet.findById(id, { "settings.autoResetBalanceDaily": 1 }).lean();
     if (current && !current.settings?.autoResetBalanceDaily) update.lastAutoResetDate = todayUtcString();
   } else if (patch.autoResetBalanceDaily === false) {
@@ -74,6 +87,7 @@ export async function updateWalletSettings(id, patch) {
 
 /** Deletes a wallet and every document scoped to it - mirrors db/profileService.js's deleteProfile cascade. */
 export async function deleteWallet(id) {
+  await assertWalletSimulation(id, "Deleting a wallet");
   await Promise.all([
     WalletTrader.deleteMany({ walletId: id }),
     WalletPosition.deleteMany({ walletId: id }),
@@ -143,6 +157,7 @@ export async function removeTradersFromWallet(walletId, addresses) {
  * they were) - only trade history and the numbers derived from it are wiped.
  */
 export async function resetWallet(id) {
+  await assertWalletSimulation(id, "Resetting a wallet");
   await Promise.all([
     WalletPosition.deleteMany({ walletId: id }),
     WalletPendingExecution.deleteMany({ walletId: id }),
@@ -183,6 +198,7 @@ export async function resetWallet(id) {
 export async function resetWalletBalance(id) {
   const wallet = await Wallet.findById(id);
   if (!wallet) return null;
+  if (isLive(wallet)) throw new LiveModeError("Resetting a wallet balance");
   return Wallet.findOneAndUpdate(
     { _id: id },
     { $set: { balanceUsd: wallet.startingBalanceUsd } },
@@ -220,6 +236,7 @@ function stripDocMeta(doc) {
 export async function duplicateWallet(sourceId, { name, startingBalanceUsd, copySettings, copyTraders, copyTrades }) {
   const source = await Wallet.findById(sourceId).lean();
   if (!source) throw new Error("Source wallet not found");
+  if (copyTrades) await assertWalletSimulation(sourceId, "Copying a wallet's trades");
 
   const wallet = await Wallet.create({
     name,
@@ -358,6 +375,13 @@ export async function createWalletsFromBacktestViews(runId, { viewIds, settingsF
       if (useWalletMoneySettings) startingBalanceUsd = source.startingBalanceUsd;
     }
 
+    try {
+      validateWalletSettings(settings);
+      if (!(validateField("startingBalanceUsd", startingBalanceUsd).ok && startingBalanceUsd > 0)) throw new Error("starting balance is out of range");
+    } catch (err) {
+      skipped.push({ viewId: String(view._id), name: view.name, reason: err instanceof Error ? err.message : "Invalid settings" });
+      continue;
+    }
     const wallet = await createWallet({ name: view.name, startingBalanceUsd, settings });
     const result = await addTradersToWallet(wallet._id, addresses, { trackNew: true });
     created.push({

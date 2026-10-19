@@ -6,6 +6,7 @@ import { PendingExecution } from "../models/PendingExecution.js";
 import { resolveTraderSettings } from "../settings.js";
 import { getPrice } from "../pumpFunApi.js";
 import { ensureTraderInitialized } from "./init.js";
+import { logEvent } from "../systemLog.js";
 
 const CLOSING_OUT_FRACTION_PERCENT = 95;
 
@@ -61,6 +62,7 @@ async function evaluateBuy(profileId, profileTrader, trade, settings) {
       action: "buy",
       triggerAt,
       sourceSignature: trade.signature,
+      idemKey: `buy:${profileTrader.traderAddress}:${trade.mint}:${trade.signature}`,
     });
   } catch (err) {
     // Unique index on (profileId, traderAddress, mint, action) where
@@ -109,6 +111,7 @@ async function evaluateSell(profileId, traderAddress, trade, settings) {
       action: "sell",
       triggerAt,
       sourceSignature: trade.signature,
+      idemKey: `sell:${traderAddress}:${trade.mint}:${trade.signature}`,
     });
   } catch (err) {
     if (err?.code !== 11000) throw err; // already queued by a concurrent call - fine
@@ -139,14 +142,22 @@ export async function evaluateRealTrade(trade) {
   let actionedByAny = false;
 
   for (const profile of profiles) {
-    const profileTrader = await ensureTraderInitialized(profile._id, trade.wallet);
-    const settings = await resolveTraderSettings(profile._id, trade.wallet, { profileTrader });
+    try {
+      const profileTrader = await ensureTraderInitialized(profile._id, trade.wallet);
+      const settings = await resolveTraderSettings(profile._id, trade.wallet, { profileTrader });
 
-    const actioned =
-      trade.type === "buy"
-        ? await evaluateBuy(profile._id, profileTrader, trade, settings)
-        : await evaluateSell(profile._id, trade.wallet, trade, settings);
-    if (actioned) actionedByAny = true;
+      const actioned =
+        trade.type === "buy"
+          ? await evaluateBuy(profile._id, profileTrader, trade, settings)
+          : await evaluateSell(profile._id, trade.wallet, trade, settings);
+      if (actioned) actionedByAny = true;
+    } catch (err) {
+      // One profile failing must not drop the signal for all the others.
+      logEvent("trade", `Failed to evaluate ${trade.type} ${trade.signature} for profile ${profile._id}: ${err.message}`, {
+        level: "error",
+        meta: { profileId: String(profile._id), traderAddress: trade.wallet, mint: trade.mint, signature: trade.signature },
+      });
+    }
   }
 
   return actionedByAny;

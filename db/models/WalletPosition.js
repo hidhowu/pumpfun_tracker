@@ -50,6 +50,10 @@ const WalletPositionSchema = new Schema({
   sellJitoFeeUsd: { type: Number, default: null },
   realizedPnlUsd: { type: Number, default: null },
   realizedPnlPercent: { type: Number, default: null },
+
+  // The fixed plan of a close that has started (price, proceeds, fees, who owns it). Whoever stores it first owns the close,
+  // so a crash mid-close is resumed with the SAME numbers and two concurrent exits can't book different ones.
+  pendingClose: { type: Schema.Types.Mixed, default: null },
 });
 
 WalletPositionSchema.index({ walletId: 1, traderAddress: 1, status: 1 });

@@ -10,6 +10,10 @@ export async function POST(request: NextRequest) {
   await connectDb();
   const profileId = request.nextUrl.searchParams.get("profileId");
   if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });
-  const reset = await resetAllTradersSimulation(profileId);
-  return NextResponse.json({ reset });
+  try {
+    const reset = await resetAllTradersSimulation(profileId);
+    return NextResponse.json({ reset });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Failed to reset traders" }, { status: 400 });
+  }
 }

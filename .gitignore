@@ -4,3 +4,10 @@ analysis/
 .env
 .next/
 .gstack/
+.env.*
+!.env.example
+*.pem
+*keypair*.json
+# Local-only scripts, scraped data, proxy lists and logs
+extras/
+.claude/

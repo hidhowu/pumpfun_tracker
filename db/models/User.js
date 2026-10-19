@@ -15,6 +15,18 @@ const UserSchema = new Schema({
   passwordHash: { type: String, required: true, select: false },
   passwordChangedAt: { type: Date, default: Date.now },
   lastLoginAt: { type: Date, default: null },
+  // Two-factor sign-in (authenticator app, TOTP). The secret is AES-GCM encrypted (db/auth/totp.js) and, like the recovery
+  // code hashes, never selected unless asked for. "pending" is a secret shown during setup that isn't active until the
+  // user proves their app produces valid codes.
+  totp: {
+    enabled: { type: Boolean, default: false },
+    enabledAt: { type: Date, default: null },
+    secretEnc: { type: String, default: null, select: false },
+    pendingSecretEnc: { type: String, default: null, select: false },
+    // Newest time step already accepted: a code from that step or earlier is refused, so a code can't be replayed.
+    lastUsedStep: { type: Number, default: null },
+    recoveryHashes: { type: [String], default: [], select: false },
+  },
   createdAt: { type: Date, default: Date.now },
 });
 

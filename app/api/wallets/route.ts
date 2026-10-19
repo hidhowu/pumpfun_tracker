@@ -28,6 +28,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "startingBalanceUsd must be a positive number" }, { status: 400 });
   }
 
-  const wallet = await createWallet({ name, startingBalanceUsd });
-  return NextResponse.json({ wallet: JSON.parse(JSON.stringify(wallet)) });
+  try {
+    const wallet = await createWallet({ name, startingBalanceUsd });
+    return NextResponse.json({ wallet: JSON.parse(JSON.stringify(wallet)) });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Failed to create wallet" }, { status: 400 });
+  }
 }

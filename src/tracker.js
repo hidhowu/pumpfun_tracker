@@ -626,8 +626,19 @@ export class TrackerService extends EventEmitter {
         try {
           const isNew = await recordTrade(trade);
           if (isNew) {
-            const actioned = await evaluateRealTrade(trade);
-            if (actioned) await markTradeActioned(trade);
+            // The profile and wallet simulations are independent: an error in one must never stop the other from seeing this
+            // signal (it used to - the wallet evaluation below was skipped when the profile one threw, and the trade, already
+            // recorded as seen, was never evaluated again).
+            try {
+              const actioned = await evaluateRealTrade(trade);
+              if (actioned) await markTradeActioned(trade);
+            } catch (evalErr) {
+              this.emit("dbError", { address, signature, error: evalErr });
+              logEvent("tracker", `Failed to evaluate trade ${signature} for profiles: ${evalErr.message}`, {
+                level: "error",
+                meta: { address, signature },
+              });
+            }
             // Wallets are a second, fully independent simulation - same
             // trigger, own try/catch, and its outcome deliberately does NOT
             // feed into `actioned`/markTradeActioned above (that's the

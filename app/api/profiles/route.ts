@@ -3,6 +3,7 @@ import { connectDb } from "@/db/connect";
 import { requireApiSession } from "@/lib/auth/session";
 import { Profile } from "@/db/models/Profile";
 import { createProfile } from "@/db/profileService";
+import { isObjectIdString } from "@/db/settingsLimits";
 
 export async function GET() {
   const denied = await requireApiSession();
@@ -32,9 +33,13 @@ export async function POST(request: NextRequest) {
   if (body.mode === "clone" && !body.sourceProfileId) {
     return NextResponse.json({ error: "sourceProfileId is required when mode is 'clone'" }, { status: 400 });
   }
+  // Must be a plain id string: an object here ({"$ne": null}) would otherwise reach the Mongo filter as an operator.
+  if (body.sourceProfileId != null && !isObjectIdString(body.sourceProfileId)) {
+    return NextResponse.json({ error: "sourceProfileId must be a valid profile id" }, { status: 400 });
+  }
 
   try {
-    const profile = await createProfile({ name, mode: body.mode, sourceProfileId: body.sourceProfileId });
+    const profile = await createProfile({ name: name.slice(0, 100), mode: body.mode, sourceProfileId: body.sourceProfileId ?? undefined });
     return NextResponse.json({ profile: JSON.parse(JSON.stringify(profile)) });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Failed to create profile" }, { status: 400 });

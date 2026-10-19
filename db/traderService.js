@@ -10,6 +10,7 @@ import { resolveTraderSettings } from "./settings.js";
 import { ensureTraderInitialized } from "./simulation/init.js";
 import { closeAllPositionsForTrader } from "./simulation/executor.js";
 import { closeAllWalletPositionsForTrader } from "./simulation/walletExecutor.js";
+import { assertProfileSimulation } from "./mode.js";
 
 /**
  * A Solana address is a base58-encoded 32-byte public key. Rejecting
@@ -156,6 +157,7 @@ export async function setTraderSimSettings(profileId, address, patch) {
 
 /** Manual balance top-up/deduction for one trader within one profile, with an audit trail (db/models/BalanceAdjustment.js). */
 export async function adjustBalance(profileId, address, amountUsd, reason = "") {
+  await assertProfileSimulation(profileId, "Adjusting a balance");
   let profileTrader = await ProfileTrader.findOne({ profileId, traderAddress: address });
   if (!profileTrader) profileTrader = await ensureTraderInitialized(profileId, address);
 
@@ -180,6 +182,7 @@ export async function adjustBalance(profileId, address, amountUsd, reason = "") 
  * itself, and only within THIS profile (other profiles' state is untouched).
  */
 export async function resetTraderSimulation(profileId, address) {
+  await assertProfileSimulation(profileId, "Resetting a trader");
   const settings = await resolveTraderSettings(profileId, address);
 
   await Promise.all([
@@ -214,6 +217,7 @@ export async function resetTraderSimulation(profileId, address) {
 
 /** Resets simulation state for every active (non-blacklisted) trader, within one profile. Returns the list of reset addresses. */
 export async function resetAllTradersSimulation(profileId) {
+  await assertProfileSimulation(profileId, "Resetting all traders");
   const traders = await Trader.find({ status: "active" }, { address: 1 }).lean();
   for (const trader of traders) {
     await resetTraderSimulation(profileId, trader.address);

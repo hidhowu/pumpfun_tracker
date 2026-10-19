@@ -18,6 +18,10 @@ const SystemSettingsSchema = new Schema({
   key: { type: String, default: "system", unique: true },
   defaultMuted: { type: Boolean, default: false },
   riskCheckIntervalSeconds: { type: Number, default: 7 },
+  // Kill switch: while true no NEW buy is filled anywhere (every profile and wallet). Exits and sells keep working so
+  // open positions can still be closed.
+  tradingPaused: { type: Boolean, default: false },
+  tradingPausedAt: { type: Date, default: null },
 });
 
 export const SystemSettings = models.SystemSettings || model("SystemSettings", SystemSettingsSchema);

@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Trader } from "../models/Trader.js";
 import { Wallet } from "../models/Wallet.js";
 import { WalletTrader } from "../models/WalletTrader.js";
@@ -6,11 +7,14 @@ import { WalletPendingExecution } from "../models/WalletPendingExecution.js";
 import { getPrice, prefetchPrices, PRICE_MAX_AGE } from "../pumpFunApi.js";
 import { logEvent } from "../systemLog.js";
 import { computeTradeFees, realizedCounterDeltaOnClose } from "../fees.js";
+import { applyOnce, wasApplied, savePlan, leaseExpiry, failOrRetry, reapStale } from "./atomic.js";
+import { isTradingPaused } from "./guards.js";
 
 async function markSkipped(pending, reason) {
   pending.status = "skipped";
   pending.skipReason = reason;
   pending.processedAt = new Date();
+  pending.leaseUntil = null;
   await pending.save();
   logEvent("trade", `Skipped wallet ${pending.action} of ${pending.mint} for ${pending.traderAddress} (wallet ${pending.walletId}): ${reason}`, {
     level: "warn",
@@ -31,6 +35,7 @@ async function retryWithoutPrice(pending) {
   }
   pending.attempts = (pending.attempts || 0) + 1;
   pending.status = "pending";
+  pending.leaseUntil = null;
   pending.triggerAt = new Date(Date.now() + 1000 * pending.attempts);
   await pending.save();
 }
@@ -38,6 +43,7 @@ async function retryWithoutPrice(pending) {
 async function markDone(pending) {
   pending.status = "done";
   pending.processedAt = new Date();
+  pending.leaseUntil = null;
   await pending.save();
 }
 
@@ -48,65 +54,84 @@ function computeUnrealized(currentValueUsd, totalCost) {
 }
 
 /**
- * Wallet-scoped mirror of db/simulation/executor.js's executeBuy, with one
- * structural difference: the wallet's balance can NEVER go negative. That
- * cap is enforced with an atomic conditional decrement -
- * `findOneAndUpdate({balanceUsd: {$gte: totalCost}}, {$inc: {balanceUsd: -totalCost}})`
- * - not a plain read-then-check-then-write, for the exact race-safety
- * reason db/simulation/executor.js's closePosition already documents in
- * this codebase (two concurrent claims could both read a stale balance and
- * both proceed). A null result means insufficient balance right now, so
- * this trade is silently skipped for THIS wallet only - it never touches
- * the trader's own per-Profile simulation, a completely separate
- * collection/balance.
+ * Wallet-scoped mirror of db/simulation/executor.js's executeBuy. The wallet's balance can NEVER go negative: the debit is
+ * an atomic conditional decrement (`balanceUsd >= totalCost` in the filter), not a read-then-check-then-write.
+ *
+ * The fill is crash-safe (see db/simulation/atomic.js): the plan - price, size, fees and the new position's id - is saved on
+ * the queue entry first, then three idempotent steps run (debit + counter, create the position under the planned id,
+ * update the trader's counters). If the process dies between steps, the entry is re-queued and the same plan finishes.
+ * A null debit means insufficient balance right now, so this trade is skipped for THIS
+ * wallet only - it never touches the trader's own per-Profile simulation, a completely separate collection/balance.
  */
 async function executeWalletBuy(pending) {
-  const trader = await Trader.findOne({ address: pending.traderAddress });
-  if (!trader || trader.status !== "active") return markSkipped(pending, "trader inactive or blacklisted");
-
-  const walletTrader = await WalletTrader.findOne({ walletId: pending.walletId, traderAddress: pending.traderAddress });
-  if (!walletTrader) return markSkipped(pending, "trader no longer assigned to this wallet (race)");
-  if (walletTrader.everBoughtMints.includes(pending.mint)) return markSkipped(pending, "already bought this mint on this wallet (race)");
-
-  const existingOpen = await WalletPosition.exists({ walletId: pending.walletId, traderAddress: trader.address, mint: pending.mint, status: "open" });
-  if (existingOpen) return markSkipped(pending, "position already open on this wallet (race)");
-
   const walletDoc = await Wallet.findById(pending.walletId);
   if (!walletDoc) return markSkipped(pending, "wallet no longer exists");
 
-  const price = await getPrice(pending.mint, { fresh: true });
-  if (!price?.priceUsd) return retryWithoutPrice(pending);
+  let fill = pending.fill;
+  if (!fill) {
+    // ---- decide whether to buy at all, and freeze the numbers. Nothing has moved yet.
+    if (await isTradingPaused()) return markSkipped(pending, "trading is paused (kill switch)");
 
-  const spendUsd = walletDoc.settings.tradeSizeUsd;
-  const buyFees = computeTradeFees(spendUsd, walletDoc.settings);
-  const feeUsd = buyFees.totalFeeUsd;
-  const totalCost = spendUsd + feeUsd;
+    const trader = await Trader.findOne({ address: pending.traderAddress });
+    if (!trader || trader.status !== "active") return markSkipped(pending, "trader inactive or blacklisted");
 
-  // The buy fee is booked into realized P&L right away, in the same atomic
-  // write as the debit (see db/fees.js) - it's money already gone.
-  const debited = await Wallet.findOneAndUpdate(
+    const walletTrader = await WalletTrader.findOne({ walletId: pending.walletId, traderAddress: pending.traderAddress });
+    if (!walletTrader) return markSkipped(pending, "trader no longer assigned to this wallet (race)");
+    if (walletTrader.everBoughtMints.includes(pending.mint)) return markSkipped(pending, "already bought this mint on this wallet (race)");
+
+    const existingOpen = await WalletPosition.exists({ walletId: pending.walletId, traderAddress: trader.address, mint: pending.mint, status: "open" });
+    if (existingOpen) return markSkipped(pending, "position already open on this wallet (race)");
+
+    const price = await getPrice(pending.mint, { fresh: true });
+    if (!price?.priceUsd) return retryWithoutPrice(pending);
+
+    const spendUsd = walletDoc.settings.tradeSizeUsd;
+    const buyFees = computeTradeFees(spendUsd, walletDoc.settings);
+    const totalCost = spendUsd + buyFees.totalFeeUsd;
+
+    fill = await savePlan(WalletPendingExecution, pending, {
+      positionId: String(new mongoose.Types.ObjectId()),
+      priceUsd: price.priceUsd,
+      spendUsd,
+      feeUsd: buyFees.totalFeeUsd,
+      pumpFeeUsd: buyFees.pumpFeeUsd,
+      jitoFeeUsd: buyFees.jitoFeeUsd,
+      totalCost,
+      tokenAmount: spendUsd / price.priceUsd,
+    });
+  }
+
+  const { spendUsd, feeUsd, totalCost } = fill;
+  const opKey = `buy:${pending._id}`;
+
+  // ---- step 1: debit. The buy fee is booked into realized P&L right away, in the same write (see db/fees.js), and the
+  // open-position counter moves with it. The filter makes the balance a hard limit.
+  const debited = await applyOnce(
+    Wallet,
     { _id: pending.walletId, balanceUsd: { $gte: totalCost } },
-    { $inc: { balanceUsd: -totalCost, realizedPnlUsd: -feeUsd } },
-    { returnDocument: "after" }
+    opKey,
+    { $inc: { balanceUsd: -totalCost, realizedPnlUsd: -feeUsd, openPositionCount: 1 } }
   );
-  if (!debited) return markSkipped(pending, "insufficient wallet balance");
+  if (!debited && !(await wasApplied(Wallet, { _id: pending.walletId }, opKey))) {
+    return markSkipped(pending, "insufficient wallet balance");
+  }
 
-  const tokenAmount = spendUsd / price.priceUsd;
+  // ---- step 2: the position, under the id fixed in the plan (a repeat finds it already there).
   const initialUnrealized = computeUnrealized(spendUsd, totalCost);
-
   try {
     await WalletPosition.create({
+      _id: fill.positionId,
       walletId: pending.walletId,
-      traderAddress: trader.address,
+      traderAddress: pending.traderAddress,
       mint: pending.mint,
       status: "open",
-      tokenAmount,
+      tokenAmount: fill.tokenAmount,
       costBasisUsd: spendUsd,
       buyFeeUsd: feeUsd,
-      buyPumpFeeUsd: buyFees.pumpFeeUsd,
-      buyJitoFeeUsd: buyFees.jitoFeeUsd,
+      buyPumpFeeUsd: fill.pumpFeeUsd,
+      buyJitoFeeUsd: fill.jitoFeeUsd,
       buyFeeRealizedAtOpen: true,
-      buyPriceUsd: price.priceUsd,
+      buyPriceUsd: fill.priceUsd,
       openTriggerSignature: pending.sourceSignature,
       maxValueUsd: spendUsd,
       maxUnrealizedPnlUsd: initialUnrealized.unrealizedUsd,
@@ -116,93 +141,123 @@ async function executeWalletBuy(pending) {
       minUnrealizedPnlPercent: initialUnrealized.unrealizedPercent,
     });
   } catch (err) {
-    // The balance was already debited above - if creating the position
-    // failed (e.g. lost a race on the unique-open-position index), refund
-    // it, since this buy never actually happened for the wallet.
-    await Wallet.updateOne({ _id: pending.walletId }, { $inc: { balanceUsd: totalCost, realizedPnlUsd: feeUsd } });
-    if (err?.code === 11000) return markSkipped(pending, "position already open on this wallet (lost the race)");
-    throw err;
+    if (err?.code !== 11000) throw err;
+    if (!err.keyPattern?._id) {
+      // A DIFFERENT position is already open for this trader+mint (lost a race on the unique open-position index): this
+      // buy never happened, so give the money back - once.
+      await applyOnce(Wallet, { _id: pending.walletId }, `refund:${pending._id}`, {
+        $inc: { balanceUsd: totalCost, realizedPnlUsd: feeUsd, openPositionCount: -1 },
+      });
+      return markSkipped(pending, "position already open on this wallet (lost the race)");
+    }
+    // else: our own position already exists - this is a resumed fill, carry on
   }
 
+  // ---- step 3: the trader's counters. Guarded by "mint not yet recorded", so it applies once.
   await WalletTrader.updateOne(
-    { _id: walletTrader._id },
+    { walletId: pending.walletId, traderAddress: pending.traderAddress, everBoughtMints: { $ne: pending.mint } },
     {
       $inc: { openPositionCount: 1, realizedPnlUsd: -feeUsd },
       $addToSet: { everBoughtMints: pending.mint },
       $set: { lastActionAt: new Date() },
     }
   );
-  await Wallet.updateOne({ _id: pending.walletId }, { $inc: { openPositionCount: 1 } });
 
   await markDone(pending);
-  logEvent("trade", `[wallet] Bought ${pending.mint} for ${trader.address}: $${spendUsd.toFixed(2)} + $${feeUsd.toFixed(2)} fees @ $${price.priceUsd}`, {
-    meta: { walletId: String(pending.walletId), traderAddress: trader.address, mint: pending.mint, spendUsd, feeUsd, priceUsd: price.priceUsd },
+  logEvent("trade", `[wallet] Bought ${pending.mint} for ${pending.traderAddress}: $${spendUsd.toFixed(2)} + $${feeUsd.toFixed(2)} fees @ $${fill.priceUsd}`, {
+    meta: { walletId: String(pending.walletId), traderAddress: pending.traderAddress, mint: pending.mint, spendUsd, feeUsd, priceUsd: fill.priceUsd },
   });
 }
 
-/** Wallet-scoped mirror of db/simulation/executor.js's closePosition - see that function's comment for why findOneAndUpdate with a status guard (not read-then-write) is the actual concurrency guarantee here too. */
-async function closeWalletPosition(positionId, { priceUsd, fees, closeReason, closeSignature }) {
-  const position = await WalletPosition.findOne({ _id: positionId, status: "open" });
-  if (!position) return null;
-
+/**
+ * Freezes the numbers of a close: what the position sells for at `priceUsd`, the fees, the realized P&L, and how it moves the
+ * running counters. Stored on the position (pendingClose) before anything is paid out, so a resumed close books exactly this.
+ */
+function planClose(position, { priceUsd, fees, closeReason, closeSignature, pendingId }) {
   const proceedsUsd = position.tokenAmount * priceUsd;
   const sellFees = computeTradeFees(proceedsUsd, fees);
-  const feeUsd = sellFees.totalFeeUsd;
   const totalCost = position.costBasisUsd + position.buyFeeUsd;
-  const netProceeds = proceedsUsd - feeUsd;
+  const netProceeds = proceedsUsd - sellFees.totalFeeUsd;
   const realizedPnlUsd = netProceeds - totalCost;
-  const realizedPnlPercent = totalCost > 0 ? (realizedPnlUsd / totalCost) * 100 : 0;
-
   const closeUnrealized = computeUnrealized(proceedsUsd, totalCost);
-  const peakIsNow = proceedsUsd > position.maxValueUsd;
-  const troughIsNow = position.minValueUsd === null || proceedsUsd < position.minValueUsd;
+  return {
+    pendingId: String(pendingId),
+    closeReason,
+    closeSignature,
+    priceUsd,
+    proceedsUsd,
+    feeUsd: sellFees.totalFeeUsd,
+    pumpFeeUsd: sellFees.pumpFeeUsd,
+    jitoFeeUsd: sellFees.jitoFeeUsd,
+    netProceeds,
+    realizedPnlUsd,
+    realizedPnlPercent: totalCost > 0 ? (realizedPnlUsd / totalCost) * 100 : 0,
+    realizedDelta: realizedCounterDeltaOnClose(position, realizedPnlUsd),
+    // The closing price is one more price sample for the peak/trough trackers.
+    peak:
+      proceedsUsd > position.maxValueUsd
+        ? { maxValueUsd: proceedsUsd, maxUnrealizedPnlUsd: closeUnrealized.unrealizedUsd, maxUnrealizedPnlPercent: closeUnrealized.unrealizedPercent }
+        : null,
+    trough:
+      position.minValueUsd === null || position.minValueUsd === undefined || proceedsUsd < position.minValueUsd
+        ? { minValueUsd: proceedsUsd, minUnrealizedPnlUsd: closeUnrealized.unrealizedUsd, minUnrealizedPnlPercent: closeUnrealized.unrealizedPercent }
+        : null,
+  };
+}
+
+/**
+ * Pays out a planned close in idempotent steps, flipping the position to "closed" LAST - so "closed" always means "fully
+ * booked", and a position still "open" with a pendingClose plan is a close that can be resumed (executeWalletSell does).
+ * Sells only increase the balance, so the credit needs no conditional guard.
+ */
+async function bookWalletClose(position, plan) {
+  const opKey = `close:${position._id}`;
+  await applyOnce(Wallet, { _id: position.walletId }, opKey, {
+    $inc: { balanceUsd: plan.netProceeds, realizedPnlUsd: plan.realizedDelta, closedPositionCount: 1, openPositionCount: -1 },
+  });
+  await applyOnce(WalletTrader, { walletId: position.walletId, traderAddress: position.traderAddress }, opKey, {
+    $inc: { openPositionCount: -1, closedPositionCount: 1, realizedPnlUsd: plan.realizedDelta },
+    $set: { lastActionAt: new Date() },
+  });
 
   const updated = await WalletPosition.findOneAndUpdate(
-    { _id: positionId, status: "open" },
+    { _id: position._id, status: "open" },
     {
       $set: {
         status: "closed",
         closedAt: new Date(),
-        closeReason,
-        closeTriggerSignature: closeSignature,
-        sellPriceUsd: priceUsd,
-        proceedsUsd,
-        sellFeeUsd: feeUsd,
-        sellPumpFeeUsd: sellFees.pumpFeeUsd,
-        sellJitoFeeUsd: sellFees.jitoFeeUsd,
-        realizedPnlUsd,
-        realizedPnlPercent,
-        ...(peakIsNow
-          ? { maxValueUsd: proceedsUsd, maxUnrealizedPnlUsd: closeUnrealized.unrealizedUsd, maxUnrealizedPnlPercent: closeUnrealized.unrealizedPercent }
-          : {}),
-        ...(troughIsNow
-          ? { minValueUsd: proceedsUsd, minUnrealizedPnlUsd: closeUnrealized.unrealizedUsd, minUnrealizedPnlPercent: closeUnrealized.unrealizedPercent }
-          : {}),
+        closeReason: plan.closeReason,
+        closeTriggerSignature: plan.closeSignature,
+        sellPriceUsd: plan.priceUsd,
+        proceedsUsd: plan.proceedsUsd,
+        sellFeeUsd: plan.feeUsd,
+        sellPumpFeeUsd: plan.pumpFeeUsd,
+        sellJitoFeeUsd: plan.jitoFeeUsd,
+        realizedPnlUsd: plan.realizedPnlUsd,
+        realizedPnlPercent: plan.realizedPnlPercent,
+        pendingClose: null,
+        ...(plan.peak || {}),
+        ...(plan.trough || {}),
       },
     },
     { returnDocument: "after" }
   );
-  if (!updated) return null; // lost the race between the read above and this write
-
-  // Sells only ever increase balance - a plain atomic $inc is sufficient
-  // here (unlike the buy-side debit, there is no way this can push the
-  // balance negative, so no conditional guard is needed).
-  const realizedDelta = realizedCounterDeltaOnClose(updated, realizedPnlUsd);
-  await Wallet.updateOne(
-    { _id: updated.walletId },
-    { $inc: { balanceUsd: netProceeds, realizedPnlUsd: realizedDelta, closedPositionCount: 1, openPositionCount: -1 } }
-  );
-  await WalletTrader.updateOne(
-    { walletId: updated.walletId, traderAddress: updated.traderAddress },
-    { $inc: { openPositionCount: -1, closedPositionCount: 1, realizedPnlUsd: realizedDelta }, $set: { lastActionAt: new Date() } }
-  );
-
-  logEvent(
-    "trade",
-    `[wallet] Closed ${updated.mint} for ${updated.traderAddress}: ${closeReason} pnl=$${realizedPnlUsd.toFixed(2)} (${realizedPnlPercent.toFixed(1)}%)`,
-    { meta: { walletId: String(updated.walletId), traderAddress: updated.traderAddress, mint: updated.mint, closeReason, realizedPnlUsd, realizedPnlPercent } }
-  );
-
+  if (updated) {
+    logEvent(
+      "trade",
+      `[wallet] Closed ${updated.mint} for ${updated.traderAddress}: ${plan.closeReason} pnl=$${plan.realizedPnlUsd.toFixed(2)} (${plan.realizedPnlPercent.toFixed(1)}%)`,
+      {
+        meta: {
+          walletId: String(updated.walletId),
+          traderAddress: updated.traderAddress,
+          mint: updated.mint,
+          closeReason: plan.closeReason,
+          realizedPnlUsd: plan.realizedPnlUsd,
+          realizedPnlPercent: plan.realizedPnlPercent,
+        },
+      }
+    );
+  }
   return updated;
 }
 
@@ -216,21 +271,47 @@ async function executeWalletSell(pending) {
     mint: pending.mint,
     status: "open",
   });
-  if (!position) return markSkipped(pending, "no open position on this wallet (race - already closed)");
+  if (!position) {
+    // A resumed sell whose position is already fully closed is simply finished.
+    const finished = pending.fill?.positionId && (await WalletPosition.exists({ _id: pending.fill.positionId, status: "closed" }));
+    return finished ? markDone(pending) : markSkipped(pending, "no open position on this wallet (race - already closed)");
+  }
 
   const walletDoc = await Wallet.findById(pending.walletId);
   if (!walletDoc) return markSkipped(pending, "wallet no longer exists");
 
-  const price = await getPrice(pending.mint, { fresh: true });
-  if (!price?.priceUsd) return retryWithoutPrice(pending);
+  await savePlan(WalletPendingExecution, pending, { positionId: String(position._id) });
 
-  await closeWalletPosition(position._id, {
-    priceUsd: price.priceUsd,
-    fees: walletDoc.settings,
-    closeReason: pending.closeReason || "trader_sell",
-    closeSignature: pending.closeReason && pending.closeReason !== "trader_sell" ? null : pending.sourceSignature,
-  });
+  let plan = position.pendingClose;
+  if (plan && plan.pendingId !== String(pending._id)) {
+    // Someone else started closing this position. If that entry died for good, take the close over; otherwise leave it to them.
+    const owner = await WalletPendingExecution.findById(plan.pendingId, { status: 1 }).lean();
+    if (owner && (owner.status === "pending" || owner.status === "processing")) return markSkipped(pending, "another exit is already closing this position");
+    await WalletPosition.updateOne({ _id: position._id, status: "open", "pendingClose.pendingId": plan.pendingId }, { $set: { pendingClose: null } });
+    plan = null;
+  }
 
+  if (!plan) {
+    const price = await getPrice(pending.mint, { fresh: true });
+    if (!price?.priceUsd) return retryWithoutPrice(pending);
+
+    const fresh = planClose(position, {
+      priceUsd: price.priceUsd,
+      fees: walletDoc.settings,
+      closeReason: pending.closeReason || "trader_sell",
+      closeSignature: pending.closeReason && pending.closeReason !== "trader_sell" ? null : pending.sourceSignature,
+      pendingId: pending._id,
+    });
+    const claimed = await WalletPosition.findOneAndUpdate(
+      { _id: position._id, status: "open", pendingClose: null },
+      { $set: { pendingClose: fresh } },
+      { returnDocument: "after" }
+    );
+    if (!claimed) return markSkipped(pending, "another exit is already closing this position");
+    plan = fresh;
+  }
+
+  await bookWalletClose(position, plan);
   await markDone(pending);
 }
 
@@ -284,12 +365,16 @@ export async function closeAllWalletPositionsForTrader(traderAddress, closeReaso
 
 /** Wallet-scoped mirror of processDuePendingExecutions - same atomic-claim pattern, own collection. */
 export async function processDueWalletExecutions() {
-  const due = await WalletPendingExecution.find({ status: "pending", triggerAt: { $lte: new Date() } }).limit(50);
+  await reapStale(WalletPendingExecution);
+  // Exits first: a position waiting to be closed matters more than one waiting to be opened.
+  const due = await WalletPendingExecution.find({ status: "pending", triggerAt: { $lte: new Date() } })
+    .sort({ action: -1, triggerAt: 1 })
+    .limit(50);
   let processed = 0;
   for (const item of due) {
     const claimed = await WalletPendingExecution.findOneAndUpdate(
       { _id: item._id, status: "pending" },
-      { $set: { status: "processing" } },
+      { $set: { status: "processing", leaseUntil: leaseExpiry() } },
       { returnDocument: "after" }
     );
     if (!claimed) continue;
@@ -298,7 +383,7 @@ export async function processDueWalletExecutions() {
       else await executeWalletSell(claimed);
       processed += 1;
     } catch (err) {
-      await markSkipped(claimed, err.message);
+      await failOrRetry(WalletPendingExecution, claimed, err);
     }
   }
   return processed;

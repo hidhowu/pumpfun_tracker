@@ -17,6 +17,8 @@ const { Schema, model, models } = mongoose;
  */
 const ProfileSchema = new Schema({
   name: { type: String, required: true },
+  // Only simulation wallets/profiles can be reset, topped up, forked or deleted - see db/mode.js.
+  mode: { type: String, enum: ["simulation", "live"], default: "simulation", immutable: true },
   isDefault: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });

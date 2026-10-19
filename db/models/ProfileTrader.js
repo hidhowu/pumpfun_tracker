@@ -63,6 +63,9 @@ const ProfileTraderSchema = new Schema({
     // position) - deliberately NOT the tracked wallet's own on-chain
     // last-trade time, since what matters here is our own simulated activity.
     lastActionAt: { type: Date, default: null },
+    // Keys of the balance/counter changes already applied to this profile-trader (newest 400) - what makes a re-run of a half-finished
+    // fill safe: each change is applied once per key, atomically with the change itself (see db/simulation/atomic.js).
+    appliedOps: { type: [String], default: [], select: false },
   },
 });
 

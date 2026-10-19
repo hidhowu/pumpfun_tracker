@@ -6,6 +6,7 @@ import { PendingExecution } from "./models/PendingExecution.js";
 import { DailySnapshot } from "./models/DailySnapshot.js";
 import { BalanceAdjustment } from "./models/BalanceAdjustment.js";
 import { NegativeBalanceEvent } from "./models/NegativeBalanceEvent.js";
+import { assertProfileSimulation } from "./mode.js";
 
 /** Copies every field of a lean document except _id/__v/profileId, for re-inserting under a new profileId. */
 function stripDocMeta(doc) {
@@ -38,6 +39,9 @@ export async function createProfile({ name, mode, sourceProfileId }) {
   if (mode === "clone" && !sourceProfileId) {
     throw new Error("sourceProfileId is required when mode is 'clone'");
   }
+
+  // Forking copies positions and queued fills - for a live profile that would duplicate real orders.
+  if (mode === "clone") await assertProfileSimulation(sourceProfileId, "Cloning a profile");
 
   const profile = await Profile.create({ name, isDefault: false });
 
@@ -172,6 +176,7 @@ export async function listProfilesOverview() {
 export async function deleteProfile(profileId) {
   const profile = await Profile.findById(profileId);
   if (!profile) throw new Error("Profile not found");
+  await assertProfileSimulation(profileId, "Deleting a profile");
   if (profile.isDefault) throw new Error("Can't delete the default profile - make another profile the default first");
 
   const totalProfiles = await Profile.countDocuments({});

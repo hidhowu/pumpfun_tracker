@@ -97,7 +97,7 @@ export async function recordHourlyWalletSnapshots() {
  */
 export async function applyDailyBalanceResets(date = todayUtcString()) {
   const candidates = await Wallet.find(
-    { "settings.autoResetBalanceDaily": true, lastAutoResetDate: { $ne: date } },
+    { "settings.autoResetBalanceDaily": true, lastAutoResetDate: { $ne: date }, mode: { $ne: "live" } },
     { _id: 1 }
   ).lean();
 
@@ -108,7 +108,7 @@ export async function applyDailyBalanceResets(date = todayUtcString()) {
     const valueBeforeResetUsd = await currentWalletValueUsd(_id);
 
     const before = await Wallet.findOneAndUpdate(
-      { _id, "settings.autoResetBalanceDaily": true, lastAutoResetDate: { $ne: date } },
+      { _id, "settings.autoResetBalanceDaily": true, lastAutoResetDate: { $ne: date }, mode: { $ne: "live" } },
       [{ $set: { balanceUsd: "$startingBalanceUsd", lastAutoResetDate: date, lastAutoResetAt: "$$NOW" } }],
       { returnDocument: "before", updatePipeline: true }
     ).lean();

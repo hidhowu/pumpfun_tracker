@@ -16,6 +16,7 @@ import { byQueueOrder } from "./queue.js";
 import { freshAddressState, insertAddressRows } from "./rows.js";
 import { addTradersToList } from "../listService.js";
 import { deleteViewsOfRun } from "./views.js";
+import { MAX_JITO_FEE_USD, MAX_PUMP_FEE_PERCENT } from "../settingsLimits.js";
 import { EMPTY_STATS, emptyStoredStats, ensureRunStats, finishStats, invalidateRun, remembered, rememberedWithAge, statsByAddress, summariseRuns, summaryTtl, viewStats } from "./runStats.js";
 
 const DAY_MS = 86_400_000;
@@ -288,8 +289,8 @@ const OVERRIDE_LIMITS = {
   riskCheckIntervalSeconds: [0, 3600],
   fillLatencySeconds: [0, 60],
   tradeSizeUsd: [0.01, 1_000_000_000],
-  pumpFeePercent: [0, 100],
-  jitoFeeUsd: [0, 1000],
+  pumpFeePercent: [0, MAX_PUMP_FEE_PERCENT],
+  jitoFeeUsd: [0, MAX_JITO_FEE_USD],
 };
 
 /** Keeps only valid overrides. Throws on a value that is present but unusable, so a typo is never silently ignored. */

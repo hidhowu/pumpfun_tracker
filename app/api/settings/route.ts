@@ -3,6 +3,7 @@ import { connectDb } from "@/db/connect";
 import { requireApiSession } from "@/lib/auth/session";
 import { getGlobalSettings, GlobalSettings } from "@/db/models/GlobalSettings";
 import { getSystemSettings, SystemSettings } from "@/db/models/SystemSettings";
+import { isObjectIdString, validateSettingsPatch, validateTrailingStops } from "@/db/settingsLimits";
 
 /** GET/PATCH here present one flat settings object to the UI, backed by two collections: GlobalSettings (per-profile strategy defaults) and SystemSettings (defaultMuted/riskCheckIntervalSeconds - shared across every profile). */
 export async function GET(request: NextRequest) {
@@ -10,7 +11,7 @@ export async function GET(request: NextRequest) {
   if (denied) return denied;
   await connectDb();
   const profileId = request.nextUrl.searchParams.get("profileId");
-  if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });
+  if (!profileId || !isObjectIdString(profileId)) return NextResponse.json({ error: "A valid profileId is required" }, { status: 400 });
 
   const [profileSettings, systemSettings] = await Promise.all([getGlobalSettings(profileId), getSystemSettings()]);
   const merged = { ...JSON.parse(JSON.stringify(profileSettings)), ...JSON.parse(JSON.stringify(systemSettings)) };
@@ -32,20 +33,7 @@ const BOOLEAN_FIELDS = ["defaultAllowNegativeBalance"];
 
 // These two are system-wide, not per-profile - see db/models/SystemSettings.js.
 const SYSTEM_NUMERIC_FIELDS = ["riskCheckIntervalSeconds"];
-const SYSTEM_BOOLEAN_FIELDS = ["defaultMuted"];
-
-function isValidTrailingStops(value: unknown): value is { armPercent: number; exitPercent: number }[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (r) =>
-        r &&
-        typeof r === "object" &&
-        typeof (r as { armPercent?: unknown }).armPercent === "number" &&
-        typeof (r as { exitPercent?: unknown }).exitPercent === "number"
-    )
-  );
-}
+const SYSTEM_BOOLEAN_FIELDS = ["defaultMuted", "tradingPaused"]; // tradingPaused = kill switch for new buys
 
 /**
  * Body may include any subset of: this profile's simulation defaults
@@ -63,38 +51,36 @@ export async function PATCH(request: NextRequest) {
   if (denied) return denied;
   await connectDb();
   const profileId = request.nextUrl.searchParams.get("profileId");
-  if (!profileId) return NextResponse.json({ error: "profileId is required" }, { status: 400 });
-  const body = await request.json().catch(() => ({}));
+  if (!profileId || !isObjectIdString(profileId)) return NextResponse.json({ error: "A valid profileId is required" }, { status: 400 });
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+
+  // Every number is range-checked (db/settingsLimits.js) and rejected - not clamped - when out of range.
+  const checked = validateSettingsPatch(body, [...NUMERIC_FIELDS, ...NULLABLE_NUMERIC_FIELDS, ...SYSTEM_NUMERIC_FIELDS], {
+    nullable: NULLABLE_NUMERIC_FIELDS,
+  });
+  if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 });
 
   const profileUpdate: Record<string, unknown> = {};
   for (const field of BOOLEAN_FIELDS) {
     if (typeof body[field] === "boolean") profileUpdate[field] = body[field];
   }
-  for (const field of NUMERIC_FIELDS) {
-    if (typeof body[field] === "number" && Number.isFinite(body[field])) profileUpdate[field] = body[field];
+  for (const field of [...NUMERIC_FIELDS, ...NULLABLE_NUMERIC_FIELDS]) {
+    if (field in checked.values) profileUpdate[field] = checked.values[field];
   }
-  // None of these can meaningfully be negative.
-  for (const field of ["defaultMaxTradeTimeSeconds", "defaultPumpFeePercent", "defaultJitoFeeUsd"]) {
-    if (typeof profileUpdate[field] === "number") profileUpdate[field] = Math.max(0, profileUpdate[field] as number);
-  }
-  for (const field of NULLABLE_NUMERIC_FIELDS) {
-    if (body[field] === null) profileUpdate[field] = null;
-    else if (typeof body[field] === "number" && Number.isFinite(body[field])) profileUpdate[field] = body[field];
-  }
-  if (isValidTrailingStops(body.defaultTrailingStops)) {
-    profileUpdate.defaultTrailingStops = body.defaultTrailingStops;
+  if ("defaultTrailingStops" in body) {
+    const rules = validateTrailingStops(body.defaultTrailingStops);
+    if (!rules.ok) return NextResponse.json({ error: rules.error }, { status: 400 });
+    profileUpdate.defaultTrailingStops = rules.value;
   }
 
   const systemUpdate: Record<string, unknown> = {};
   for (const field of SYSTEM_BOOLEAN_FIELDS) {
     if (typeof body[field] === "boolean") systemUpdate[field] = body[field];
   }
+  if (typeof systemUpdate.tradingPaused === "boolean") systemUpdate.tradingPausedAt = systemUpdate.tradingPaused ? new Date() : null;
   for (const field of SYSTEM_NUMERIC_FIELDS) {
-    if (typeof body[field] === "number" && Number.isFinite(body[field])) systemUpdate[field] = body[field];
-  }
-  // A too-low risk-check interval would hammer the price API and the DB in a tight loop - floor it.
-  if (typeof systemUpdate.riskCheckIntervalSeconds === "number") {
-    systemUpdate.riskCheckIntervalSeconds = Math.max(5, systemUpdate.riskCheckIntervalSeconds);
+    if (field in checked.values) systemUpdate[field] = checked.values[field];
   }
 
   const [profileSettings, systemSettings] = await Promise.all([

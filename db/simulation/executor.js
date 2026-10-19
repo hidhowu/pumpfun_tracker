@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Trader } from "../models/Trader.js";
 import { ProfileTrader } from "../models/ProfileTrader.js";
 import { SimPosition } from "../models/SimPosition.js";
@@ -7,11 +8,18 @@ import { resolveTraderSettings } from "../settings.js";
 import { getPrice, prefetchPrices, PRICE_MAX_AGE } from "../pumpFunApi.js";
 import { logEvent } from "../systemLog.js";
 import { computeTradeFees, realizedCounterDeltaOnClose } from "../fees.js";
+import { applyOnce, wasApplied, savePlan, leaseExpiry, failOrRetry, reapStale } from "./atomic.js";
+import { isTradingPaused } from "./guards.js";
+
+// ProfileTrader keeps everything of one (profile, trader) pair in one document, so a balance + counters change is ONE
+// atomic write; the applied-operation keys live in its sim subdocument.
+const OPS = { path: "sim.appliedOps" };
 
 async function markSkipped(pending, reason) {
   pending.status = "skipped";
   pending.skipReason = reason;
   pending.processedAt = new Date();
+  pending.leaseUntil = null;
   await pending.save();
   logEvent(
     "trade",
@@ -33,6 +41,7 @@ async function retryWithoutPrice(pending) {
   }
   pending.attempts = (pending.attempts || 0) + 1;
   pending.status = "pending";
+  pending.leaseUntil = null;
   pending.triggerAt = new Date(Date.now() + 1000 * pending.attempts);
   await pending.save();
 }
@@ -40,6 +49,7 @@ async function retryWithoutPrice(pending) {
 async function markDone(pending) {
   pending.status = "done";
   pending.processedAt = new Date();
+  pending.leaseUntil = null;
   await pending.save();
 }
 
@@ -50,77 +60,109 @@ function computeUnrealized(currentValueUsd, totalCost) {
   return { unrealizedUsd, unrealizedPercent };
 }
 
-/** Mutates one profile's simulated balance for one trader - `profileTrader` must be a hydrated ProfileTrader document. */
-async function applyBalanceDelta(profileTrader, deltaUsd) {
-  const newBalance = profileTrader.sim.balanceUsd + deltaUsd;
-  const inc = { "sim.balanceUsd": deltaUsd };
-  const set = {};
-  if (newBalance < 0) {
-    // Existing lifetime counters - unchanged.
-    inc["sim.negativeBalanceEventCount"] = 1;
-    if (Math.abs(newBalance) > profileTrader.sim.maxNegativeBalanceUsd) {
-      set["sim.maxNegativeBalanceUsd"] = Math.abs(newBalance);
-    }
-  }
-  await ProfileTrader.updateOne({ _id: profileTrader._id }, { $inc: inc, ...(Object.keys(set).length ? { $set: set } : {}) });
+/**
+ * Records that a debit pushed a balance below zero: the lifetime counters, plus a timestamped record of this crossing so
+ * day-by-day stats (count + deepest point for that day) can be computed. `after` is the balance the debit itself returned,
+ * not a value read earlier, so concurrent fills can't make these numbers wrong.
+ */
+async function recordNegativeBalance(profileTrader, after, key) {
+  const applied = await applyOnce(
+    ProfileTrader,
+    { _id: profileTrader._id },
+    key,
+    { $inc: { "sim.negativeBalanceEventCount": 1 }, $max: { "sim.maxNegativeBalanceUsd": Math.abs(after) } },
+    OPS
+  );
+  if (!applied) return;
+  await NegativeBalanceEvent.create({
+    profileId: profileTrader.profileId,
+    traderAddress: profileTrader.traderAddress,
+    balanceUsd: after,
+    depthUsd: Math.abs(after),
+  });
+}
 
-  if (newBalance < 0) {
-    // Additive: a timestamped record of this specific crossing, so
-    // day-by-day stats (count + deepest point *for that day*) can be
-    // computed - the lifetime counters above can't answer that on their own.
-    await NegativeBalanceEvent.create({
-      profileId: profileTrader.profileId,
-      traderAddress: profileTrader.traderAddress,
-      balanceUsd: newBalance,
-      depthUsd: Math.abs(newBalance),
+/**
+ * Profile-path buy. Crash-safe the same way as the wallet path (see db/simulation/atomic.js and walletExecutor.js): the
+ * plan is saved on the queue entry first, then (1) the debit - which, unlike before, happens BEFORE the position exists and
+ * is a conditional atomic update when negative balances are off - (2) the position under the planned id, (3) the dedup mark.
+ */
+async function executeBuy(pending) {
+  const profileTrader = await ProfileTrader.findOne({ profileId: pending.profileId, traderAddress: pending.traderAddress });
+  if (!profileTrader) return markSkipped(pending, "profile/trader state missing (race)");
+
+  let fill = pending.fill;
+  let settings = null;
+  if (!fill) {
+    if (await isTradingPaused()) return markSkipped(pending, "trading is paused (kill switch)");
+
+    const trader = await Trader.findOne({ address: pending.traderAddress });
+    if (!trader || trader.status !== "active") return markSkipped(pending, "trader inactive or blacklisted");
+    if (profileTrader.sim.everBoughtMints.includes(pending.mint)) return markSkipped(pending, "already bought this mint (race)");
+
+    const existingOpen = await SimPosition.exists({ profileId: pending.profileId, traderAddress: trader.address, mint: pending.mint, status: "open" });
+    if (existingOpen) return markSkipped(pending, "position already open (race)");
+
+    settings = await resolveTraderSettings(pending.profileId, trader.address, { profileTrader });
+    const spendUsd = settings.tradeSizeUsd;
+    const buyFees = computeTradeFees(spendUsd, settings);
+    const totalCost = spendUsd + buyFees.totalFeeUsd;
+    // Early, cheap check; the real guarantee is the conditional debit below.
+    if (!settings.allowNegativeBalance && profileTrader.sim.balanceUsd < totalCost) {
+      return markSkipped(pending, "insufficient balance and negative balance is disabled for this trader");
+    }
+
+    const price = await getPrice(pending.mint, { fresh: true });
+    if (!price?.priceUsd) return retryWithoutPrice(pending);
+
+    fill = await savePlan(PendingExecution, pending, {
+      positionId: String(new mongoose.Types.ObjectId()),
+      priceUsd: price.priceUsd,
+      spendUsd,
+      feeUsd: buyFees.totalFeeUsd,
+      pumpFeeUsd: buyFees.pumpFeeUsd,
+      jitoFeeUsd: buyFees.jitoFeeUsd,
+      totalCost,
+      tokenAmount: spendUsd / price.priceUsd,
+      allowNegative: !!settings.allowNegativeBalance,
     });
   }
 
-  return newBalance;
-}
+  const { spendUsd, feeUsd, totalCost } = fill;
+  const opKey = `buy:${pending._id}`;
 
-async function executeBuy(pending) {
-  const trader = await Trader.findOne({ address: pending.traderAddress });
-  if (!trader || trader.status !== "active") return markSkipped(pending, "trader inactive or blacklisted");
-
-  const profileTrader = await ProfileTrader.findOne({ profileId: pending.profileId, traderAddress: pending.traderAddress });
-  if (!profileTrader) return markSkipped(pending, "profile/trader state missing (race)");
-  if (profileTrader.sim.everBoughtMints.includes(pending.mint)) return markSkipped(pending, "already bought this mint (race)");
-
-  const existingOpen = await SimPosition.exists({ profileId: pending.profileId, traderAddress: trader.address, mint: pending.mint, status: "open" });
-  if (existingOpen) return markSkipped(pending, "position already open (race)");
-
-  const settings = await resolveTraderSettings(pending.profileId, trader.address, { profileTrader });
-  const spendUsd = settings.tradeSizeUsd;
-  const buyFees = computeTradeFees(spendUsd, settings);
-  const feeUsd = buyFees.totalFeeUsd;
-  if (!settings.allowNegativeBalance && profileTrader.sim.balanceUsd < spendUsd + feeUsd) {
+  // ---- step 1: debit + open-position counter + the buy fee into realized P&L (money already gone, see db/fees.js).
+  const debited = await applyOnce(
+    ProfileTrader,
+    { _id: profileTrader._id, ...(fill.allowNegative ? {} : { "sim.balanceUsd": { $gte: totalCost } }) },
+    opKey,
+    { $inc: { "sim.balanceUsd": -totalCost, "sim.realizedPnlUsd": -feeUsd, "sim.openPositionCount": 1 } },
+    OPS
+  );
+  if (!debited && !(await wasApplied(ProfileTrader, { _id: profileTrader._id }, opKey, OPS))) {
     return markSkipped(pending, "insufficient balance and negative balance is disabled for this trader");
   }
+  if (debited && debited.sim.balanceUsd < 0) await recordNegativeBalance(profileTrader, debited.sim.balanceUsd, `neg:${pending._id}`);
 
-  const price = await getPrice(pending.mint, { fresh: true });
-  if (!price?.priceUsd) return retryWithoutPrice(pending);
-
-  const tokenAmount = spendUsd / price.priceUsd;
-  // At t=0 the position is worth exactly what was spent on it (that's the
-  // definition of costBasisUsd) - the fee is a separate, already-realized
-  // cost, so the very first "unrealized" reading is -feeUsd, not 0. This is
-  // also the starting point the peak-tracker (maxValueUsd) grows from.
-  const initialUnrealized = computeUnrealized(spendUsd, spendUsd + feeUsd);
-
+  // ---- step 2: the position, under the planned id (a repeat finds it already there).
+  // At t=0 the position is worth exactly what was spent on it (that's the definition of costBasisUsd) - the fee is a
+  // separate, already-realized cost, so the very first "unrealized" reading is -feeUsd, not 0. This is also the starting
+  // point the peak-tracker (maxValueUsd) grows from.
+  const initialUnrealized = computeUnrealized(spendUsd, totalCost);
   try {
     await SimPosition.create({
+      _id: fill.positionId,
       profileId: pending.profileId,
-      traderAddress: trader.address,
+      traderAddress: pending.traderAddress,
       mint: pending.mint,
       status: "open",
-      tokenAmount,
+      tokenAmount: fill.tokenAmount,
       costBasisUsd: spendUsd,
       buyFeeUsd: feeUsd,
-      buyPumpFeeUsd: buyFees.pumpFeeUsd,
-      buyJitoFeeUsd: buyFees.jitoFeeUsd,
+      buyPumpFeeUsd: fill.pumpFeeUsd,
+      buyJitoFeeUsd: fill.jitoFeeUsd,
       buyFeeRealizedAtOpen: true,
-      buyPriceUsd: price.priceUsd,
+      buyPriceUsd: fill.priceUsd,
       openTriggerSignature: pending.sourceSignature,
       maxValueUsd: spendUsd,
       maxUnrealizedPnlUsd: initialUnrealized.unrealizedUsd,
@@ -130,122 +172,130 @@ async function executeBuy(pending) {
       minUnrealizedPnlPercent: initialUnrealized.unrealizedPercent,
     });
   } catch (err) {
-    // Unique index on (profileId, traderAddress, mint) where status="open" -
-    // a concurrent executor pass already opened this position first.
-    // Balance hasn't been touched yet at this point, so there's nothing to undo.
-    if (err?.code === 11000) return markSkipped(pending, "position already open (lost the race)");
-    throw err;
+    if (err?.code !== 11000) throw err;
+    if (!err.keyPattern?._id) {
+      // Unique index on (profileId, traderAddress, mint) where status="open": a different position is already open, so
+      // this buy never happened - give the money back, once.
+      await applyOnce(
+        ProfileTrader,
+        { _id: profileTrader._id },
+        `refund:${pending._id}`,
+        { $inc: { "sim.balanceUsd": totalCost, "sim.realizedPnlUsd": feeUsd, "sim.openPositionCount": -1 } },
+        OPS
+      );
+      return markSkipped(pending, "position already open (lost the race)");
+    }
+    // else: our own position already exists - a resumed fill, carry on
   }
 
-  await applyBalanceDelta(profileTrader, -(spendUsd + feeUsd));
+  // ---- step 3: permanent per-mint dedup mark. Guarded by "mint not yet recorded", so it applies once.
   await ProfileTrader.updateOne(
-    { _id: profileTrader._id },
-    {
-      // The buy fee is money already gone - it hits realized P&L now, not
-      // only once the position closes (see db/fees.js).
-      $inc: { "sim.openPositionCount": 1, "sim.realizedPnlUsd": -feeUsd },
-      $addToSet: { "sim.everBoughtMints": pending.mint },
-      $set: { "sim.lastActionAt": new Date() },
-    }
+    { _id: profileTrader._id, "sim.everBoughtMints": { $ne: pending.mint } },
+    { $addToSet: { "sim.everBoughtMints": pending.mint }, $set: { "sim.lastActionAt": new Date() } }
   );
 
   await markDone(pending);
-  logEvent("trade", `Bought ${pending.mint} for ${trader.address}: $${spendUsd.toFixed(2)} + $${feeUsd.toFixed(2)} fees @ $${price.priceUsd}`, {
-    meta: { profileId: String(pending.profileId), traderAddress: trader.address, mint: pending.mint, spendUsd, feeUsd, priceUsd: price.priceUsd },
+  logEvent("trade", `Bought ${pending.mint} for ${pending.traderAddress}: $${spendUsd.toFixed(2)} + $${feeUsd.toFixed(2)} fees @ $${fill.priceUsd}`, {
+    meta: { profileId: String(pending.profileId), traderAddress: pending.traderAddress, mint: pending.mint, spendUsd, feeUsd, priceUsd: fill.priceUsd },
   });
 }
 
-/**
- * Closes a position - or does nothing if it's already closed. This MUST be
- * safe to call concurrently: `executeSell` (every ~2s, mirroring the
- * trader's own sell) and `checkRiskExits` (every ~20s, stop-loss/take-
- * profit/trailing-stop) both operate on open positions independently, and
- * can both decide to close the very same position around the same time. The
- * guard against double-closing is the `findOneAndUpdate` below with
- * `status: "open"` in the filter: only the call that actually flips it from
- * "open" to "closed" gets a non-null result back and proceeds to touch the
- * balance/counters. A plain read-then-.save() (what this used to do) is NOT
- * sufficient - both callers can read the same still-"open" document before
- * either writes, and both would then apply the balance/counter change,
- * corrupting them (this is exactly what caused negative openPositionCount
- * and doubled balance changes in production).
- */
-async function closePosition(positionId, { priceUsd, fees, closeReason, closeSignature }) {
-  const position = await SimPosition.findOne({ _id: positionId, status: "open" });
-  if (!position) return null; // already closed by a concurrent call - nothing to do
-
+/** Freezes the numbers of a close - see planClose in walletExecutor.js; identical maths, stored on the position (pendingClose) before anything is paid out. */
+function planClose(position, { priceUsd, fees, closeReason, closeSignature, pendingId }) {
   const proceedsUsd = position.tokenAmount * priceUsd;
   const sellFees = computeTradeFees(proceedsUsd, fees);
-  const feeUsd = sellFees.totalFeeUsd;
   const totalCost = position.costBasisUsd + position.buyFeeUsd;
-  const netProceeds = proceedsUsd - feeUsd;
+  const netProceeds = proceedsUsd - sellFees.totalFeeUsd;
   const realizedPnlUsd = netProceeds - totalCost;
-  const realizedPnlPercent = totalCost > 0 ? (realizedPnlUsd / totalCost) * 100 : 0;
-
-  // The closing price is one more price sample - fold it into the peak
-  // tracker before finalizing, in case this position closed at (or above)
-  // its highest point and the periodic risk-check never happened to sample
-  // that exact moment (e.g. a short-lived position, or the trader sold
-  // between two risk-check ticks).
+  // The closing price is one more price sample - folded into the peak/trough trackers in case this position closed at (or
+  // beyond) its extreme and the periodic risk-check never happened to sample that exact moment.
   const closeUnrealized = computeUnrealized(proceedsUsd, totalCost);
-  const peakIsNow = proceedsUsd > position.maxValueUsd;
-  const troughIsNow = position.minValueUsd === null || proceedsUsd < position.minValueUsd;
+  return {
+    pendingId: String(pendingId),
+    closeReason,
+    closeSignature,
+    priceUsd,
+    proceedsUsd,
+    feeUsd: sellFees.totalFeeUsd,
+    pumpFeeUsd: sellFees.pumpFeeUsd,
+    jitoFeeUsd: sellFees.jitoFeeUsd,
+    netProceeds,
+    realizedPnlUsd,
+    realizedPnlPercent: totalCost > 0 ? (realizedPnlUsd / totalCost) * 100 : 0,
+    realizedDelta: realizedCounterDeltaOnClose(position, realizedPnlUsd),
+    peak:
+      proceedsUsd > position.maxValueUsd
+        ? { maxValueUsd: proceedsUsd, maxUnrealizedPnlUsd: closeUnrealized.unrealizedUsd, maxUnrealizedPnlPercent: closeUnrealized.unrealizedPercent }
+        : null,
+    trough:
+      position.minValueUsd === null || position.minValueUsd === undefined || proceedsUsd < position.minValueUsd
+        ? { minValueUsd: proceedsUsd, minUnrealizedPnlUsd: closeUnrealized.unrealizedUsd, minUnrealizedPnlPercent: closeUnrealized.unrealizedPercent }
+        : null,
+  };
+}
+
+/**
+ * Pays out a planned close, then flips the position to "closed" LAST: "closed" always means "fully booked", and a position
+ * still "open" with a pendingClose plan is a close that can be resumed. Safe to call twice for the same plan - the payout is
+ * keyed, and the flip is guarded by status:"open". (This also is the guard against double-closing: executeSell (every ~2s,
+ * mirroring the trader) and checkRiskExits (stop-loss/take-profit/...) can both decide to close the same position, and only
+ * the one that stored the plan first gets to book it.)
+ */
+async function bookClose(position, plan) {
+  await applyOnce(
+    ProfileTrader,
+    { profileId: position.profileId, traderAddress: position.traderAddress },
+    `close:${position._id}`,
+    {
+      $inc: {
+        "sim.balanceUsd": plan.netProceeds,
+        "sim.openPositionCount": -1,
+        "sim.closedPositionCount": 1,
+        "sim.realizedPnlUsd": plan.realizedDelta,
+      },
+      $set: { "sim.lastActionAt": new Date() },
+    },
+    OPS
+  );
 
   const updated = await SimPosition.findOneAndUpdate(
-    { _id: positionId, status: "open" }, // the actual race guard - see comment above
+    { _id: position._id, status: "open" },
     {
       $set: {
         status: "closed",
         closedAt: new Date(),
-        closeReason,
-        closeTriggerSignature: closeSignature,
-        sellPriceUsd: priceUsd,
-        proceedsUsd,
-        sellFeeUsd: feeUsd,
-        sellPumpFeeUsd: sellFees.pumpFeeUsd,
-        sellJitoFeeUsd: sellFees.jitoFeeUsd,
-        realizedPnlUsd,
-        realizedPnlPercent,
-        ...(peakIsNow
-          ? {
-              maxValueUsd: proceedsUsd,
-              maxUnrealizedPnlUsd: closeUnrealized.unrealizedUsd,
-              maxUnrealizedPnlPercent: closeUnrealized.unrealizedPercent,
-            }
-          : {}),
-        ...(troughIsNow
-          ? {
-              minValueUsd: proceedsUsd,
-              minUnrealizedPnlUsd: closeUnrealized.unrealizedUsd,
-              minUnrealizedPnlPercent: closeUnrealized.unrealizedPercent,
-            }
-          : {}),
+        closeReason: plan.closeReason,
+        closeTriggerSignature: plan.closeSignature,
+        sellPriceUsd: plan.priceUsd,
+        proceedsUsd: plan.proceedsUsd,
+        sellFeeUsd: plan.feeUsd,
+        sellPumpFeeUsd: plan.pumpFeeUsd,
+        sellJitoFeeUsd: plan.jitoFeeUsd,
+        realizedPnlUsd: plan.realizedPnlUsd,
+        realizedPnlPercent: plan.realizedPnlPercent,
+        pendingClose: null,
+        ...(plan.peak || {}),
+        ...(plan.trough || {}),
       },
     },
     { returnDocument: "after" }
   );
-  if (!updated) return null; // lost the race between the read above and this write
-
-  const profileTrader = await ProfileTrader.findOne({ profileId: updated.profileId, traderAddress: updated.traderAddress });
-  await applyBalanceDelta(profileTrader, netProceeds);
-  await ProfileTrader.updateOne(
-    { _id: profileTrader._id },
-    {
-      $inc: {
-        "sim.openPositionCount": -1,
-        "sim.closedPositionCount": 1,
-        "sim.realizedPnlUsd": realizedCounterDeltaOnClose(updated, realizedPnlUsd),
-      },
-      $set: { "sim.lastActionAt": new Date() },
-    }
-  );
-
-  logEvent(
-    "trade",
-    `Closed ${updated.mint} for ${updated.traderAddress}: ${closeReason} pnl=$${realizedPnlUsd.toFixed(2)} (${realizedPnlPercent.toFixed(1)}%)`,
-    { meta: { profileId: String(updated.profileId), traderAddress: updated.traderAddress, mint: updated.mint, closeReason, realizedPnlUsd, realizedPnlPercent } }
-  );
-
+  if (updated) {
+    logEvent(
+      "trade",
+      `Closed ${updated.mint} for ${updated.traderAddress}: ${plan.closeReason} pnl=$${plan.realizedPnlUsd.toFixed(2)} (${plan.realizedPnlPercent.toFixed(1)}%)`,
+      {
+        meta: {
+          profileId: String(updated.profileId),
+          traderAddress: updated.traderAddress,
+          mint: updated.mint,
+          closeReason: plan.closeReason,
+          realizedPnlUsd: plan.realizedPnlUsd,
+          realizedPnlPercent: plan.realizedPnlPercent,
+        },
+      }
+    );
+  }
   return updated;
 }
 
@@ -254,19 +304,45 @@ async function executeSell(pending) {
   if (!trader) return markSkipped(pending, "trader not found");
 
   const position = await SimPosition.findOne({ profileId: pending.profileId, traderAddress: pending.traderAddress, mint: pending.mint, status: "open" });
-  if (!position) return markSkipped(pending, "no open position (race - already closed)");
+  if (!position) {
+    // A resumed sell whose position is already fully closed is simply finished.
+    const finished = pending.fill?.positionId && (await SimPosition.exists({ _id: pending.fill.positionId, status: "closed" }));
+    return finished ? markDone(pending) : markSkipped(pending, "no open position (race - already closed)");
+  }
 
-  const settings = await resolveTraderSettings(pending.profileId, pending.traderAddress);
-  const price = await getPrice(pending.mint, { fresh: true });
-  if (!price?.priceUsd) return retryWithoutPrice(pending);
+  await savePlan(PendingExecution, pending, { positionId: String(position._id) });
 
-  await closePosition(position._id, {
-    priceUsd: price.priceUsd,
-    fees: settings,
-    closeReason: pending.closeReason || "trader_sell",
-    closeSignature: pending.closeReason && pending.closeReason !== "trader_sell" ? null : pending.sourceSignature,
-  });
+  let plan = position.pendingClose;
+  if (plan && plan.pendingId !== String(pending._id)) {
+    // Someone else started closing this position. If that entry died for good, take the close over; otherwise leave it to them.
+    const owner = await PendingExecution.findById(plan.pendingId, { status: 1 }).lean();
+    if (owner && (owner.status === "pending" || owner.status === "processing")) return markSkipped(pending, "another exit is already closing this position");
+    await SimPosition.updateOne({ _id: position._id, status: "open", "pendingClose.pendingId": plan.pendingId }, { $set: { pendingClose: null } });
+    plan = null;
+  }
 
+  if (!plan) {
+    const settings = await resolveTraderSettings(pending.profileId, pending.traderAddress);
+    const price = await getPrice(pending.mint, { fresh: true });
+    if (!price?.priceUsd) return retryWithoutPrice(pending);
+
+    const fresh = planClose(position, {
+      priceUsd: price.priceUsd,
+      fees: settings,
+      closeReason: pending.closeReason || "trader_sell",
+      closeSignature: pending.closeReason && pending.closeReason !== "trader_sell" ? null : pending.sourceSignature,
+      pendingId: pending._id,
+    });
+    const claimed = await SimPosition.findOneAndUpdate(
+      { _id: position._id, status: "open", pendingClose: null },
+      { $set: { pendingClose: fresh } },
+      { returnDocument: "after" }
+    );
+    if (!claimed) return markSkipped(pending, "another exit is already closing this position");
+    plan = fresh;
+  }
+
+  await bookClose(position, plan);
   await markDone(pending);
 }
 
@@ -329,18 +405,23 @@ export async function closeAllPositionsForTrader(traderAddress, closeReason = "b
 /**
  * Fills any queued buy/sell whose execution-delay has elapsed, across every
  * profile. Call this on a short interval (e.g. every 1-2s). Each item is
- * atomically claimed (pending -> processing) via findOneAndUpdate before
- * it's acted on, so an overlapping run (e.g. a slow price lookup causing
+ * atomically claimed (pending -> processing, with a lease) via findOneAndUpdate
+ * before it's acted on, so an overlapping run (e.g. a slow price lookup causing
  * one interval tick to still be running when the next one fires) can never
- * process the same item twice.
+ * process the same item twice. An item whose run died keeps "processing" past
+ * its lease and is re-queued by reapStale, then resumed from its saved plan.
  */
 export async function processDuePendingExecutions() {
-  const due = await PendingExecution.find({ status: "pending", triggerAt: { $lte: new Date() } }).limit(50);
+  await reapStale(PendingExecution);
+  // Exits first: a position waiting to be closed matters more than one waiting to be opened.
+  const due = await PendingExecution.find({ status: "pending", triggerAt: { $lte: new Date() } })
+    .sort({ action: -1, triggerAt: 1 })
+    .limit(50);
   let processed = 0;
   for (const item of due) {
     const claimed = await PendingExecution.findOneAndUpdate(
       { _id: item._id, status: "pending" },
-      { $set: { status: "processing" } },
+      { $set: { status: "processing", leaseUntil: leaseExpiry() } },
       { returnDocument: "after" }
     );
     if (!claimed) continue; // another (overlapping) run already claimed this one
@@ -349,7 +430,7 @@ export async function processDuePendingExecutions() {
       else await executeSell(claimed);
       processed += 1;
     } catch (err) {
-      await markSkipped(claimed, err.message);
+      await failOrRetry(PendingExecution, claimed, err);
     }
   }
   return processed;

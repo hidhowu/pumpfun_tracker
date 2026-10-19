@@ -28,6 +28,15 @@ const PendingExecutionSchema = new Schema({
     enum: ["trader_sell", "stop_loss", "take_profit", "trailing_stop", "max_hold_time", "blacklisted"],
     default: "trader_sell",
   },
+  // Crash safety (db/simulation/atomic.js): a claimed item holds a lease; one that outlives it was abandoned mid-fill and is
+  // re-queued. "fill" is the frozen plan (price, size, fees, ids) written BEFORE any money moves, so a resumed run
+  // finishes the exact same fill instead of pricing it again.
+  leaseUntil: { type: Date, default: null },
+  fill: { type: Schema.Types.Mixed, default: null },
+  errorAttempts: { type: Number, default: 0 },
+  reaped: { type: Number, default: 0 },
+  // One queue entry per copied trade signal, ever, whatever its status (own exits don't set it - they may be re-queued).
+  idemKey: { type: String, default: undefined },
   createdAt: { type: Date, default: Date.now },
   processedAt: { type: Date, default: null },
 });
@@ -43,5 +52,8 @@ PendingExecutionSchema.index(
   { profileId: 1, traderAddress: 1, mint: 1, action: 1 },
   { unique: true, partialFilterExpression: { status: "pending" } }
 );
+
+PendingExecutionSchema.index({ profileId: 1, idemKey: 1 }, { unique: true, partialFilterExpression: { idemKey: { $type: "string" } } });
+PendingExecutionSchema.index({ status: 1, leaseUntil: 1 });
 
 export const PendingExecution = models.PendingExecution || model("PendingExecution", PendingExecutionSchema);

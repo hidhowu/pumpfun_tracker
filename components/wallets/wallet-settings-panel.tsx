@@ -42,6 +42,7 @@ function NumberField({
   suffix,
   step = 1,
   min,
+  max,
 }: {
   id: string;
   label: string;
@@ -52,6 +53,7 @@ function NumberField({
   suffix?: string;
   step?: number;
   min?: number;
+  max?: number;
 }) {
   const [draft, setDraft] = useState(String(value));
   const dirty = draft !== String(value);
@@ -84,6 +86,7 @@ function NumberField({
           type="number"
           step={step}
           min={min}
+          max={max}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
@@ -280,9 +283,10 @@ export function WalletSettingsPanel({ walletId, settings, lastAutoResetAt, onUpd
               suffix="%"
               step={0.05}
               min={0}
+              max={2}
               value={settings.pumpFeePercent ?? 1.25}
               onSave={(v) => save({ pumpFeePercent: v })}
-              description="% of the trade's value pump.fun charges on every buy AND sell (0.95% protocol + 0.30% creator)."
+              description="% of the trade's value pump.fun charges on every buy AND sell (0.95% protocol + 0.30% creator). Maximum 2%."
             />
             <NumberField
               id="w-jitoFee"
@@ -290,9 +294,10 @@ export function WalletSettingsPanel({ walletId, settings, lastAutoResetAt, onUpd
               prefix="$"
               step={0.01}
               min={0}
+              max={1}
               value={settings.jitoFeeUsd ?? 0}
               onSave={(v) => save({ jitoFeeUsd: v })}
-              description="Flat USD cost to land each buy and each sell (Jito tip + priority fee)."
+              description="Flat USD cost to land each buy and each sell (Jito tip + priority fee). Maximum $1."
             />
           </div>
           <p className="mt-2 text-xs text-muted-foreground">

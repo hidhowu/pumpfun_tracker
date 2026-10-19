@@ -4,6 +4,7 @@ import { BacktestRunTrader } from "../models/BacktestRunTrader.js";
 import { BacktestPosition } from "../models/BacktestPosition.js";
 import { BacktestView } from "../models/BacktestView.js";
 import { computeTradeFees } from "../fees.js";
+import { MAX_JITO_FEE_USD, MAX_PUMP_FEE_PERCENT } from "../settingsLimits.js";
 import { buildCombinedLedger } from "./combined.js";
 
 /**
@@ -51,8 +52,8 @@ export function parseViewConfig(input, fallback = null) {
   return {
     startingBalanceUsd: pick("startingBalanceUsd", "Starting balance", { min: 0, max: 1_000_000_000, strictlyAbove: true }),
     tradeSizeUsd: pick("tradeSizeUsd", "Trade amount", { min: 0, max: 1_000_000_000, strictlyAbove: true }),
-    pumpFeePercent: pick("pumpFeePercent", "Pump fee", { min: 0, max: 100 }),
-    jitoFeeUsd: pick("jitoFeeUsd", "Jito fee", { min: 0, max: 1000 }),
+    pumpFeePercent: pick("pumpFeePercent", "Pump fee", { min: 0, max: MAX_PUMP_FEE_PERCENT }),
+    jitoFeeUsd: pick("jitoFeeUsd", "Jito fee", { min: 0, max: MAX_JITO_FEE_USD }),
     resetDaily: typeof input?.resetDaily === "boolean" ? input.resetDaily : !!fallback?.resetDaily,
     allowNegativeBalance: typeof input?.allowNegativeBalance === "boolean" ? input.allowNegativeBalance : fallback?.allowNegativeBalance !== false,
   };

@@ -22,6 +22,9 @@ const WalletTraderSchema = new Schema({
   closedPositionCount: { type: Number, default: 0 },
   realizedPnlUsd: { type: Number, default: 0 }, // this trader's cumulative contribution to the wallet's P&L
   lastActionAt: { type: Date, default: null },
+  // Keys of the balance/counter changes already applied to this wallet-trader (newest 400) - what makes a re-run of a half-finished
+  // fill safe: each change is applied once per key, atomically with the change itself (see db/simulation/atomic.js).
+  appliedOps: { type: [String], default: [], select: false },
 });
 
 WalletTraderSchema.index({ walletId: 1, traderAddress: 1 }, { unique: true });

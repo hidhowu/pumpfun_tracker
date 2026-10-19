@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { UserRound } from "lucide-react";
 import { getSessionUser } from "@/lib/auth/session";
 import { ChangePasswordForm } from "@/components/auth/change-password-form";
+import { TwoFactorCard } from "@/components/auth/two-factor-card";
 
 export default async function AccountPage() {
   const user = await getSessionUser();
@@ -21,6 +22,7 @@ export default async function AccountPage() {
           </p>
         </div>
       </div>
+      <TwoFactorCard />
       <ChangePasswordForm username={user.username} />
     </div>
   );

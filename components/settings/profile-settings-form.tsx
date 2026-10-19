@@ -47,6 +47,7 @@ function NumberField({
   suffix,
   step = 1,
   min,
+  max,
   disabled,
 }: {
   id: string;
@@ -58,6 +59,7 @@ function NumberField({
   suffix?: string;
   step?: number;
   min?: number;
+  max?: number;
   disabled?: boolean;
 }) {
   return (
@@ -74,6 +76,7 @@ function NumberField({
           type="number"
           step={step}
           min={min}
+          max={max}
           value={Number.isFinite(value) ? value : ""}
           disabled={disabled}
           onChange={(e) => onChange(e.target.valueAsNumber)}
@@ -128,6 +131,18 @@ export function ProfileSettingsForm({
       toast.success(`Notifications are now ${defaultMuted ? "off" : "on"} by default for new traders`);
     } catch {
       toast.error("Failed to update settings");
+    }
+  }
+
+  async function handleTradingPausedChange(checked: boolean) {
+    set("tradingPaused", checked);
+    try {
+      const { settings } = await updateSettings(profileId, { tradingPaused: checked });
+      setSaved((prev) => (prev ? { ...prev, tradingPaused: settings.tradingPaused } : settings));
+      toast.success(checked ? "Trading paused - no new buys anywhere" : "Trading resumed");
+    } catch {
+      set("tradingPaused", !checked);
+      toast.error("Failed to change the kill switch");
     }
   }
 
@@ -411,9 +426,10 @@ export function ProfileSettingsForm({
             suffix="%"
             step={0.05}
             min={0}
+            max={2}
             value={draft.defaultPumpFeePercent}
             onChange={(v) => set("defaultPumpFeePercent", v)}
-            description="pump.fun's on-chain fee (0.95% protocol + 0.30% creator = 1.25%), charged as a % of the trade's value on every buy AND every sell."
+            description="pump.fun's on-chain fee (0.95% protocol + 0.30% creator = 1.25%), charged as a % of the trade's value on every buy AND every sell. Maximum 2%."
           />
           <NumberField
             id="jitoFee"
@@ -421,15 +437,40 @@ export function ProfileSettingsForm({
             prefix="$"
             step={0.01}
             min={0}
+            max={1}
             value={draft.defaultJitoFeeUsd}
             onChange={(v) => set("defaultJitoFeeUsd", v)}
-            description="Flat USD cost to land each transaction (Jito tip + priority fee), charged on every buy AND every sell."
+            description="Flat USD cost to land each transaction (Jito tip + priority fee), charged on every buy AND every sell. Maximum $1."
           />
           <p className="text-xs text-muted-foreground sm:col-span-2">
             Buy fees are paid on top of the trade size and hit realized P&amp;L immediately; sell fees come out of the
             sale proceeds when the position closes. e.g. a $20 buy at 1.25% + $0.10 Jito costs $20.35, and a $30 sale
             nets $29.525.
           </p>
+        </CardContent>
+      </Card>
+
+      {/* Kill switch */}
+      <Card className={draft.tradingPaused ? "border-negative/40" : undefined}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldAlert className={draft.tradingPaused ? "size-4 text-negative" : "size-4 text-primary"} /> Trading
+          </CardTitle>
+          <CardDescription>
+            Applies to ALL profiles and wallets. The kill switch stops every NEW buy right away. Sells and exits keep working, so open positions can still
+            be closed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+            <div className="flex min-w-0 flex-col">
+              <span className="text-sm font-medium">Pause all new buys</span>
+              <span className="text-xs text-muted-foreground">
+                {draft.tradingPaused ? "PAUSED — no new position will be opened anywhere until you turn this off." : "Off — trading normally."}
+              </span>
+            </div>
+            <Switch checked={!!draft.tradingPaused} onCheckedChange={handleTradingPausedChange} />
+          </div>
         </CardContent>
       </Card>
 

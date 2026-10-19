@@ -4,6 +4,7 @@ import { WalletTrader } from "../models/WalletTrader.js";
 import { WalletPosition } from "../models/WalletPosition.js";
 import { WalletPendingExecution } from "../models/WalletPendingExecution.js";
 import { estimateTradeUsdValue, sumTraderTokenAmount } from "./engine.js";
+import { logEvent } from "../systemLog.js";
 
 const CLOSING_OUT_FRACTION_PERCENT = 95; // same threshold as db/simulation/engine.js's evaluateSell
 
@@ -31,6 +32,7 @@ async function evaluateWalletBuy(wallet, walletTrader, trade) {
       action: "buy",
       triggerAt,
       sourceSignature: trade.signature,
+      idemKey: `buy:${walletTrader.traderAddress}:${trade.mint}:${trade.signature}`,
     });
   } catch (err) {
     if (err?.code !== 11000) throw err; // already queued by a concurrent call
@@ -74,6 +76,7 @@ async function evaluateWalletSell(wallet, traderAddress, trade) {
       action: "sell",
       triggerAt,
       sourceSignature: trade.signature,
+      idemKey: `sell:${traderAddress}:${trade.mint}:${trade.signature}`,
     });
   } catch (err) {
     if (err?.code !== 11000) throw err;
@@ -107,11 +110,19 @@ export async function evaluateWalletTrade(trade) {
     const wallet = await Wallet.findById(walletTrader.walletId);
     if (!wallet) continue; // stale membership row (wallet deleted) - db/walletService.js's deleteWallet cascades this away, but skip defensively either way
 
-    const actioned =
-      trade.type === "buy"
-        ? await evaluateWalletBuy(wallet, walletTrader, trade)
-        : await evaluateWalletSell(wallet, trade.wallet, trade);
-    if (actioned) actionedByAny = true;
+    try {
+      const actioned =
+        trade.type === "buy"
+          ? await evaluateWalletBuy(wallet, walletTrader, trade)
+          : await evaluateWalletSell(wallet, trade.wallet, trade);
+      if (actioned) actionedByAny = true;
+    } catch (err) {
+      // One wallet failing must not drop the signal for the others.
+      logEvent("trade", `Failed to evaluate ${trade.type} ${trade.signature} for wallet ${wallet._id}: ${err.message}`, {
+        level: "error",
+        meta: { walletId: String(wallet._id), traderAddress: trade.wallet, mint: trade.mint, signature: trade.signature },
+      });
+    }
   }
 
   return actionedByAny;

@@ -9,7 +9,7 @@ import { isHttpsRequest, isSessionSecretConfigured, sessionCookieName, verifySes
  * (lib/auth/session.ts's requireApiSession), so neither layer alone has to
  * be perfect.
  */
-const PUBLIC_PATHS = new Set(["/login", "/api/auth/login"]);
+const PUBLIC_PATHS = new Set(["/login", "/api/auth/login", "/api/auth/login/verify"]);
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 export function proxy(request: NextRequest) {
