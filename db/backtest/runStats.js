@@ -51,9 +51,9 @@ export function finishStats(row) {
 
 export const EMPTY_STATS = { ...finishStats(null), daily: summariseDays([]) };
 
-/** Per address: the headline stats plus the day-by-day quality figures (loss days, profit margin, without the best day). `runId` must be an ObjectId. */
+/** Per address: the headline stats plus the day-by-day quality figures (loss days, profit margin, without the best day). `runId` must be an ObjectId. `address` may be one address, a list of them, or left out for the whole run. */
 export async function statsByAddress(runId, address) {
-  const match = address ? { runId, address } : { runId };
+  const match = Array.isArray(address) ? { runId, address: { $in: address } } : address ? { runId, address } : { runId };
   const [rows, dayRows] = await Promise.all([
     BacktestPosition.aggregate([{ $match: match }, { $group: { _id: "$address", ...POSITION_STATS_GROUP } }]),
     BacktestPosition.aggregate([
@@ -122,23 +122,36 @@ export function statsRefresher(runId, address, everyMs = 3000) {
   };
 }
 
-const CHUNK = 1000;
+const CHUNK = 2000;
 
-/** Writes the stored stats of every address of a run from its positions - for runs made before the stats were kept on the rows. */
+/**
+ * Writes the stored stats of every address of a run from its positions - for runs made before the stats were kept on the rows, or before a
+ * newer figure was added. It works through the addresses a chunk at a time (never the whole run in one query), so a run of hundreds of
+ * thousands of addresses uses little memory and each step is short.
+ */
 export async function backfillRunStats(runId) {
-  const [stats, traders] = await Promise.all([statsByAddress(runId), BacktestRunTrader.find({ runId }, { address: 1 }).lean()]);
-  for (let i = 0; i < traders.length; i += CHUNK) {
-    const ops = traders.slice(i, i + CHUNK).map((t) => ({
+  for (let after = null; ; ) {
+    const traders = await BacktestRunTrader.find({ runId, ...(after ? { _id: { $gt: after } } : {}) }, { address: 1 }).sort({ _id: 1 }).limit(CHUNK).lean();
+    if (traders.length === 0) break;
+    const stats = await statsByAddress(runId, traders.map((t) => t.address));
+    const ops = traders.map((t) => ({
       updateOne: { filter: { _id: t._id }, update: { $set: { stats: toStoredStats(stats.get(t.address) ?? EMPTY_STATS) } } },
     }));
     await BacktestRunTrader.bulkWrite(ops, { ordered: false });
+    after = traders.at(-1)._id;
+    if (traders.length < CHUNK) break;
   }
   await BacktestRun.updateOne({ _id: runId }, { $set: { statsVersion: STATS_VERSION } });
+  invalidateRun(runId);
 }
 
 const backfilling = new Map(); // runId -> promise, so two requests at once do the work once
 
-/** Makes sure `run` (a lean BacktestRun) has its stats on the rows; does the one-time fill for an older run. */
+/**
+ * Makes sure `run` (a lean BacktestRun) has its stats on the rows. A run with NO stored stats (version 0) waits for the fill, because there is
+ * nothing to show without it. A run that only lacks a newer figure already has usable stats, so its fill runs in the background and the page
+ * is answered at once - waiting for it made the page of a big backtest time out.
+ */
 export async function ensureRunStats(run) {
   if ((run.statsVersion ?? 0) >= STATS_VERSION) return;
   const key = String(run._id);
@@ -148,7 +161,12 @@ export async function ensureRunStats(run) {
       backfillRunStats(run._id).finally(() => backfilling.delete(key))
     );
   }
-  await backfilling.get(key);
+  const job = backfilling.get(key);
+  if ((run.statsVersion ?? 0) >= 1) {
+    job.catch((err) => console.error(`[backtest] updating the stored stats of ${key} failed:`, err?.message ?? err)); // tried again on the next view
+    return;
+  }
+  await job;
   run.statsVersion = STATS_VERSION;
 }
 
