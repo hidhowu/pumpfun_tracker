@@ -45,12 +45,66 @@ export function toneOf(value: number | null | undefined): "default" | "positive"
   return value > 0 ? "positive" : "negative";
 }
 
+const GRADIENTS = [
+  ["#8b7cff", "#35d6b0"],
+  ["#ff8a5b", "#ff4f8b"],
+  ["#6d5bff", "#3b82f6"],
+  ["#f5b83d", "#e8743b"],
+  ["#35d6b0", "#3b82f6"],
+  ["#ff4f8b", "#8b7cff"],
+];
+
+/** A stable two-colour gradient picked from any string (wallet address, token symbol), for avatars without an image. */
+export function gradientFor(seed: string): string {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  const [from, to] = GRADIENTS[hash % GRADIENTS.length];
+  return `linear-gradient(135deg, ${from}, ${to})`;
+}
+
 export function TokenAvatar({ icon, symbol, className }: { icon?: string | null; symbol?: string | null; className?: string }) {
+  const label = (symbol ?? "?").slice(0, 2).toUpperCase();
+  const isSol = symbol === "SOL";
   return (
-    <Avatar className={cn("size-8", className)}>
+    <Avatar className={cn("size-9", className)}>
       {icon ? <AvatarImage src={icon} alt="" referrerPolicy="no-referrer" /> : null}
-      <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">{(symbol ?? "?").slice(0, 2).toUpperCase()}</AvatarFallback>
+      <AvatarFallback
+        className="text-xs font-extrabold text-white"
+        style={{ background: isSol ? "linear-gradient(135deg, #9945ff, #14f195)" : gradientFor(symbol ?? "?") }}
+      >
+        {label}
+      </AvatarFallback>
     </Avatar>
+  );
+}
+
+/** A round gradient badge for a wallet, derived from its address so every wallet keeps its own colours. */
+export function WalletAvatar({ address, className }: { address: string; className?: string }) {
+  return <div aria-hidden className={cn("size-10 shrink-0 rounded-full", className)} style={{ background: gradientFor(address) }} />;
+}
+
+/** The small rounded label in front of a transaction: Bought / Sold / Received / Sent ... */
+export function TypePill({ label, tone, className }: { label: string; tone: "buy" | "sell" | "receive" | "send" | "neutral" | "failed"; className?: string }) {
+  const tones = {
+    buy: "bg-positive/15 text-positive",
+    sell: "bg-[#ff8a5b]/15 text-[#ff9b6e]",
+    receive: "bg-primary/15 text-brand-soft",
+    send: "bg-[#9a97b3]/15 text-[#b8b5d0]",
+    neutral: "bg-[#9a97b3]/15 text-[#b8b5d0]",
+    failed: "bg-negative/15 text-negative",
+  } as const;
+  return <span className={cn("inline-flex w-fit items-center rounded-full px-2.5 py-0.5 text-xs font-extrabold whitespace-nowrap", tones[tone], className)}>{label}</span>;
+}
+
+/** Profit or loss as a tinted pill, e.g. "+$21.40 · +33.2%". */
+export function PnlPill({ usd, pct, className }: { usd: number | null | undefined; pct?: number | null; className?: string }) {
+  if (usd === null || usd === undefined) return null;
+  const tone = usd > 0 ? "bg-positive/15 text-positive" : usd < 0 ? "bg-negative/15 text-negative" : "bg-muted text-muted-foreground";
+  return (
+    <span className={cn("inline-flex w-fit items-center rounded-full px-2 py-0.5 text-xs font-bold whitespace-nowrap tabular-nums", tone, className)}>
+      {signedUsd(usd)}
+      {pct !== null && pct !== undefined ? ` · ${signedPercent(pct)}` : ""}
+    </span>
   );
 }
 

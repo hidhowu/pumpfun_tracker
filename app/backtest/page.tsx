@@ -13,7 +13,7 @@ export default function BacktestPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="text-lg font-semibold tracking-tight">Backtest</h1>
+          <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Backtest</h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
             Replay an address&apos;s last N days of pump.fun trades as if you had copy-traded them with a profile&apos;s settings - same dust rules, the
             same execution delay and fees - and see which addresses are worth tracking live, without waiting for days of live results.

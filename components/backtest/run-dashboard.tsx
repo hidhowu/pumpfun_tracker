@@ -185,7 +185,7 @@ export function RunDashboard({ runId }: { runId: string }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="min-w-0 truncate text-lg font-semibold tracking-tight">{run.name}</h1>
+            <h1 className="min-w-0 truncate text-xl font-extrabold tracking-tight sm:text-2xl">{run.name}</h1>
             <RunStatusBadge status={run.status} control={run.control} queuePosition={progress.queuePosition} />
             {isCombined && (
               <Badge variant="outline" className="gap-1 border-primary/30 bg-primary/10 font-normal text-primary">

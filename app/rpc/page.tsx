@@ -524,7 +524,7 @@ export default function RpcPage() {
             <Router className="size-4.5" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">RPC endpoints</h1>
+            <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">RPC endpoints</h1>
             <p className="text-sm text-muted-foreground">
               Tracked addresses are spread across every active endpoint below, so no single provider&apos;s
               rate limit gets hit as hard.

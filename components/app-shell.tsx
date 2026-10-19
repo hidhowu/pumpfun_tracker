@@ -50,22 +50,22 @@ export function AppShell({ username, children }: { username: string; children: R
   return (
     <SidebarProvider>
       <Sidebar>
-        <SidebarHeader className="gap-0.5 px-3 py-4">
-          <div className="flex items-center gap-2 px-1">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
-              <Activity className="size-4" />
+        <SidebarHeader className="gap-0.5 px-3 pt-5 pb-4">
+          <div className="flex items-center gap-2.5 px-2">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-[#8b7cff] to-[#35d6b0] text-white shadow-lg shadow-primary/20">
+              <Activity className="size-[18px]" />
             </div>
-            <div className="flex flex-col leading-none">
-              <span className="text-sm font-semibold tracking-tight">pump.fun tracker</span>
-              <span className="text-xs text-muted-foreground">trader intelligence</span>
+            <div className="flex min-w-0 flex-col leading-tight">
+              <span className="truncate text-[15px] font-extrabold tracking-tight">pump.fun tracker</span>
+              <span className="truncate text-xs text-muted-foreground">trader intelligence</span>
             </div>
           </div>
         </SidebarHeader>
         <SidebarContent>
-          <SidebarGroup>
+          <SidebarGroup className="px-3">
             <SidebarGroupLabel>Workspace</SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu>
+              <SidebarMenu className="gap-0.5">
                 {NAV_ITEMS.map((item) => {
                   const active = item.href === "/" ? pathname === "/" : pathname === item.href || pathname.startsWith(`${item.href}/`);
                   return (
@@ -83,8 +83,8 @@ export function AppShell({ username, children }: { username: string; children: R
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
-        <SidebarFooter>
-          <SidebarMenu>
+        <SidebarFooter className="px-3 pb-4">
+          <SidebarMenu className="gap-0.5">
             <SidebarMenuItem>
               <SidebarMenuButton asChild isActive={pathname === "/account"} tooltip={`Account (${username})`}>
                 <Link href="/account">
@@ -111,7 +111,7 @@ export function AppShell({ username, children }: { username: string; children: R
           isn't accounted for (a very high open-trade count, a long profile
           name despite the truncate cap, an even narrower device, ...).
         */}
-        <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-border/60 px-4 py-2">
+        <header className="sticky top-0 z-20 flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-background/85 px-4 py-2 backdrop-blur md:px-6">
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-5" />
           <span className="hidden text-sm text-muted-foreground sm:inline">Real-time pump.fun trader activity</span>
@@ -120,7 +120,7 @@ export function AppShell({ username, children }: { username: string; children: R
             <ProfileSwitcher />
           </div>
         </header>
-        <div className="flex-1 overflow-auto p-4 md:p-6">{children}</div>
+        <div className="flex-1 overflow-auto p-4 md:p-8">{children}</div>
       </SidebarInset>
     </SidebarProvider>
   );

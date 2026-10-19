@@ -15,7 +15,7 @@ export default async function AccountPage() {
           <UserRound className="size-4.5" />
         </div>
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold tracking-tight">Account</h1>
+          <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Account</h1>
           <p className="text-sm text-muted-foreground">
             Signed in as <span className="font-medium text-foreground">{user.username}</span>. Accounts are created and
             reset from the server shell - see <code className="font-mono text-xs">npm run user</code>.

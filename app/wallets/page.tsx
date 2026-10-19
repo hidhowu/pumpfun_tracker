@@ -273,7 +273,7 @@ export default function WalletsPage() {
             <WalletIcon className="size-4.5" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">Wallets</h1>
+            <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Wallets</h1>
             <p className="text-sm text-muted-foreground">
               A second, independent copy-trade simulation per wallet - fixed balance, own settings, never goes negative.
             </p>

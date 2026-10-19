@@ -49,7 +49,7 @@ export default function ListsPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
-        <h1 className="text-lg font-semibold tracking-tight">Lists</h1>
+        <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Lists</h1>
         <p className="text-sm text-muted-foreground">
           Combined performance of each list&apos;s traders{currentProfile ? ` on profile "${currentProfile.name}"` : ""} - their whole history there, not
           just since they were tagged. Create lists and tag traders with the tag button on the Traders page.

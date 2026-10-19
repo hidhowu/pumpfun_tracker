@@ -45,9 +45,17 @@ async function fetchAll(signatures) {
   return results;
 }
 
+// Bump when txParse.js changes how transactions are classified: the stored rows are then thrown away and re-read once.
+const PARSER_VERSION = 2;
+
 async function run(wallet) {
   let incomplete = false;
   try {
+    if ((wallet.parserVersion ?? 0) < PARSER_VERSION) {
+      await LiveWalletTx.deleteMany({ walletId: wallet._id });
+      await LiveWallet.updateOne({ _id: wallet._id }, { $set: { lastSignature: null, parserVersion: PARSER_VERSION } });
+      wallet.lastSignature = null;
+    }
     const sigs = await signaturesSince(wallet.address, wallet.lastSignature);
     if (sigs.length) {
       const [txs, solUsd] = await Promise.all([fetchAll(sigs), getSolUsd()]);

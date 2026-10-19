@@ -88,7 +88,7 @@ export default function DashboardPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Traders</h1>
+        <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Traders</h1>
         <p className="text-sm text-muted-foreground">
           Wallets currently being tracked for pump.fun buy/sell signals - all figures below are our own simulated copy-trade performance.
         </p>

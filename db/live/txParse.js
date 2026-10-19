@@ -21,6 +21,10 @@ export function parseWalletTransaction(tx, owner) {
   const keys = tx.transaction.message.accountKeys.map((k) => (typeof k === "string" ? k : k.pubkey));
   const ownerIndex = keys.indexOf(owner);
   const feePayer = ownerIndex === 0;
+  // A swap moves the wallet's SOL, which only its own signature can authorise. Tokens that merely arrive (an airdrop, or
+  // someone sending them) are signed by the sender - those are never a buy, whatever else is in the transaction.
+  const ownerKey = tx.transaction.message.accountKeys[ownerIndex];
+  const signed = typeof ownerKey === "object" && ownerKey ? ownerKey.signer === true : feePayer;
   const feeSol = feePayer ? meta.fee / LAMPORTS_PER_SOL : 0;
   const base = { slot: tx.slot, blockTime: tx.blockTime ? new Date(tx.blockTime * 1000) : null };
 
@@ -50,7 +54,9 @@ export function parseWalletTransaction(tx, owner) {
   const wsolLamports = Number(deltas.get(WSOL_MINT)?.raw ?? 0n);
   const solChange = meta.postBalances[ownerIndex] - meta.preBalances[ownerIndex] + wsolLamports;
   const feeLamports = feePayer ? meta.fee : 0;
-  const flow = solChange + feeLamports - rentOpened + rentRefunded; // SOL moved by the trade itself
+  // Rent the wallet paid to open an account is in solChange as a loss (add it back); rent refunded on closing is a gain
+  // (take it out). Only the wallet's own signed transactions can have paid or collected it.
+  const flow = solChange + feeLamports + (signed ? rentOpened - rentRefunded : 0); // SOL moved by the trade itself
 
   const legs = [...deltas].filter(([mint, d]) => mint !== WSOL_MINT && d.raw !== 0n);
   const row = (fields) => ({ ...base, tokenDelta: 0, solDelta: 0, feeSol: 0, ...fields });
@@ -64,8 +70,9 @@ export function parseWalletTransaction(tx, owner) {
     const amount = Number(d.raw) / 10 ** d.decimals;
     let kind = amount > 0 ? "receive" : "send";
     let solDelta = 0;
-    // Only an unambiguous single-token swap against SOL is a buy/sell; anything else is just a movement of tokens.
-    if (legs.length === 1) {
+    // Only an unambiguous single-token swap against SOL, signed by this wallet, is a buy/sell; anything else is just a
+    // movement of tokens (receive / send).
+    if (legs.length === 1 && signed) {
       if (amount > 0 && flow <= -DUST_LAMPORTS) kind = "buy";
       else if (amount < 0 && flow >= DUST_LAMPORTS) kind = "sell";
       if (kind === "buy" || kind === "sell") solDelta = flow / LAMPORTS_PER_SOL;

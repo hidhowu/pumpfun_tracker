@@ -69,7 +69,7 @@ export function ViewDashboard({ runId, viewId }: { runId: string; viewId: string
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="min-w-0 truncate text-lg font-semibold tracking-tight">{view?.name ?? "Combined view"}</h1>
+            <h1 className="min-w-0 truncate text-xl font-extrabold tracking-tight sm:text-2xl">{view?.name ?? "Combined view"}</h1>
             <Badge variant="outline" className="gap-1 border-primary/30 bg-primary/10 font-normal text-primary">
               <Layers className="size-3" /> Combined view
             </Badge>

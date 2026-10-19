@@ -193,7 +193,7 @@ export function ProfileSettingsForm({
             <Settings2 className="size-4.5" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
+            <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">{title}</h1>
             <p className="text-sm text-muted-foreground">
               {description ?? (
                 <>

@@ -89,7 +89,7 @@ export default function ProfilesPage() {
             <Layers className="size-4.5" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">Profiles</h1>
+            <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Profiles</h1>
             <p className="text-sm text-muted-foreground">
               Each profile runs its own strategy settings over the same tracked traders. The default profile can&apos;t
               be deleted - make another one the default first.

@@ -86,17 +86,22 @@ export async function renameLiveWallet(id, name) {
   return wallet ? walletView(wallet) : null;
 }
 
-/** All wallets with their current SOL balance and total value. A wallet whose balance can't be read right now still lists. */
+/**
+ * All wallets with their current SOL balance, total value and realized profit/loss (from the stored history - the list
+ * never waits on a sync). A wallet whose balance can't be read right now still lists.
+ */
 export async function listLiveWallets() {
   const wallets = await LiveWallet.find().sort({ createdAt: 1 }).lean();
   return Promise.all(
     wallets.map(async (w) => {
       const view = walletView(w);
+      const { totals } = await loadLedger(w._id);
+      const pnl = { realizedPnlUsd: totals.realizedPnlUsd, wins: totals.wins, losses: totals.losses, sells: totals.sells };
       try {
         const chain = await getChainSnapshot(w.address);
-        return { ...view, solBalance: chain.solBalance, totalValueUsd: chain.totalValueUsd, tokenCount: chain.tokens.length, error: null };
+        return { ...view, ...pnl, solBalance: chain.solBalance, totalValueUsd: chain.totalValueUsd, tokenCount: chain.tokens.length, error: null };
       } catch (err) {
-        return { ...view, solBalance: null, totalValueUsd: null, tokenCount: null, error: err instanceof Error ? err.message : "Balance unavailable" };
+        return { ...view, ...pnl, solBalance: null, totalValueUsd: null, tokenCount: null, error: err instanceof Error ? err.message : "Balance unavailable" };
       }
     })
   );

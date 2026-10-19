@@ -79,7 +79,7 @@ export default function LogsPage() {
             <ScrollText className="size-4.5" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">Logs</h1>
+            <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Logs</h1>
             <p className="text-sm text-muted-foreground">
               Live tracker activity - no need to check the terminal or PM2. Entries older than 24h are cleaned up automatically.
             </p>

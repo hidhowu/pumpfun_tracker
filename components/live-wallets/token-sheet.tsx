@@ -1,50 +1,71 @@
 "use client";
 
-import { Coins, Landmark, LineChart, Scale } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { StatTile } from "@/components/traders/stat-tile";
 import { ActivityTable } from "./activity-table";
-import { AddressChip, formatAmount, signedPercent, signedUsd, toneOf, TokenAvatar } from "./shared";
+import { AddressChip, formatAmount, formatPrice, signedPercent, signedUsd, toneClass, TokenAvatar } from "./shared";
 import { formatUsd } from "@/lib/format";
 import type { LiveHolding } from "@/lib/live-wallet-types";
+import { cn } from "@/lib/utils";
 
-/** One token in the wallet: what is held, what it is worth, and every buy and sell of it with the profit or loss made. */
+function Stat({ label, value, hint, className }: { label: string; value: string; hint?: string; className?: string }) {
+  return (
+    <div className="min-w-0 rounded-2xl border border-border bg-card p-3.5">
+      <div className="text-xs font-semibold text-muted-foreground">{label}</div>
+      <div className={cn("mt-1 truncate text-[17px] font-extrabold tabular-nums", className)}>{value}</div>
+      {hint ? <div className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</div> : null}
+    </div>
+  );
+}
+
+/** One token in the wallet: what is held, what it is worth, and every buy, sell and transfer of it with the profit or loss made. */
 export function TokenSheet({ walletId, mint, holding, onClose }: { walletId: string; mint: string | null; holding: LiveHolding | null; onClose: () => void }) {
   return (
     <Sheet open={mint !== null} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-3xl">
+      <SheetContent className="gap-0 overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-[480px]">
         {mint ? (
           <>
-            <SheetHeader className="border-b border-border/60">
-              <div className="flex items-center gap-3">
-                <TokenAvatar icon={holding?.icon} symbol={holding?.symbol} className="size-10" />
-                <div className="min-w-0">
-                  <SheetTitle>{holding?.symbol ?? "Token"}</SheetTitle>
-                  <SheetDescription className="flex items-center gap-2">
-                    {holding?.name ? <span className="truncate">{holding.name}</span> : null}
-                    <AddressChip value={mint} kind="token" label="mint address" chars={5} />
-                  </SheetDescription>
-                </div>
+            <SheetHeader className="flex-row items-center gap-3.5 px-5 pt-5 pr-14 pb-3">
+              <TokenAvatar icon={holding?.icon} symbol={holding?.symbol} className="size-12" />
+              <div className="min-w-0">
+                <SheetTitle className="truncate text-xl font-extrabold">{holding?.symbol ?? "Token"}</SheetTitle>
+                <SheetDescription className="flex min-w-0 items-center gap-2">
+                  {holding?.name ? <span className="max-w-40 truncate">{holding.name}</span> : null}
+                  <AddressChip value={mint} kind="token" label="mint address" chars={4} />
+                </SheetDescription>
               </div>
             </SheetHeader>
-            <div className="flex flex-col gap-4 p-4">
+            <div className="flex flex-col gap-5 px-5 pb-8">
               {holding ? (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <StatTile label="Balance" value={formatAmount(holding.balance)} icon={Coins} hint={`${holding.accounts} token account${holding.accounts === 1 ? "" : "s"}`} />
-                  <StatTile label="Value" value={holding.valueUsd === null ? "no price" : formatUsd(holding.valueUsd)} icon={Landmark} />
-                  <StatTile
-                    label="Unrealized P&L"
-                    value={signedUsd(holding.unrealizedPnlUsd)}
-                    icon={LineChart}
-                    tone={toneOf(holding.unrealizedPnlUsd)}
-                    hint={holding.unrealizedPnlPct === null ? "no cost basis" : `${signedPercent(holding.unrealizedPnlPct)} on ${formatUsd(holding.costBasisUsd)} cost`}
-                  />
-                  <StatTile label="Realized P&L" value={signedUsd(holding.realizedPnlUsd)} icon={Scale} tone={toneOf(holding.realizedPnlUsd)} />
-                </div>
+                <>
+                  <div>
+                    <div className="text-4xl font-extrabold tracking-tight tabular-nums">{holding.valueUsd === null ? "No price" : formatUsd(holding.valueUsd)}</div>
+                    <div className="mt-0.5 text-[13px] text-muted-foreground tabular-nums">
+                      {formatAmount(holding.balance)} {holding.symbol ?? ""} · {formatPrice(holding.priceUsd)} each
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <Stat
+                      label="Average cost"
+                      value={holding.costBasisUsd !== null && holding.balance > 0 ? formatPrice(holding.costBasisUsd / holding.balance) : "None"}
+                      hint={holding.costBasisUsd === null ? "tokens were received, not bought" : "per token"}
+                    />
+                    <Stat
+                      label="Unrealized"
+                      value={holding.unrealizedPnlUsd === null ? "No cost basis" : signedUsd(holding.unrealizedPnlUsd)}
+                      hint={holding.unrealizedPnlPct === null ? undefined : signedPercent(holding.unrealizedPnlPct)}
+                      className={toneClass(holding.unrealizedPnlUsd)}
+                    />
+                    <Stat label="Realized" value={signedUsd(holding.realizedPnlUsd)} className={toneClass(holding.realizedPnlUsd)} />
+                    <Stat label="Token accounts" value={String(holding.accounts)} />
+                  </div>
+                </>
               ) : (
-                <p className="text-sm text-muted-foreground">This wallet no longer holds this token.</p>
+                <p className="rounded-2xl border border-border bg-card p-4 text-sm text-muted-foreground">This wallet no longer holds this token.</p>
               )}
-              <ActivityTable walletId={walletId} mint={mint} />
+              <div>
+                <h3 className="mb-3 text-[15px] font-extrabold">{holding?.symbol ?? "Token"} history</h3>
+                <ActivityTable walletId={walletId} mint={mint} layout="list" showSummary={false} />
+              </div>
             </div>
           </>
         ) : null}

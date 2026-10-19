@@ -56,7 +56,7 @@ export default function BlacklistedPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Blacklisted</h1>
+        <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Blacklisted</h1>
         <p className="text-sm text-muted-foreground">
           Tracking is fully stopped for these wallets, but every trade and stat
           collected before they were blacklisted stays visible below. Unblacklist

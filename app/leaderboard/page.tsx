@@ -186,7 +186,7 @@ export default function LeaderboardPage() {
             <Trophy className="size-4.5" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">Leaderboard</h1>
+            <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Leaderboard</h1>
             <p className="text-sm text-muted-foreground">
               Ranked by combined P&amp;L — the sum of each closed trade&apos;s % return, not luck from still-open positions.
             </p>

@@ -317,7 +317,7 @@ export default function ProxiesPage() {
             <Shuffle className="size-4.5" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">Proxies</h1>
+            <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Proxies</h1>
             <p className="text-sm text-muted-foreground">
               Rotated round-robin by the pump.fun API client to spread requests across more than one origin IP.
               A proxy that fails 3 times in a row is auto-blacklisted and skipped until it passes a test again.

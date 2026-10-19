@@ -12,6 +12,10 @@ export type LiveWalletListItem = LiveWallet & {
   totalValueUsd: number | null;
   tokenCount: number | null;
   error: string | null;
+  realizedPnlUsd: number;
+  wins: number;
+  losses: number;
+  sells: number;
 };
 
 export type LiveHolding = {

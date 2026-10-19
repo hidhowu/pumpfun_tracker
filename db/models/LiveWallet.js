@@ -20,6 +20,8 @@ const LiveWalletSchema = new Schema({
   lastSignature: { type: String, default: null },
   lastSyncedAt: { type: Date, default: null },
   lastSyncError: { type: String, default: null },
+  // Which version of db/live/txParse.js produced the stored rows; older rows are re-read once (see txSync.js).
+  parserVersion: { type: Number, default: 0 },
 });
 
 export const LiveWallet = models.LiveWallet || model("LiveWallet", LiveWalletSchema);
