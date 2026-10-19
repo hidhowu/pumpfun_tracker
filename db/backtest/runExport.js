@@ -37,7 +37,8 @@ const SUMMARY_COLUMNS = [
   "losses",
   "win_rate_percent",
   "realized_pnl_usd",
-  "total_loss_usd",
+  "total_loss_on_trades_usd",
+  "total_loss_on_days_percent",
   "avg_pnl_per_trade_usd",
   "avg_pnl_per_day_usd",
   "combined_percent",
@@ -70,7 +71,8 @@ const summaryRow = (rt, label) => {
     s.losses ?? 0,
     s.winRatePercent,
     s.realizedPnlUsd ?? 0,
-    s.totalLossUsd ?? 0,
+    -(s.totalLossUsd ?? 0), // every losing trade added up, negative like the table shows it
+    -(d.grossLossPercent ?? 0), // the losing days added up, negative like the table shows it
     s.avgPnlUsd,
     d.avgPnlPerDayUsd,
     s.combinedPercent ?? 0,

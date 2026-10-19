@@ -27,7 +27,7 @@ const FILTERS: Array<{ value: Filter; label: string }> = [
 ];
 
 const PAGE_SIZES = [25, 50, 100, 200];
-const NO_LIMITS: BacktestTraderLimits = { minWinRate: "", minMargin: "", maxLossDays: "", minTrades: "", maxTrades: "", minAvgPnl: "", minPnl: "", minAvgPnlPerDay: "", minProfitDaysPercent: "", maxTotalLoss: "", holdsWithoutBest: false };
+const NO_LIMITS: BacktestTraderLimits = { minWinRate: "", minMargin: "", maxLossDays: "", minTrades: "", maxTrades: "", minAvgPnl: "", minPnl: "", minAvgPnlPerDay: "", minProfitDaysPercent: "", maxTotalLoss: "", maxDayLossPercent: "", holdsWithoutBest: false };
 // A query slower than this gets the "working on it" notice with an estimate (faster ones just update).
 const SLOW_AFTER_MS = 700;
 // Until this view has been used once there is nothing measured to go on: roughly this long per address in the backtest.
@@ -263,7 +263,8 @@ export function RunTradersTable({ runId, active, selected, onSelectedChange, onO
               ["minPnl", "Total P&L at least ($)"],
               ["minAvgPnlPerDay", "Avg P&L per day at least ($)"],
               ["minProfitDaysPercent", "Profitable days at least (%)"],
-              ["maxTotalLoss", "Total loss at most ($)"],
+              ["maxTotalLoss", "Total loss on trades at most ($)"],
+              ["maxDayLossPercent", "Total loss on days at most (%)"],
             ] as const
           ).map(([key, label]) => (
             <label key={key} className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -348,7 +349,8 @@ export function RunTradersTable({ runId, active, selected, onSelectedChange, onO
               <SortHead label="Combined" k="combined" sort={sort} onSort={onSort} className="hidden text-right md:table-cell" />
               <SortHead label="Avg P&L / trade" k="avgPnl" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
               <SortHead label="Avg P&L / day" k="avgPnlDay" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
-              <SortHead label="Total loss" k="totalLoss" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
+              <SortHead label="Total loss (trades)" k="totalLoss" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
+              <SortHead label="Total loss (days)" k="dayLoss" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
               <SortHead label="Win rate" k="winRate" sort={sort} onSort={onSort} className="hidden text-right lg:table-cell" />
               <SortHead label="Loss days" k="lossDays" sort={sort} onSort={onSort} className="hidden text-right xl:table-cell" />
               <SortHead label="Profitable days" k="profitDays" sort={sort} onSort={onSort} className="hidden text-right xl:table-cell" />
@@ -360,7 +362,7 @@ export function RunTradersTable({ runId, active, selected, onSelectedChange, onO
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={13}className="py-10 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={14} className="py-10 text-center text-sm text-muted-foreground">
                   {data === null ? "Loading…" : "No address matches these filters."}
                 </TableCell>
               </TableRow>
@@ -432,6 +434,9 @@ export function RunTradersTable({ runId, active, selected, onSelectedChange, onO
                     </TableCell>
                     <TableCell className={cn("hidden text-right tabular-nums lg:table-cell", (s.totalLossUsd ?? 0) > 0 && "text-negative")} title="Every losing trade added up">
                       {s.closed > 0 ? formatUsd(-(s.totalLossUsd ?? 0)) : "—"}
+                    </TableCell>
+                    <TableCell className={cn("hidden text-right tabular-nums lg:table-cell", (s.daily?.grossLossPercent ?? 0) > 0 && "text-negative")} title="The losing days added up (a day at -30% and another at -40% make -70%)">
+                      {s.daily && s.daily.tradingDays > 0 ? formatSignedPercent(-s.daily.grossLossPercent, 0) : "—"}
                     </TableCell>
                     <TableCell className="hidden text-right tabular-nums lg:table-cell">
                       {s.winRatePercent != null ? `${s.winRatePercent.toFixed(0)}%` : "—"}

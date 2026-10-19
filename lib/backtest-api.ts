@@ -206,7 +206,7 @@ export function controlBacktestRun(
 function tradersQuery(q: BacktestTraderQuery): URLSearchParams {
   const qs = new URLSearchParams({ filter: q.filter, sort: q.sort, dir: q.dir, page: String(q.page), limit: String(q.limit) });
   if (q.search.trim()) qs.set("search", q.search.trim());
-  for (const key of ["minWinRate", "minMargin", "maxLossDays", "minTrades", "maxTrades", "minAvgPnl", "minPnl", "minAvgPnlPerDay", "minProfitDaysPercent", "maxTotalLoss"] as const) {
+  for (const key of ["minWinRate", "minMargin", "maxLossDays", "minTrades", "maxTrades", "minAvgPnl", "minPnl", "minAvgPnlPerDay", "minProfitDaysPercent", "maxTotalLoss", "maxDayLossPercent"] as const) {
     if (q.limits[key].trim() !== "") qs.set(key, q.limits[key].trim());
   }
   if (q.limits.holdsWithoutBest) qs.set("holdsWithoutBest", "true");

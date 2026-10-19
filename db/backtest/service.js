@@ -792,6 +792,7 @@ const SORT_FIELDS = {
   avgPnlDay: "stats.daily.avgPnlPerDayUsd",
   profitDays: "stats.daily.profitDaysPercent",
   totalLoss: "stats.totalLossUsd",
+  dayLoss: "stats.daily.grossLossPercent",
 };
 
 const finite = (v) => (v === undefined || v === null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
@@ -834,7 +835,11 @@ function limitQuery(limits = {}) {
   if (minPnl != null) q["stats.realizedPnlUsd"] = { $gte: minPnl };
   if (minPerDay != null) q["stats.daily.avgPnlPerDayUsd"] = { $gte: minPerDay }; // no trading day yet never matches
   if (minProfitDays != null) q["stats.daily.profitDaysPercent"] = { $gte: minProfitDays };
-  if (maxTotalLoss != null) q["stats.totalLossUsd"] = { $not: { $gt: maxTotalLoss } }; // no loss counted yet is a loss of 0
+  // Total loss on trades = every losing trade added up, in dollars. Total loss of days = the losing days' results added up (-30% and -40% -> 70).
+  // Both are typed as positive numbers; no loss counted yet is a loss of 0.
+  if (maxTotalLoss != null) q["stats.totalLossUsd"] = { $not: { $gt: Math.abs(maxTotalLoss) } };
+  const maxDayLoss = finite(limits.maxDayLossPercent);
+  if (maxDayLoss != null) q["stats.daily.grossLossPercent"] = { $not: { $gt: Math.abs(maxDayLoss) } };
   if (limits.holdsWithoutBest === true || limits.holdsWithoutBest === "true") q["stats.daily.withoutBestDay.stillProfitable"] = true;
   return q;
 }

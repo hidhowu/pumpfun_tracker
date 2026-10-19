@@ -104,6 +104,7 @@ export const SORT_INDEX_FIELDS = [
   "stats.daily.avgPnlPerDayUsd",
   "stats.daily.profitDaysPercent",
   "stats.totalLossUsd",
+  "stats.daily.grossLossPercent",
 ];
 for (const field of SORT_INDEX_FIELDS) BacktestRunTraderSchema.index({ runId: 1, [field]: -1, _id: -1 });
 

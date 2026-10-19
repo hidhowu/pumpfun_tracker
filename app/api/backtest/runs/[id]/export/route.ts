@@ -10,7 +10,7 @@ type Params = { params: Promise<{ id: string }> };
 /**
  * Downloads the backtest's addresses as CSV - the ones the run page is showing: the same status filter, limits, address search and sort.
  * Query: mode (addresses | summary | trades), includeSkipped=1 (trades mode: skipped signals too), and filter / sort / dir / search / minWinRate / minMargin /
- * maxLossDays / minTrades / maxTrades / minAvgPnl / minPnl / minAvgPnlPerDay / minProfitDaysPercent / maxTotalLoss / holdsWithoutBest as in /traders. Streamed, so any size works.
+ * maxLossDays / minTrades / maxTrades / minAvgPnl / minPnl / minAvgPnlPerDay / minProfitDaysPercent / maxTotalLoss / maxDayLossPercent / holdsWithoutBest as in /traders. Streamed, so any size works.
  */
 export async function GET(request: NextRequest, { params }: Params) {
   const denied = await requireApiSession();
@@ -40,6 +40,7 @@ export async function GET(request: NextRequest, { params }: Params) {
       minAvgPnlPerDay: sp.get("minAvgPnlPerDay"),
       minProfitDaysPercent: sp.get("minProfitDaysPercent"),
       maxTotalLoss: sp.get("maxTotalLoss"),
+      maxDayLossPercent: sp.get("maxDayLossPercent"),
       holdsWithoutBest: sp.get("holdsWithoutBest"),
     },
   });

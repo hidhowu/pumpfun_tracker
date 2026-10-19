@@ -182,7 +182,7 @@ export type BacktestRunDetail = {
 };
 
 export type BacktestTraderFilter = "all" | "profitable" | "losing" | "running" | "failed" | "skipped";
-export type BacktestTraderSort = "pnl" | "combined" | "avgPnl" | "winRate" | "trades" | "lossDays" | "margin" | "withoutBest" | "avgPnlDay" | "profitDays" | "totalLoss";
+export type BacktestTraderSort = "pnl" | "combined" | "avgPnl" | "winRate" | "trades" | "lossDays" | "margin" | "withoutBest" | "avgPnlDay" | "profitDays" | "totalLoss" | "dayLoss";
 
 /** The "at least / at most" limits of the addresses table, as typed (empty = no limit). */
 export type BacktestTraderLimits = {
@@ -196,6 +196,7 @@ export type BacktestTraderLimits = {
   minAvgPnlPerDay: string;
   minProfitDaysPercent: string;
   maxTotalLoss: string;
+  maxDayLossPercent: string;
   holdsWithoutBest: boolean;
 };
 

@@ -12,7 +12,7 @@ import { summariseDays } from "./dayStats.js";
  * and pages the addresses with an ordinary query, and a run's totals are one pass over its rows.
  */
 
-/** Bump when a figure is added to the stored stats: a run with an older version has every address's stats written again once (ensureRunStats). 2 = total loss, per-day averages. */
+/** Bump when a figure is added to the stored stats: a run with an older version has every address's stats written again once (ensureRunStats). 2 = total loss on trades, per-day averages, profitable-days share. */
 export const STATS_VERSION = 2;
 
 export const POSITION_STATS_GROUP = {
@@ -40,7 +40,7 @@ export function finishStats(row) {
     losses: row?.losses || 0,
     winRatePercent: decided > 0 ? (row.wins / decided) * 100 : null,
     realizedPnlUsd: row?.realizedPnlUsd || 0,
-    totalLossUsd: row?.totalLossUsd || 0, // every losing trade added up, as a positive dollar amount
+    totalLossUsd: row?.totalLossUsd || 0, // every losing TRADE added up, as a positive dollar amount
     combinedPercent: row?.combinedPercent || 0,
     avgPercent: closed > 0 ? row.combinedPercent / closed : null,
     bestPercent: row?.bestPercent ?? null,
