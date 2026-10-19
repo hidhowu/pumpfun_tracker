@@ -1,5 +1,5 @@
 import { request } from "./api";
-import type { EncryptedKey, LiveTransactionsPage, LiveWallet, LiveWalletDetail, LiveWalletListItem } from "./live-wallet-types";
+import type { BurnResult, EncryptedKey, LiveTransactionsPage, LiveWallet, LiveWalletDetail, LiveWalletListItem } from "./live-wallet-types";
 
 export function listLiveWallets(): Promise<{ wallets: LiveWalletListItem[]; twoFactorEnabled: boolean }> {
   return request("/api/live-wallets");
@@ -32,4 +32,9 @@ export function getLiveWalletTransactions(
 /** Shows the private key again: needs a fresh authenticator code. The key comes back encrypted for this browser only. */
 export function revealLiveWalletKey(id: string, code: string, clientPublicKey: string): Promise<{ key: EncryptedKey }> {
   return request(`/api/live-wallets/${id}/reveal-key`, { method: "POST", body: JSON.stringify({ code, clientPublicKey }) });
+}
+
+/** Burns whatever the token account holds and closes it (rent goes back to the wallet), signed server-side with the wallet's key. Irreversible. */
+export function burnTokenAccount(walletId: string, account: string): Promise<BurnResult> {
+  return request(`/api/live-wallets/${walletId}/burn-token-account`, { method: "POST", body: JSON.stringify({ account }) });
 }

@@ -120,3 +120,8 @@ export function getChainSnapshot(address, { fresh = false } = {}) {
   promise.catch(() => cache.delete(address)); // never cache a failure
   return promise;
 }
+
+/** Forget the cached snapshot of a wallet (after something changed it, e.g. a token account was closed). */
+export function invalidateChainSnapshot(address) {
+  cache.delete(address);
+}

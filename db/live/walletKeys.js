@@ -43,6 +43,29 @@ export function base58Encode(bytes) {
   return out;
 }
 
+/** @returns {Buffer} the bytes of a base58 string; throws on a character outside the alphabet */
+export function base58Decode(text) {
+  const input = String(text);
+  let zeros = 0;
+  while (zeros < input.length && input[zeros] === "1") zeros += 1;
+  const bytes = [];
+  for (let i = zeros; i < input.length; i += 1) {
+    const value = BASE58.indexOf(input[i]);
+    if (value < 0) throw new Error("Invalid base58 text");
+    let carry = value;
+    for (let j = 0; j < bytes.length; j += 1) {
+      carry += bytes[j] * 58;
+      bytes[j] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry > 0) {
+      bytes.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  return Buffer.from([...new Array(zeros).fill(0), ...bytes.reverse()]);
+}
+
 // ------------------------------------------------------------ generation
 
 /**

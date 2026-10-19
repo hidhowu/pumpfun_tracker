@@ -2,12 +2,27 @@
 
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { ActivityTable } from "./activity-table";
+import { BurnTokenAccountButton } from "./burn-token-account";
 import { AddressChip, formatAmount, formatPrice, signedPercent, signedUsd, StatBox, toneClass, tokenLabel, TokenAvatar } from "./shared";
-import { formatUsd } from "@/lib/format";
-import type { LiveHolding } from "@/lib/live-wallet-types";
+import { formatSol, formatUsd } from "@/lib/format";
+import type { LiveHolding, LiveTokenAccount } from "@/lib/live-wallet-types";
 
 /** One token in the wallet: what is held, what it is worth, and every buy, sell and transfer of it with the profit or loss made. */
-export function TokenSheet({ walletId, mint, holding, onClose }: { walletId: string; mint: string | null; holding: LiveHolding | null; onClose: () => void }) {
+export function TokenSheet({
+  walletId,
+  mint,
+  holding,
+  accounts,
+  onClose,
+  onChanged,
+}: {
+  walletId: string;
+  mint: string | null;
+  holding: LiveHolding | null;
+  accounts: LiveTokenAccount[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
   return (
     <Sheet open={mint !== null} onOpenChange={(open) => !open && onClose()}>
       <SheetContent className="gap-0 overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-[480px]">
@@ -51,6 +66,24 @@ export function TokenSheet({ walletId, mint, holding, onClose }: { walletId: str
               ) : (
                 <p className="rounded-2xl border border-border bg-card p-4 text-sm text-muted-foreground">This wallet no longer holds this token.</p>
               )}
+              {accounts.length ? (
+                <div>
+                  <h3 className="mb-3 text-[15px] font-extrabold">Token account{accounts.length === 1 ? "" : "s"}</h3>
+                  <ul className="flex flex-col gap-2">
+                    {accounts.map((a) => (
+                      <li key={a.account} className="flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3">
+                        <div className="min-w-0 flex-1">
+                          <AddressChip value={a.account} label="token account address" chars={5} />
+                          <div className="mt-1 text-xs text-muted-foreground tabular-nums">
+                            {formatAmount(a.balance)} held · {formatSol(a.rentLamports / 1e9)} deposit
+                          </div>
+                        </div>
+                        <BurnTokenAccountButton walletId={walletId} account={a} onDone={onChanged} />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               <div>
                 <h3 className="mb-3 text-[15px] font-extrabold">{tokenLabel(holding?.symbol, mint)} history</h3>
                 <ActivityTable walletId={walletId} mint={mint} layout="list" showSummary={false} />

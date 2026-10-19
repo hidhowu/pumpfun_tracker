@@ -41,7 +41,7 @@ export function buildLedger(rows, fallbackSolUsd = null) {
     const solUsd = r.solUsd ?? fallbackSolUsd ?? null;
     const item = { ...r, solUsd, costBasisSol: null, valueSol: null, realizedPnlSol: null, realizedPnlPct: null, realizedPnlUsd: null };
 
-    if (r.mint && (r.kind === "buy" || r.kind === "sell" || r.kind === "receive" || r.kind === "send")) {
+    if (r.mint && (r.kind === "buy" || r.kind === "sell" || r.kind === "receive" || r.kind === "send" || r.kind === "burn")) {
       const pos = positions.get(r.mint) ?? { qty: 0, costSol: 0 };
       const stats = perMint.get(r.mint) ?? emptyStats();
       positions.set(r.mint, pos);

@@ -1,6 +1,7 @@
 "use client";
 
 import { Card } from "@/components/ui/card";
+import { BurnTokenAccountButton } from "./burn-token-account";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AddressChip, formatAmount, formatPrice, signedPercent, toneClass, tokenLabel, TokenAvatar, TypePill } from "./shared";
 import { formatSol, formatUsd } from "@/lib/format";
@@ -140,7 +141,7 @@ export function HoldingsTable({ chain, onSelect, masked = false }: { chain: Live
 }
 
 /** Every token account the wallet owns - including empty ones, which still hold a small refundable rent deposit. */
-export function TokenAccountsTable({ accounts, onSelect }: { accounts: LiveTokenAccount[]; onSelect: (mint: string) => void }) {
+export function TokenAccountsTable({ walletId, accounts, onSelect, onChanged }: { walletId: string; accounts: LiveTokenAccount[]; onSelect: (mint: string) => void; onChanged: () => void }) {
   if (accounts.length === 0) {
     return (
       <Card className="gap-0 py-0">
@@ -159,7 +160,10 @@ export function TokenAccountsTable({ accounts, onSelect }: { accounts: LiveToken
                 <TokenAvatar icon={a.icon} symbol={a.symbol} className="size-8" />
                 <span className="truncate text-[15px] font-bold">{tokenLabel(a.symbol, a.mint)}</span>
               </button>
-              <TypePill label={a.program === "token-2022" ? "Token-2022" : "Token"} tone="receive" />
+              <div className="flex items-center gap-1.5">
+                <TypePill label={a.program === "token-2022" ? "Token-2022" : "Token"} tone="receive" />
+                <BurnTokenAccountButton walletId={walletId} account={a} onDone={onChanged} compact />
+              </div>
             </div>
             <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-[13px]">
               <dt className="text-muted-foreground">Account</dt>
@@ -190,7 +194,10 @@ export function TokenAccountsTable({ accounts, onSelect }: { accounts: LiveToken
               <TableHead>Mint</TableHead>
               <TableHead>Program</TableHead>
               <TableHead className="text-right">Balance</TableHead>
-              <TableHead className="pr-5 text-right">Rent</TableHead>
+              <TableHead className="text-right">Rent</TableHead>
+              <TableHead className="pr-4 text-right">
+                <span className="sr-only">Burn and close</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -215,7 +222,10 @@ export function TokenAccountsTable({ accounts, onSelect }: { accounts: LiveToken
                   </div>
                 </TableCell>
                 <TableCell className="text-right font-semibold tabular-nums">{formatAmount(a.balance)}</TableCell>
-                <TableCell className="pr-5 text-right text-muted-foreground tabular-nums">{formatSol(a.rentLamports / 1e9)}</TableCell>
+                <TableCell className="text-right text-muted-foreground tabular-nums">{formatSol(a.rentLamports / 1e9)}</TableCell>
+                <TableCell className="pr-4 text-right">
+                  <BurnTokenAccountButton walletId={walletId} account={a} onDone={onChanged} compact />
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, ChevronLeft, ChevronRight, CircleAlert, Coins, ExternalLink, RefreshCw, TrendingDown, TrendingUp, Trophy, Wallet } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, Flame, ArrowUpRight, ChevronLeft, ChevronRight, CircleAlert, Coins, ExternalLink, RefreshCw, TrendingDown, TrendingUp, Trophy, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,6 +20,7 @@ const KIND_META: Record<LiveTxKind, { label: string; pill: Pill; icon: typeof Ar
   sell: { label: "Sold", pill: "sell", icon: ArrowLeftRight, tint: "bg-[#ff8a5b]/15 text-[#ff9b6e]" },
   receive: { label: "Received", pill: "receive", icon: ArrowDownLeft, tint: "bg-primary/15 text-brand-soft" },
   send: { label: "Sent", pill: "send", icon: ArrowUpRight, tint: "bg-[#9a97b3]/15 text-[#b8b5d0]" },
+  burn: { label: "Burned", pill: "failed", icon: Flame, tint: "bg-negative/15 text-negative" },
   sol_in: { label: "SOL in", pill: "receive", icon: Coins, tint: "bg-primary/15 text-brand-soft" },
   sol_out: { label: "SOL out", pill: "send", icon: Coins, tint: "bg-[#9a97b3]/15 text-[#b8b5d0]" },
   other: { label: "Other", pill: "neutral", icon: CircleAlert, tint: "bg-[#9a97b3]/15 text-[#b8b5d0]" },
@@ -32,6 +33,7 @@ const FILTERS = [
   { value: "sell", label: "Sold" },
   { value: "receive", label: "Received" },
   { value: "send", label: "Sent" },
+  { value: "burn", label: "Burned" },
   { value: "sol_in", label: "SOL in" },
   { value: "sol_out", label: "SOL out" },
   { value: "failed", label: "Failed" },
@@ -57,7 +59,7 @@ function describe(tx: LiveTransaction) {
   const amount = hasToken ? `${tx.tokenDelta > 0 ? "+" : ""}${formatAmount(tx.tokenDelta)}` : solMove ? `${tx.solDelta > 0 ? "+" : ""}${formatSol(tx.solDelta)}` : "-";
   // Only a real swap has a price. A transfer has none, so it says so instead of showing a made-up number.
   const swapped = tx.kind === "buy" || tx.kind === "sell";
-  const value = tx.valueUsd !== null && (swapped || solMove) ? formatUsd(tx.valueUsd) : tx.kind === "receive" || tx.kind === "send" ? "No price" : "-";
+  const value = tx.valueUsd !== null && (swapped || solMove) ? formatUsd(tx.valueUsd) : tx.kind === "receive" || tx.kind === "send" || tx.kind === "burn" ? "No price" : "-";
   const sol = swapped ? `${tx.solDelta > 0 ? "+" : ""}${formatSol(tx.solDelta)}` : null;
   return { hasToken, solMove, symbol, amount, value, sol, swapped };
 }

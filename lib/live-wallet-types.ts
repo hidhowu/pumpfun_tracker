@@ -84,7 +84,7 @@ export type LiveWalletDetail = {
   pnl: LivePnlStats & { unrealizedPnlUsd: number };
 };
 
-export type LiveTxKind = "buy" | "sell" | "receive" | "send" | "sol_in" | "sol_out" | "other" | "failed";
+export type LiveTxKind = "buy" | "sell" | "receive" | "send" | "burn" | "sol_in" | "sol_out" | "other" | "failed";
 
 export type LiveTransaction = {
   signature: string;
@@ -116,3 +116,15 @@ export type LiveTransactionsPage = {
 
 /** The private key, encrypted for one browser only - see lib/live-wallet-crypto.ts. */
 export type EncryptedKey = { serverPublicKey: string; salt: string; iv: string; ciphertext: string };
+
+/** What burning and closing a token account did - see db/live/burnTokenAccount.js. "pending" = sent, not yet seen confirmed. */
+export type BurnResult = {
+  signature: string;
+  status: "confirmed" | "pending";
+  mint: string;
+  burnedRaw: string;
+  burned: number;
+  decimals: number;
+  closed: true;
+  reclaimedLamports: number;
+};

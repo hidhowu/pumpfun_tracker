@@ -15,6 +15,20 @@ const DUST_LAMPORTS = 1_000;
  *    deposit that comes back, not a loss on the token.
  * Jito tips and the pump.fun fee are real costs and stay inside the trade's SOL.
  */
+/** Mints this wallet burned in the transaction (spl-token / Token-2022 burn or burnChecked, top level or inside another instruction). */
+function burnedMints(tx, owner) {
+  const found = new Set();
+  const visit = (instructions) => {
+    for (const ix of instructions || []) {
+      const parsed = ix?.parsed;
+      if ((parsed?.type === "burn" || parsed?.type === "burnChecked") && parsed.info?.authority === owner && parsed.info.mint) found.add(parsed.info.mint);
+    }
+  };
+  visit(tx.transaction.message.instructions);
+  for (const inner of tx.meta?.innerInstructions || []) visit(inner.instructions);
+  return found;
+}
+
 export function parseWalletTransaction(tx, owner) {
   const meta = tx?.meta;
   if (!tx || !meta) return [];
@@ -59,6 +73,7 @@ export function parseWalletTransaction(tx, owner) {
   const flow = solChange + feeLamports + (signed ? rentOpened - rentRefunded : 0); // SOL moved by the trade itself
 
   const legs = [...deltas].filter(([mint, d]) => mint !== WSOL_MINT && d.raw !== 0n);
+  const burned = signed ? burnedMints(tx, owner) : new Set();
   const row = (fields) => ({ ...base, tokenDelta: 0, solDelta: 0, feeSol: 0, ...fields });
 
   if (legs.length === 0) {
@@ -68,7 +83,7 @@ export function parseWalletTransaction(tx, owner) {
 
   return legs.map(([mint, d], i) => {
     const amount = Number(d.raw) / 10 ** d.decimals;
-    let kind = amount > 0 ? "receive" : "send";
+    let kind = amount > 0 ? "receive" : burned.has(mint) ? "burn" : "send";
     let solDelta = 0;
     // Only an unambiguous single-token swap against SOL, signed by this wallet, is a buy/sell; anything else is just a
     // movement of tokens (receive / send).

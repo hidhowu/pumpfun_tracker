@@ -3,11 +3,12 @@ import { LiveWalletTx } from "../models/LiveWalletTx.js";
 import { getSolUsd } from "../onchainPrice.js";
 import { isTwoFactorEnabled, verifyTwoFactorStepUp } from "../authService.js";
 import { logEvent } from "../systemLog.js";
-import { getChainSnapshot } from "./chain.js";
+import { getChainSnapshot, invalidateChainSnapshot } from "./chain.js";
+import { BurnError, burnAndCloseTokenAccount } from "./burnTokenAccount.js";
 import { getTokenMeta } from "./tokenMeta.js";
 import { buildLedger, emptyStats } from "./pnl.js";
 import { syncLiveWallet } from "./txSync.js";
-import { decryptWalletSecret, encryptForClient, encryptWalletSecret, generateSolanaKeypair, isWalletEncryptionConfigured } from "./walletKeys.js";
+import { base58Decode, base58Encode, decryptWalletSecret, encryptForClient, encryptWalletSecret, generateSolanaKeypair, isWalletEncryptionConfigured } from "./walletKeys.js";
 
 const MAX_WALLETS = 50;
 
@@ -214,4 +215,44 @@ export async function getLiveWalletTransactions(id, { mint = null, kind = null, 
 
   const summary = mint && mint !== "SOL" ? ledger.perMint.get(mint) ?? emptyStats() : ledger.totals;
   return { transactions, page, totalPages, total, summary, syncError: syncError ?? found.lastSyncError ?? null };
+}
+
+const burning = new Set(); // "walletId:tokenAccount" currently being burned - a double click must never send two transactions
+
+/**
+ * Burns a token account's tokens and closes the account (rent returns to the wallet), signed with the wallet's own key.
+ * The key is decrypted only for the length of this call and wiped afterwards. Needs two-factor to be on for the account,
+ * like every other action that touches a wallet's key. The signing itself is db/live/burnTokenAccount.js, which any other
+ * part of the app can call directly with a key and a token account.
+ */
+export async function burnLiveWalletTokenAccount(id, { userId, username, account }) {
+  if (!(await isTwoFactorEnabled(userId))) throw new LiveWalletError(TWO_FACTOR_REQUIRED, 403);
+  if (!isWalletEncryptionConfigured()) throw new LiveWalletError("Wallet encryption isn't configured on this server (WALLET_ENCRYPTION_KEY).", 503);
+  const wallet = await LiveWallet.findById(id).select("+encryptedSecret");
+  if (!wallet) throw new LiveWalletError("Wallet not found", 404);
+
+  const lock = `${wallet._id}:${account}`;
+  if (burning.has(lock)) throw new LiveWalletError("This token account is already being burned.", 409);
+  burning.add(lock);
+  let secret = null;
+  try {
+    secret = base58Decode(decryptWalletSecret(wallet.address, wallet.encryptedSecret));
+    if (secret.length !== 64 || base58Encode(secret.subarray(32)) !== wallet.address) throw new LiveWalletError("The stored key doesn't match this wallet.", 500);
+    const result = await burnAndCloseTokenAccount({ secretKey: secret, tokenAccount: account });
+    invalidateChainSnapshot(wallet.address);
+    logEvent("tracker", `[live-wallet] "${wallet.name}": burned ${result.burned} of ${result.mint} and closed token account ${account} (${result.status}) by ${username}`, {
+      level: "warn",
+      meta: { walletId: String(wallet._id), account, mint: result.mint, signature: result.signature },
+    });
+    return result;
+  } catch (err) {
+    if (err instanceof BurnError) {
+      logEvent("tracker", `[live-wallet] Burn of token account ${account} in "${wallet.name}" by ${username} failed: ${err.message}`, { level: "warn", meta: { walletId: String(wallet._id), account } });
+      throw new LiveWalletError(err.message, err.status);
+    }
+    throw err;
+  } finally {
+    secret?.fill(0);
+    burning.delete(lock);
+  }
 }

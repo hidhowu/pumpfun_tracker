@@ -5,7 +5,7 @@ import { isObjectIdString } from "@/db/settingsLimits";
 import { getLiveWalletTransactions } from "@/db/live/service";
 
 type Params = { params: Promise<{ id: string }> };
-const KINDS = new Set(["buy", "sell", "receive", "send", "sol_in", "sol_out", "other", "failed"]);
+const KINDS = new Set(["buy", "sell", "receive", "send", "burn", "sol_in", "sol_out", "other", "failed"]);
 const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 /** Query: mint? (a token mint, or "SOL" for the wallet's SOL movements), kind?, page?, limit? (max 100). Brings the stored history up to date first. */

@@ -242,7 +242,7 @@ export default function LiveWalletDetailPage() {
                 <TabsContent value="activity">
                   <ActivityTable walletId={wallet._id} onSelectToken={setSelectedMint} refreshKey={refreshKey} showSummary={false} />
                 </TabsContent>
-                <TabsContent value="accounts">{chain ? <TokenAccountsTable accounts={chain.accounts} onSelect={setSelectedMint} /> : <Skeleton className="h-48 w-full rounded-2xl" />}</TabsContent>
+                <TabsContent value="accounts">{chain ? <TokenAccountsTable walletId={wallet._id} accounts={chain.accounts} onSelect={setSelectedMint} onChanged={handleManualRefresh} /> : <Skeleton className="h-48 w-full rounded-2xl" />}</TabsContent>
                 <TabsContent value="pnl" className="xl:hidden">
                   <div className="grid gap-4 md:grid-cols-2">
                     {pnl ? <PnlCard pnl={pnl} /> : null}
@@ -262,7 +262,14 @@ export default function LiveWalletDetailPage() {
             </aside>
           </div>
 
-          <TokenSheet walletId={wallet._id} mint={solOpen ? null : selectedMint} holding={selectedHolding} onClose={() => setSelectedMint(null)} />
+          <TokenSheet
+            walletId={wallet._id}
+            mint={solOpen ? null : selectedMint}
+            holding={selectedHolding}
+            accounts={chain?.accounts.filter((a) => a.mint === selectedMint) ?? []}
+            onClose={() => setSelectedMint(null)}
+            onChanged={handleManualRefresh}
+          />
           <SolSheet walletId={wallet._id} open={solOpen} chain={chain} onClose={() => setSelectedMint(null)} />
         </>
       ) : null}

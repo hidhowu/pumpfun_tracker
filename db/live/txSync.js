@@ -46,7 +46,7 @@ async function fetchAll(signatures) {
 }
 
 // Bump when txParse.js changes how transactions are classified: the stored rows are then thrown away and re-read once.
-const PARSER_VERSION = 2;
+const PARSER_VERSION = 3;
 
 async function run(wallet) {
   let incomplete = false;

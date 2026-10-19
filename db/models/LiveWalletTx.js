@@ -9,6 +9,7 @@ const { Schema, model, models } = mongoose;
  * kind:
  *  - buy / sell    one token against SOL (swap, pump.fun curve or AMM)
  *  - receive / send  a token moved with no SOL on the other side (transfer, airdrop, token<->token swap leg)
+ *  - burn          tokens destroyed by this wallet (like a send, with nobody on the other side and no price)
  *  - sol_in / sol_out  plain SOL transfer
  *  - other         touched the wallet without moving SOL or tokens beyond the fee (e.g. creating an account)
  *  - failed        the transaction failed on-chain; only the fee was paid
@@ -17,7 +18,7 @@ const LiveWalletTxSchema = new Schema({
   walletId: { type: Schema.Types.ObjectId, ref: "LiveWallet", required: true },
   signature: { type: String, required: true },
   mint: { type: String, default: null }, // null for SOL-only / failed / other
-  kind: { type: String, enum: ["buy", "sell", "receive", "send", "sol_in", "sol_out", "other", "failed"], required: true },
+  kind: { type: String, enum: ["buy", "sell", "receive", "send", "burn", "sol_in", "sol_out", "other", "failed"], required: true },
   slot: { type: Number, required: true },
   blockTime: { type: Date, default: null },
   tokenDelta: { type: Number, default: 0 }, // token units, + received / - sent
