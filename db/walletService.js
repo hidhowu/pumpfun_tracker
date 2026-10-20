@@ -1,3 +1,4 @@
+import { LiveWallet } from "./models/LiveWallet.js";
 import { Wallet } from "./models/Wallet.js";
 import { Trader } from "./models/Trader.js";
 import { addTradersBulk, isValidSolanaAddress } from "./traderService.js";

@@ -85,6 +85,12 @@ async function rpcUrls() {
   return all.length ? all : ["https://api.mainnet-beta.solana.com"];
 }
 
+/** One RPC URL from the pool (round-robin), for libraries that want their own Connection object. */
+export async function pickRpcUrl() {
+  const urls = await rpcUrls();
+  return urls[rpcIndex++ % urls.length];
+}
+
 /** JSON-RPC call, rotating endpoints and failing over to the next one on any error. */
 export async function rpc(method, params) {
   const urls = await rpcUrls();

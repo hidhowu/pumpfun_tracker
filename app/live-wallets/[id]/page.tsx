@@ -15,6 +15,7 @@ import { HoldingsTable, SOL, TokenAccountsTable } from "@/components/live-wallet
 import { SolSheet } from "@/components/live-wallets/sol-sheet";
 import { ReceiveDialog } from "@/components/live-wallets/receive-dialog";
 import { TokenSheet } from "@/components/live-wallets/token-sheet";
+import { TradingPanel } from "@/components/live-wallets/trading-panel";
 import { ViewKeyDialog } from "@/components/live-wallets/view-key-dialog";
 import { PnlCard, PortfolioCard, SecurityNote } from "@/components/live-wallets/wallet-panels";
 import { AddressChip, PnlPill, signedUsd, toneClass, WalletAvatar } from "@/components/live-wallets/shared";
@@ -233,6 +234,7 @@ export default function LiveWalletDetailPage() {
                   <TabsTrigger value="holdings">Tokens</TabsTrigger>
                   <TabsTrigger value="activity">Activity</TabsTrigger>
                   <TabsTrigger value="accounts">Accounts</TabsTrigger>
+                  <TabsTrigger value="trading">Trading</TabsTrigger>
                   <TabsTrigger value="pnl" className="xl:hidden">
                     <TrendingUp className="size-4 max-sm:hidden" /> P&amp;L
                   </TabsTrigger>
@@ -243,6 +245,9 @@ export default function LiveWalletDetailPage() {
                   <ActivityTable walletId={wallet._id} onSelectToken={setSelectedMint} refreshKey={refreshKey} showSummary={false} />
                 </TabsContent>
                 <TabsContent value="accounts">{chain ? <TokenAccountsTable walletId={wallet._id} accounts={chain.accounts} onSelect={setSelectedMint} onChanged={handleManualRefresh} /> : <Skeleton className="h-48 w-full rounded-2xl" />}</TabsContent>
+                <TabsContent value="trading">
+                  <TradingPanel walletId={wallet._id} twoFactorEnabled={detail.twoFactorEnabled} refreshKey={refreshKey} />
+                </TabsContent>
                 <TabsContent value="pnl" className="xl:hidden">
                   <div className="grid gap-4 md:grid-cols-2">
                     {pnl ? <PnlCard pnl={pnl} /> : null}

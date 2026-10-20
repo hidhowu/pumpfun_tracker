@@ -5,6 +5,7 @@ import { WalletPosition } from "../models/WalletPosition.js";
 import { WalletPendingExecution } from "../models/WalletPendingExecution.js";
 import { estimateTradeUsdValue, sumTraderTokenAmount } from "./engine.js";
 import { logEvent } from "../systemLog.js";
+import { liveHolds, mirrorBuy, mirrorSell } from "../live/trading/mirror.js";
 
 const CLOSING_OUT_FRACTION_PERCENT = 95; // same threshold as db/simulation/engine.js's evaluateSell
 
@@ -38,21 +39,34 @@ async function evaluateWalletBuy(wallet, walletTrader, trade) {
     if (err?.code !== 11000) throw err; // already queued by a concurrent call
     return false;
   }
+  // A live wallet connected to this wallet takes the same trade right now, without the execution delay (db/live/trading/mirror.js).
+  mirrorBuy(wallet, walletTrader, trade).catch((err) => logLiveMirrorError("buy", wallet, trade, err));
   return true;
+}
+
+function logLiveMirrorError(action, wallet, trade, err) {
+  logEvent("trade", `Failed to queue the live ${action} of ${trade.mint} for wallet ${wallet._id}: ${err.message}`, {
+    level: "error",
+    meta: { walletId: String(wallet._id), traderAddress: trade.wallet, mint: trade.mint, signature: trade.signature },
+  });
 }
 
 async function evaluateWalletSell(wallet, traderAddress, trade) {
   const openPosition = await WalletPosition.exists({ walletId: wallet._id, traderAddress, mint: trade.mint, status: "open" });
-  if (!openPosition) return false; // this wallet doesn't hold this mint - ignore, same as the Profile-scoped path
+  // The live wallet holds this trader's token even when the simulation never opened it (e.g. the trader sold within the execution delay).
+  const liveHolding = await liveHolds(wallet._id, traderAddress, trade.mint);
+  if (!openPosition && !liveHolding) return false; // this wallet doesn't hold this mint - ignore, same as the Profile-scoped path
 
-  const alreadyPending = await WalletPendingExecution.exists({
-    walletId: wallet._id,
-    traderAddress,
-    mint: trade.mint,
-    action: "sell",
-    status: "pending",
-  });
-  if (alreadyPending) return false;
+  const alreadyPending =
+    !openPosition ||
+    (await WalletPendingExecution.exists({
+      walletId: wallet._id,
+      traderAddress,
+      mint: trade.mint,
+      action: "sell",
+      status: "pending",
+    }));
+  if (alreadyPending && !liveHolding) return false;
 
   // Same dust-for-sell logic as db/simulation/engine.js's evaluateSell,
   // against the SAME shared (wallet-agnostic) Trade history - the real
@@ -66,6 +80,10 @@ async function evaluateWalletSell(wallet, traderAddress, trade) {
   const isClosingOut = cumulativeSoldFraction >= CLOSING_OUT_FRACTION_PERCENT;
   const isDust = soldFraction < wallet.settings.dustSellFractionPercent && !isClosingOut;
   if (isDust) return false;
+
+  // The live wallet sells its part at once; the simulation below still waits out its execution delay.
+  if (liveHolding) await mirrorSell(wallet, traderAddress, trade).catch((err) => logLiveMirrorError("sell", wallet, trade, err));
+  if (alreadyPending) return false;
 
   const triggerAt = new Date(Date.now() + wallet.settings.executionDelaySeconds * 1000);
   try {

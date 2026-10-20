@@ -36,6 +36,7 @@ import { ensureTodaySnapshotsForAllActiveTraders } from "../db/simulation/snapsh
 import { evaluateWalletTrade } from "../db/simulation/walletEngine.js";
 import { processDueWalletExecutions, checkWalletRiskExits } from "../db/simulation/walletExecutor.js";
 import { ensureTodaySnapshotsForAllWallets, applyDailyBalanceResets, recordHourlyWalletSnapshots } from "../db/simulation/walletSnapshot.js";
+import { startLiveTradingLoops } from "../db/live/trading/loops.js";
 import { getSystemSettings } from "../db/models/SystemSettings.js";
 import { logEvent } from "../db/systemLog.js";
 import { SystemCommand } from "../db/models/SystemCommand.js";
@@ -675,6 +676,7 @@ export class TrackerService extends EventEmitter {
     this.stopCommandPolling();
     for (const sub of this.subscribers.values()) sub.close();
     this.subscribers.clear();
+    this.emit("closed");
   }
 }
 
@@ -747,6 +749,9 @@ async function runCli() {
   tracker.startHttpRpcPoolSync(15000);
   tracker.startSimulationLoops();
   tracker.startWalletSimulationLoops();
+  // Live wallets connected to a simulation wallet: their trade queue, their own exit rules and the burn engine (db/live/trading/).
+  const stopLive = startLiveTradingLoops({ onError: (err) => tracker.emit("error", err) });
+  tracker.once("closed", stopLive);
   tracker.startCommandPolling();
 }
 

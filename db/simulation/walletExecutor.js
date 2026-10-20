@@ -9,6 +9,7 @@ import { logEvent } from "../systemLog.js";
 import { computeTradeFees, realizedCounterDeltaOnClose } from "../fees.js";
 import { applyOnce, wasApplied, savePlan, leaseExpiry, failOrRetry, reapStale } from "./atomic.js";
 import { isTradingPaused } from "./guards.js";
+import { mirrorExit } from "../live/trading/mirror.js";
 
 async function markSkipped(pending, reason) {
   pending.status = "skipped";
@@ -327,6 +328,13 @@ async function executeWalletSell(pending) {
  * this is a no-op. Returns true if a new exit was queued.
  */
 async function queueExit(position, executionDelaySeconds, closeReason) {
+  // A live wallet connected to this wallet follows the exit at once, with no execution delay (db/live/trading/mirror.js).
+  mirrorExit(position, closeReason).catch((err) =>
+    logEvent("trade", `Failed to queue the live ${closeReason} exit of ${position.mint} for wallet ${position.walletId}: ${err.message}`, {
+      level: "error",
+      meta: { walletId: String(position.walletId), traderAddress: position.traderAddress, mint: position.mint },
+    })
+  );
   try {
     await WalletPendingExecution.create({
       walletId: position.walletId,

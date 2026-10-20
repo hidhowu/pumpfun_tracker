@@ -24,6 +24,7 @@ import { WalletPerformanceTab } from "@/components/wallets/wallet-performance-ta
 import { WalletTradersTab } from "@/components/wallets/wallet-traders-tab";
 import { WalletTradeHistory } from "@/components/wallets/wallet-trade-history";
 import { WalletSettingsPanel } from "@/components/wallets/wallet-settings-panel";
+import { LinkedLiveCard } from "@/components/wallets/linked-live-card";
 import { ExportCsvDialog } from "@/components/export-csv-dialog";
 import { deleteWallet, getWallet, renameWallet } from "@/lib/api";
 import type { WalletView } from "@/lib/types";
@@ -164,6 +165,8 @@ export default function WalletDetailPage() {
             </AlertDialog>
             </div>
           </div>
+
+          <LinkedLiveCard walletId={wallet._id} />
 
           <Tabs defaultValue="performance" className="flex flex-col gap-4">
             <TabsList>

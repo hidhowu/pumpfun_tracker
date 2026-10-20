@@ -1,4 +1,4 @@
-import { Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { ComputeBudgetProgram, Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { rpc } from "../onchainPrice.js";
 import { base58Encode } from "./walletKeys.js";
 
@@ -172,4 +172,90 @@ export async function burnAndCloseTokenAccount({ secretKey, tokenAccount }) {
     closed: true,
     reclaimedLamports: account.lamports,
   };
+}
+
+// ------------------------------------------------------------------ many accounts in one transaction
+
+const SIZE_LIMIT = 1232;
+const UNITS_PER_ACCOUNT = 30_000; // generous: a burn + close costs far less, and unused units are not charged for
+const BASE_UNITS = 20_000;
+
+/**
+ * Burns and closes SEVERAL token accounts of one wallet, packing as many as fit into each transaction (up to `perTransaction`). A normal
+ * transaction (no Jito): the network's base fee plus, optionally, a tiny priority fee (`priorityFeeLamports`, spread over the compute units
+ * so the whole fee is that amount) - a few thousandths of a dollar at most. Accounts that can't be closed (frozen, someone else's right to close,
+ * not the wallet's) are reported in `skipped` and left alone; the rest still go.
+ *
+ * @param {{ secretKey: Uint8Array | Buffer, tokenAccounts: string[], perTransaction?: number, priorityFeeLamports?: number }} options
+ * @returns {Promise<{ transactions: Array<{ signature: string, status: "confirmed" | "pending", accounts: string[], reclaimedLamports: number }>, skipped: Array<{ account: string, reason: string }>, failed: Array<{ accounts: string[], reason: string }> }>}
+ */
+export async function burnAndCloseMany({ secretKey, tokenAccounts, perTransaction = 10, priorityFeeLamports = 0 }) {
+  let keypair;
+  try {
+    keypair = Keypair.fromSecretKey(Uint8Array.from(secretKey));
+  } catch {
+    throw new BurnError("The wallet's key couldn't be used.", 500);
+  }
+  const owner = keypair.publicKey;
+
+  const ready = [];
+  const skipped = [];
+  for (const tokenAccount of [...new Set(tokenAccounts)]) {
+    try {
+      new PublicKey(tokenAccount);
+      const account = await readAccount(tokenAccount, owner.toBase58());
+      ready.push({ tokenAccount, account, instructions: buildBurnAndCloseInstructions({ owner, tokenAccount, account }) });
+    } catch (err) {
+      skipped.push({ account: tokenAccount, reason: err instanceof Error ? err.message : "unreadable" });
+    }
+  }
+
+  const transactions = [];
+  const failed = [];
+  const queue = [...ready];
+  while (queue.length > 0) {
+    // As many as fit: start with the most allowed and halve until the signed transaction is small enough.
+    let count = Math.min(perTransaction, queue.length);
+    let built = null;
+    while (count >= 1) {
+      const group = queue.slice(0, count);
+      const { value: latest } = await rpc("getLatestBlockhash", [{ commitment: "confirmed" }]);
+      const units = BASE_UNITS + UNITS_PER_ACCOUNT * group.length;
+      const transaction = new Transaction({ feePayer: owner, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight });
+      transaction.add(ComputeBudgetProgram.setComputeUnitLimit({ units }));
+      if (priorityFeeLamports > 0) transaction.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: Math.ceil((priorityFeeLamports * 1_000_000) / units) }));
+      for (const entry of group) transaction.add(...entry.instructions);
+      transaction.sign(keypair);
+      if (transaction.serialize().length <= SIZE_LIMIT) {
+        built = { group, transaction, latest };
+        break;
+      }
+      count = Math.floor(count / 2);
+    }
+    if (!built) {
+      failed.push({ accounts: [queue.shift().tokenAccount], reason: "Too large to send." });
+      continue;
+    }
+    const { group, transaction, latest } = built;
+    queue.splice(0, group.length);
+    const accounts = group.map((g) => g.tokenAccount);
+    const signature = base58Encode(transaction.signature);
+    try {
+      await rpc("sendTransaction", [transaction.serialize().toString("base64"), { encoding: "base64", preflightCommitment: "confirmed", maxRetries: 3 }]);
+    } catch (err) {
+      const statuses = await rpc("getSignatureStatuses", [[signature]]).catch(() => null);
+      if (!statuses?.value?.[0] || statuses.value[0].err) {
+        failed.push({ accounts, reason: explain(err instanceof Error ? err.message : err) });
+        continue;
+      }
+    }
+    try {
+      const outcome = await waitForConfirmation(signature, latest.lastValidBlockHeight);
+      if (outcome === "expired") failed.push({ accounts, reason: "The network was too slow and the transaction expired. Nothing happened." });
+      else transactions.push({ signature, status: outcome, accounts, reclaimedLamports: group.reduce((total, g) => total + g.account.lamports, 0) });
+    } catch (err) {
+      failed.push({ accounts, reason: err instanceof Error ? err.message : "failed" });
+    }
+  }
+  return { transactions, skipped, failed };
 }
