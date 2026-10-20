@@ -86,7 +86,6 @@ export function validateField(field, value) {
  */
 export function validateTrailingStops(list) {
   if (!Array.isArray(list)) return { ok: false, error: "trailingStops must be a list" };
-  if (list.length > 20) return { ok: false, error: "At most 20 trailing-stop rules" };
   const out = [];
   for (const rule of list) {
     const arm = rule?.armPercent;
