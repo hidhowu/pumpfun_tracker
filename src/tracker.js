@@ -34,6 +34,7 @@ import {
 } from "../db/simulation/executor.js";
 import { ensureTodaySnapshotsForAllActiveTraders } from "../db/simulation/snapshot.js";
 import { evaluateWalletTrade } from "../db/simulation/walletEngine.js";
+import { ApiTradePoller } from "../db/simulation/apiTradePoller.js";
 import { processDueWalletExecutions, checkWalletRiskExits } from "../db/simulation/walletExecutor.js";
 import { ensureTodaySnapshotsForAllWallets, applyDailyBalanceResets, recordHourlyWalletSnapshots } from "../db/simulation/walletSnapshot.js";
 import { startLiveTradingLoops } from "../db/live/trading/loops.js";
@@ -111,6 +112,20 @@ export class TrackerService extends EventEmitter {
     this._walletSnapshotTimer = null;
     this._walletRolloverTimer = null;
     this._walletRolloverInProgress = false;
+    // Wallets set to track by pump.fun's API instead of the logs: polls their traders' trades (see db/simulation/apiTradePoller.js).
+    this.apiPoller = null;
+  }
+
+  /** Starts polling the user-trades API for the traders of every wallet whose tracking method is "api". Safe to leave running with no such wallet. */
+  startApiTracking() {
+    if (this.apiPoller) return;
+    this.apiPoller = new ApiTradePoller({ onError: (err) => this.emit("error", err) });
+    this.apiPoller.start();
+  }
+
+  stopApiTracking() {
+    this.apiPoller?.stop();
+    this.apiPoller = null;
   }
 
   /** Creates and wires a LogSubscriber dedicated to exactly one RPC endpoint. */
@@ -673,6 +688,7 @@ export class TrackerService extends EventEmitter {
     this.stopHttpRpcPoolSync();
     this.stopSimulationLoops();
     this.stopWalletSimulationLoops();
+    this.stopApiTracking();
     this.stopCommandPolling();
     for (const sub of this.subscribers.values()) sub.close();
     this.subscribers.clear();
@@ -749,6 +765,7 @@ async function runCli() {
   tracker.startHttpRpcPoolSync(15000);
   tracker.startSimulationLoops();
   tracker.startWalletSimulationLoops();
+  tracker.startApiTracking();
   // Live wallets connected to a simulation wallet: their trade queue, their own exit rules and the burn engine (db/live/trading/).
   const stopLive = startLiveTradingLoops({ onError: (err) => tracker.emit("error", err) });
   tracker.once("closed", stopLive);

@@ -282,6 +282,8 @@ export type GlobalSettings = {
   defaultJitoFeeUsd: number;
   // System-wide, not a per-trader override - how often stop-loss/take-profit/trailing-stops are re-checked.
   riskCheckIntervalSeconds: number;
+  // System-wide - how many times a second each trader of an API-tracking wallet is asked for new trades.
+  apiPollsPerSecond: number;
 };
 
 /** Operational log entry for the Logs UI section - see db/systemLog.js. Auto-expires after 24h. */
@@ -377,6 +379,8 @@ export type WalletSettings = {
   // When true, balanceUsd auto-resets to startingBalanceUsd once per UTC day
   // - trade history/realizedPnlUsd are untouched. See db/simulation/walletSnapshot.js's applyDailyBalanceResets.
   autoResetBalanceDaily: boolean;
+  /** How the wallet learns about its traders' trades: the tracker's RPC logs (default) or pump.fun's user-trades API. See db/models/Wallet.js. */
+  trackingMethod?: "logs" | "api";
 };
 
 export type WalletView = {

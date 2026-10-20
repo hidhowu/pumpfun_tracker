@@ -18,6 +18,9 @@ const SystemSettingsSchema = new Schema({
   key: { type: String, default: "system", unique: true },
   defaultMuted: { type: Boolean, default: false },
   riskCheckIntervalSeconds: { type: Number, default: 7 },
+  // How many times a second each trader of an "api"-tracking wallet is asked for new trades (db/simulation/apiTradePoller.js).
+  // System-wide, like the risk-check cadence: it is a load on pump.fun and the proxy pool, not a strategy choice.
+  apiPollsPerSecond: { type: Number, default: 3 },
   // Kill switch: while true no NEW buy is filled anywhere (every profile and wallet). Exits and sells keep working so
   // open positions can still be closed.
   tradingPaused: { type: Boolean, default: false },

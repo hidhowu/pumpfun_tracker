@@ -383,6 +383,19 @@ export function ProfileSettingsForm({
 
           <Separator />
 
+          <NumberField
+            id="apiPollsPerSecond"
+            label="API polls per second (each trader)"
+            suffix="/sec"
+            step={0.5}
+            min={0.2}
+            value={draft.apiPollsPerSecond}
+            onChange={(v) => set("apiPollsPerSecond", v)}
+            description="Applies to every wallet set to track by the pump.fun API (Wallet settings > Trade detection). How many times a second EACH of its traders is asked for new trades, e.g. 3 or 4. Requests are spread out with random timing and go through your proxies, so the real rate is capped by the proxy pool - the Logs page shows the rate actually reached. Takes effect within 10s."
+          />
+
+          <Separator />
+
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
             <div className="flex min-w-0 flex-col">
               <span className="text-sm font-medium">Allow negative balance</span>

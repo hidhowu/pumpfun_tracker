@@ -10,6 +10,19 @@ import { computeTradeFees, realizedCounterDeltaOnClose } from "../fees.js";
 import { applyOnce, wasApplied, savePlan, leaseExpiry, failOrRetry, reapStale } from "./atomic.js";
 import { isTradingPaused } from "./guards.js";
 import { mirrorExit } from "../live/trading/mirror.js";
+import { TradeError } from "../live/trading/pumpSwap.js";
+import { priceBuy, priceSell, valueMany } from "./sdkQuote.js";
+import { tokenHasTrades } from "./apiClients.js";
+
+/** Wallets that follow their traders through pump.fun's API (Wallet.settings.trackingMethod) fill and are checked at SDK quotes, not spot prices. */
+const isApiWallet = (wallet) => wallet?.settings?.trackingMethod === "api";
+
+/**
+ * The fee settings a fill is charged with. An SDK quote already has pump.fun's fee inside it (the budget is spent INCLUDING the
+ * fee, a sale pays out AFTER it), so charging the pump-fee percentage on top would take it twice; only the Jito fee is added.
+ * A "spot" price (a token the SDK can't quote, or any logs-wallet fill) has no fee in it, so the setting applies as usual.
+ */
+const feeSettings = (wallet, method) => ({ pumpFeePercent: method === "sdk" ? 0 : wallet.settings.pumpFeePercent, jitoFeeUsd: wallet.settings.jitoFeeUsd });
 
 async function markSkipped(pending, reason) {
   pending.status = "skipped";
@@ -83,22 +96,41 @@ async function executeWalletBuy(pending) {
     const existingOpen = await WalletPosition.exists({ walletId: pending.walletId, traderAddress: trader.address, mint: pending.mint, status: "open" });
     if (existingOpen) return markSkipped(pending, "position already open on this wallet (race)");
 
-    const price = await getPrice(pending.mint, { fresh: true });
-    if (!price?.priceUsd) return retryWithoutPrice(pending);
-
     const spendUsd = walletDoc.settings.tradeSizeUsd;
-    const buyFees = computeTradeFees(spendUsd, walletDoc.settings);
+    let priceUsd;
+    let tokenAmount;
+    let method = "spot";
+    if (isApiWallet(walletDoc)) {
+      // Last check before an API wallet buys: the token must have real trades on pump.fun. An empty answer skips the buy; a failed
+      // request throws (and is retried) rather than being mistaken for an empty token.
+      if (!(await tokenHasTrades(pending.mint))) return markSkipped(pending, "no trades on this token (pump.fun's trades API returned none)");
+      // The fill is what pump.fun's SDK says spending the trade size buys right now.
+      const quote = await priceBuy(pending.mint, spendUsd).catch((err) => {
+        if (err instanceof TradeError) return err;
+        throw err;
+      });
+      if (quote instanceof TradeError) return markSkipped(pending, quote.message);
+      if (!quote) return retryWithoutPrice(pending);
+      ({ priceUsd, tokenAmount, method } = quote);
+    } else {
+      const price = await getPrice(pending.mint, { fresh: true });
+      if (!price?.priceUsd) return retryWithoutPrice(pending);
+      priceUsd = price.priceUsd;
+      tokenAmount = spendUsd / priceUsd;
+    }
+    const buyFees = computeTradeFees(spendUsd, feeSettings(walletDoc, method));
     const totalCost = spendUsd + buyFees.totalFeeUsd;
 
     fill = await savePlan(WalletPendingExecution, pending, {
       positionId: String(new mongoose.Types.ObjectId()),
-      priceUsd: price.priceUsd,
+      priceUsd,
+      priceMethod: method,
       spendUsd,
       feeUsd: buyFees.totalFeeUsd,
       pumpFeeUsd: buyFees.pumpFeeUsd,
       jitoFeeUsd: buyFees.jitoFeeUsd,
       totalCost,
-      tokenAmount: spendUsd / price.priceUsd,
+      tokenAmount,
     });
   }
 
@@ -293,12 +325,25 @@ async function executeWalletSell(pending) {
   }
 
   if (!plan) {
-    const price = await getPrice(pending.mint, { fresh: true });
-    if (!price?.priceUsd) return retryWithoutPrice(pending);
+    let priceUsd;
+    let method = "spot";
+    if (isApiWallet(walletDoc)) {
+      // What pump.fun's SDK says selling the whole position pays out right now (the sale's fee is already in it).
+      const quote = await priceSell(pending.mint, position.tokenAmount).catch((err) => {
+        if (err instanceof TradeError) return null; // can't be priced at all: retried like a missing price, then skipped
+        throw err;
+      });
+      if (!quote) return retryWithoutPrice(pending);
+      ({ priceUsd, method } = quote);
+    } else {
+      const price = await getPrice(pending.mint, { fresh: true });
+      if (!price?.priceUsd) return retryWithoutPrice(pending);
+      priceUsd = price.priceUsd;
+    }
 
     const fresh = planClose(position, {
-      priceUsd: price.priceUsd,
-      fees: walletDoc.settings,
+      priceUsd,
+      fees: feeSettings(walletDoc, method),
       closeReason: pending.closeReason || "trader_sell",
       closeSignature: pending.closeReason && pending.closeReason !== "trader_sell" ? null : pending.sourceSignature,
       pendingId: pending._id,
@@ -414,9 +459,20 @@ export async function checkWalletRiskExits() {
   // Same reasoning as checkRiskExits: warm the cache for every distinct
   // mint in bounded batches before the per-position fan-out below, instead
   // of that Promise.all firing one curl process per distinct mint at once.
-  await prefetchPrices(openPositions.map((p) => p.mint), { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
-
   const walletCache = new Map();
+  for (const walletId of new Set(openPositions.map((p) => String(p.walletId)))) {
+    walletCache.set(walletId, (await Wallet.findById(walletId)) ?? null);
+  }
+
+  // An API wallet's positions are valued at what pump.fun's SDK says selling them pays out right now (one batched read for all of
+  // them, nothing cached between sweeps); the others at the spot price, warmed in one batch below.
+  const apiPositions = openPositions.filter((p) => isApiWallet(walletCache.get(String(p.walletId))));
+  const apiValues = await valueMany(apiPositions.map((p) => ({ id: String(p._id), mint: p.mint, tokenAmount: p.tokenAmount })));
+  const apiIds = new Set(apiPositions.map((p) => String(p._id)));
+  await prefetchPrices(
+    openPositions.filter((p) => !apiIds.has(String(p._id))).map((p) => p.mint),
+    { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP }
+  );
   // Traders blacklisted while a position was open - closed below (backstop
   // for closeAllWalletPositionsForTrader when no price was available then).
   const traderAddresses = [...new Set(openPositions.map((p) => p.traderAddress))];
@@ -426,18 +482,19 @@ export async function checkWalletRiskExits() {
 
   const results = await Promise.all(
     openPositions.map(async (position) => {
-      const walletKey = String(position.walletId);
-      let wallet = walletCache.get(walletKey);
-      if (wallet === undefined) {
-        wallet = await Wallet.findById(position.walletId);
-        walletCache.set(walletKey, wallet ?? null);
-      }
+      const wallet = walletCache.get(String(position.walletId));
       if (!wallet) return false;
 
-      const price = await getPrice(position.mint, { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
-      if (!price?.priceUsd) return false;
-
-      const currentValue = position.tokenAmount * price.priceUsd;
+      let currentValue;
+      if (apiIds.has(String(position._id))) {
+        const value = apiValues.get(String(position._id));
+        if (!value) return false; // couldn't be priced this sweep - checked again on the next one
+        currentValue = value.valueUsd;
+      } else {
+        const price = await getPrice(position.mint, { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
+        if (!price?.priceUsd) return false;
+        currentValue = position.tokenAmount * price.priceUsd;
+      }
       const totalCost = position.costBasisUsd + position.buyFeeUsd;
       const { unrealizedUsd, unrealizedPercent } = computeUnrealized(currentValue, totalCost);
 

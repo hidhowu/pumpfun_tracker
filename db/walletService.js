@@ -45,6 +45,7 @@ const NUMBER_FIELDS = [
 // null = disabled
 const NULLABLE_NUMBER_FIELDS = ["stopLossPercent", "takeProfitPercent"];
 const BOOLEAN_FIELDS = ["autoResetBalanceDaily"];
+export const TRACKING_METHODS = ["logs", "api"];
 
 /** Validates a settings object (or partial patch) and returns only the accepted keys. THROWS an Error naming the first bad setting - callers turn that into a 400. */
 export function validateWalletSettings(patch) {
@@ -56,6 +57,10 @@ export function validateWalletSettings(patch) {
       if (typeof patch[key] !== "boolean") throw new Error(`${key} must be true or false`);
       out[key] = patch[key];
     }
+  }
+  if ("trackingMethod" in patch && patch.trackingMethod !== undefined) {
+    if (!TRACKING_METHODS.includes(patch.trackingMethod)) throw new Error(`trackingMethod must be one of: ${TRACKING_METHODS.join(", ")}`);
+    out.trackingMethod = patch.trackingMethod;
   }
   if ("trailingStops" in patch) {
     const rules = validateTrailingStops(patch.trailingStops);

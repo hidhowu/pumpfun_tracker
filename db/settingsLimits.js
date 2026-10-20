@@ -25,6 +25,7 @@ const NUMBER_LIMITS = {
   pumpFeePercent: [0, MAX_PUMP_FEE_PERCENT],
   jitoFeeUsd: [0, MAX_JITO_FEE_USD],
   riskCheckIntervalSeconds: [5, 3600], // the ceiling keeps it far below Node's 2^31 ms timer limit
+  apiPollsPerSecond: [0.2, 10], // per trader; the proxy pool's own pacing is the real ceiling, this only keeps a typo from asking for 1000
 };
 
 // Percent thresholds that must be a real positive number when set (null disables them): 0 would fire on the first sweep.

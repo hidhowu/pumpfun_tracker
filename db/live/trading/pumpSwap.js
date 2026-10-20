@@ -53,12 +53,13 @@ export async function getMarket(mint, conn) {
 }
 
 /**
- * @param {{ owner: PublicKey, mint: string, budgetLamports: bigint | number, slippagePercent: number }} options
+ * @param {{ owner: PublicKey, mint: string, budgetLamports: bigint | number, slippagePercent: number, quoteOnly?: boolean }} options
  *   budgetLamports is what the swap may spend INCLUDING pump.fun's own fee.
+ *   quoteOnly: only price the purchase (the simulation's API mode); no instructions are built, so `owner` can be any address.
  * @returns {Promise<{ venue: "curve"|"amm", instructions: import("@solana/web3.js").TransactionInstruction[], expectedTokenRaw: bigint,
  *   maxCostLamports: bigint, tokenProgram: PublicKey, decimals: number, ata: PublicKey, createsAta: boolean }>}
  */
-export async function prepareBuy({ owner, mint, budgetLamports, slippagePercent }) {
+export async function prepareBuy({ owner, mint, budgetLamports, slippagePercent, quoteOnly = false }) {
   const { pump, amm } = pumpSdks();
   const market = await getMarket(mint);
   const mintKey = new PublicKey(mint);
@@ -79,7 +80,7 @@ export async function prepareBuy({ owner, mint, budgetLamports, slippagePercent 
       quoteTransferFee: state.quoteTransferFee,
     });
     if (tokens.lten(0)) throw new TradeError("The amount is too small to buy any of this token.", "bad_amount");
-    const instructions = await pump.PUMP_SDK.buyInstructions({
+    const instructions = quoteOnly ? [] : await pump.PUMP_SDK.buyInstructions({
       global,
       bondingCurveAccountInfo: state.bondingCurveAccountInfo,
       bondingCurve: state.bondingCurve,
@@ -124,7 +125,7 @@ export async function prepareBuy({ owner, mint, budgetLamports, slippagePercent 
     isMayhemMode: state.pool.isMayhemMode,
     creatorFeeBps: state.pool.creatorFeeBps,
   });
-  const instructions = await amm.PUMP_AMM_SDK.buyQuoteInput(state, budget, slippagePercent);
+  const instructions = quoteOnly ? [] : await amm.PUMP_AMM_SDK.buyQuoteInput(state, budget, slippagePercent);
   return {
     venue: "amm",
     instructions,

@@ -4,10 +4,24 @@ import { WalletTrader } from "../models/WalletTrader.js";
 import { WalletPosition } from "../models/WalletPosition.js";
 import { WalletPendingExecution } from "../models/WalletPendingExecution.js";
 import { estimateTradeUsdValue, sumTraderTokenAmount } from "./engine.js";
+import { sumApiTraderTokenAmount } from "./apiLedger.js";
+import { getSolUsd } from "../onchainPrice.js";
 import { logEvent } from "../systemLog.js";
 import { liveHolds, mirrorBuy, mirrorSell } from "../live/trading/mirror.js";
 
 const CLOSING_OUT_FRACTION_PERCENT = 95; // same threshold as db/simulation/engine.js's evaluateSell
+
+/**
+ * What the trader's buy was worth in USD. A trade the API reported carries its own USD amount from the moment it happened;
+ * one read from the logs is valued at the token's current price (see estimateTradeUsdValue).
+ */
+async function tradeUsdValue(trade) {
+  if (trade.source !== "api") return estimateTradeUsdValue(trade);
+  if (Number.isFinite(trade.amountUsd)) return trade.amountUsd;
+  if (!Number.isFinite(trade.solAmount)) return null;
+  const solUsd = await getSolUsd();
+  return solUsd ? trade.solAmount * solUsd : null;
+}
 
 async function evaluateWalletBuy(wallet, walletTrader, trade) {
   if (walletTrader.everBoughtMints.includes(trade.mint)) return false; // permanent per-wallet-per-trader dup protection
@@ -21,7 +35,7 @@ async function evaluateWalletBuy(wallet, walletTrader, trade) {
   });
   if (alreadyPending) return false;
 
-  const tradeUsd = await estimateTradeUsdValue(trade);
+  const tradeUsd = await tradeUsdValue(trade);
   if (tradeUsd === null || tradeUsd < wallet.settings.dustBuyUsd) return false;
 
   const triggerAt = new Date(Date.now() + wallet.settings.executionDelaySeconds * 1000);
@@ -72,8 +86,9 @@ async function evaluateWalletSell(wallet, traderAddress, trade) {
   // against the SAME shared (wallet-agnostic) Trade history - the real
   // trader's own on-chain sell fraction doesn't depend on which wallet is
   // watching, only wallet.settings.dustSellFractionPercent's threshold does.
-  const traderBoughtTotal = await sumTraderTokenAmount(traderAddress, trade.mint, "buy");
-  const traderSoldBefore = await sumTraderTokenAmount(traderAddress, trade.mint, "sell", { beforeBlockTime: trade.blockTime });
+  const sumTokens = trade.source === "api" ? sumApiTraderTokenAmount : sumTraderTokenAmount; // the history lives where the trade was recorded
+  const traderBoughtTotal = await sumTokens(traderAddress, trade.mint, "buy");
+  const traderSoldBefore = await sumTokens(traderAddress, trade.mint, "sell", { beforeBlockTime: trade.blockTime });
 
   const soldFraction = traderBoughtTotal > 0 ? (trade.tokenAmount / traderBoughtTotal) * 100 : 100;
   const cumulativeSoldFraction = traderBoughtTotal > 0 ? ((traderSoldBefore + trade.tokenAmount) / traderBoughtTotal) * 100 : 100;
@@ -114,9 +129,15 @@ async function evaluateWalletSell(wallet, traderAddress, trade) {
  * db/simulation/walletExecutor.js's executeWalletBuy) so queueing stays
  * fast/simple, same division of responsibility as the Profile-scoped path.
  *
+ * Only wallets whose tracking method (Wallet.settings.trackingMethod) is `trackingMethod` take part: the log pipeline passes "logs",
+ * the API poller (db/simulation/apiTradePoller.js) passes "api". A trader who is in a logs wallet and an API wallet is therefore
+ * seen twice, once by each method, and each wallet acts only on its own.
+ *
+ * @param {object} trade
+ * @param {{ trackingMethod?: "logs"|"api" }} [options]
  * @returns {Promise<boolean>} true if at least one wallet acted on this trade.
  */
-export async function evaluateWalletTrade(trade) {
+export async function evaluateWalletTrade(trade, { trackingMethod = "logs" } = {}) {
   const trader = await Trader.findOne({ address: trade.wallet });
   if (!trader || trader.status !== "active") return false;
 
@@ -127,6 +148,7 @@ export async function evaluateWalletTrade(trade) {
   for (const walletTrader of walletTraders) {
     const wallet = await Wallet.findById(walletTrader.walletId);
     if (!wallet) continue; // stale membership row (wallet deleted) - db/walletService.js's deleteWallet cascades this away, but skip defensively either way
+    if ((wallet.settings?.trackingMethod || "logs") !== trackingMethod) continue; // this wallet follows its traders the other way
 
     try {
       const actioned =

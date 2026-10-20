@@ -71,6 +71,14 @@ const WalletSchema = new Schema({
     // this strategy with a fresh $X every day" rather than strict capital
     // accounting.
     autoResetBalanceDaily: { type: Boolean, default: false },
+    // How this wallet learns about its traders' trades:
+    //  - "logs": the tracker's RPC log subscription (the original way) - pump.fun's price/fees are modelled by db/pumpFunApi.js's
+    //    getPrice and the pump-fee setting above;
+    //  - "api": the tracker polls pump.fun's user-trades API for this wallet's traders (db/simulation/apiTradePoller.js), checks the
+    //    token has trades before buying, and prices every fill and every stop-loss / take-profit check with pump.fun's SDK
+    //    (db/simulation/sdkQuote.js) - the SDK's quote already contains pump.fun's fee, so pumpFeePercent is not charged again.
+    // Per wallet: a trader in two wallets is followed both ways, each wallet by its own method.
+    trackingMethod: { type: String, enum: ["logs", "api"], default: "logs" },
   },
 });
 

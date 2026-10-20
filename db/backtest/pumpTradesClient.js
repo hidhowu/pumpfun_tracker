@@ -213,16 +213,32 @@ export class PumpTradesClient {
   }
 
   /**
+   * The newest trades of a token, newest first - no cursor, no range. `program` ("pump" = the bonding curve, "pump_amm" = the pool) and
+   * `minSolAmount` filter them the way the API's own query parameters do. An unknown token answers 404, which is an empty list here.
+   * @returns {Promise<object[]>}
+   */
+  async fetchRecentTokenTrades(mint, { limit = 1, program = "", minSolAmount = 0 } = {}) {
+    await this.refresh();
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (minSolAmount > 0) qs.set("minSolAmount", String(minSolAmount));
+    if (program) qs.set("program", program);
+    const { status, body } = await this.#send(`${BASE()}/v2/coins/${mint}/trades?${qs}`);
+    if (status === 404) return [];
+    return (JSON.parse(body).trades || []).map(normalizeTrade);
+  }
+
+  /**
    * One page of a wallet's own swaps from pump.fun's user-trades API, newest first.
    * `cursor` is "<unix microseconds>:<uuid>" - the page holds trades strictly older
    * than it (omit for the newest). Returns the cursor for the next page, or null at the
    * end of the history. Only real swaps are requested (types=trades), not token transfers.
+   * `limit` is how many trades one page holds (the API allows up to 100; a live poll only needs the newest few).
    * @returns {Promise<{trades: object[], nextCursor: string|null}>}
    */
-  async fetchUserTrades(userId, cursor, { nudge = false } = {}) {
+  async fetchUserTrades(userId, cursor, { nudge = false, limit = USER_TRADES_PAGE } = {}) {
     await this.refresh();
     const urlFor = (c) => {
-      const qs = new URLSearchParams({ types: "trades", limit: String(USER_TRADES_PAGE) });
+      const qs = new URLSearchParams({ types: "trades", limit: String(limit) });
       if (c) qs.set("cursor", c);
       return `${FRONTEND_BASE()}/user-trades/${encodeURIComponent(userId)}?${qs}`;
     };

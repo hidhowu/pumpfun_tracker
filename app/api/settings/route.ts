@@ -32,7 +32,7 @@ const NULLABLE_NUMERIC_FIELDS = ["defaultStopLossPercent", "defaultTakeProfitPer
 const BOOLEAN_FIELDS = ["defaultAllowNegativeBalance"];
 
 // These two are system-wide, not per-profile - see db/models/SystemSettings.js.
-const SYSTEM_NUMERIC_FIELDS = ["riskCheckIntervalSeconds"];
+const SYSTEM_NUMERIC_FIELDS = ["riskCheckIntervalSeconds", "apiPollsPerSecond"];
 const SYSTEM_BOOLEAN_FIELDS = ["defaultMuted", "tradingPaused"]; // tradingPaused = kill switch for new buys
 
 /**

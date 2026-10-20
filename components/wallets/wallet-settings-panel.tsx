@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Coins, Loader2, RefreshCw, RotateCcw, ShieldAlert, SlidersHorizontal, Timer, TriangleAlert, Wallet as WalletIcon } from "lucide-react";
+import { Coins, Loader2, Radio, RefreshCw, RotateCcw, ShieldAlert, SlidersHorizontal, Timer, TriangleAlert, Wallet as WalletIcon } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -184,6 +184,7 @@ export function WalletSettingsPanel({ walletId, settings, lastAutoResetAt, onUpd
     }
   }
 
+  const trackingMethod = settings.trackingMethod ?? "logs";
   const hasStopLoss = settings.stopLossPercent !== null;
   const hasTakeProfit = settings.takeProfitPercent !== null;
 
@@ -200,6 +201,37 @@ export function WalletSettingsPanel({ walletId, settings, lastAutoResetAt, onUpd
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Radio className="size-3.5" /> TRADE DETECTION
+          </div>
+          <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant={trackingMethod === "logs" ? "default" : "outline"}
+                onClick={() => trackingMethod !== "logs" && save({ trackingMethod: "logs" })}
+              >
+                RPC logs
+              </Button>
+              <Button
+                size="sm"
+                variant={trackingMethod === "api" ? "default" : "outline"}
+                onClick={() => trackingMethod !== "api" && save({ trackingMethod: "api" })}
+              >
+                pump.fun API
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {trackingMethod === "api"
+                ? "This wallet's traders are polled through pump.fun's user-trades API several times a second (rate set in Settings). Before a buy the token must have trades on pump.fun, and every fill and every stop-loss / take-profit check uses pump.fun's SDK quote - the quote already contains pump.fun's fee, so the pump fee below is not charged again. Traders who are also in a logs wallet keep being tracked by the logs for that wallet."
+                : "This wallet's traders are followed through the tracker's RPC log subscription, and priced at the token's spot price plus the pump fee below."}
+            </p>
+          </div>
+        </div>
+
+        <Separator />
+
         <div>
           <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <RotateCcw className="size-3.5" /> BALANCE
