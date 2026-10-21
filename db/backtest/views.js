@@ -217,6 +217,7 @@ function summarise(ledger, feesUsd) {
     negativeBalanceEventCount: w.negativeBalanceEventCount,
     testedStartDays: w.testedStartDays,
     lostCapitalDays: w.lostCapitalDays,
+    deepestLossUsd: ledger.lossDepth.lowest?.pnlUsd ?? 0,
     feesUsd,
   };
 }

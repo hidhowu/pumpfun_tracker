@@ -138,6 +138,9 @@ export function ViewsTab({ runId, suggestedBalanceUsd, refreshKey = 0 }: { runId
                   Capital-loss start days
                 </TableHead>
                 <TableHead className="text-right">Lowest balance</TableHead>
+                <TableHead className="text-right" title="The deepest the profit and loss fell to over the whole window (realised results)">
+                  Deepest loss
+                </TableHead>
                 <TableHead className="text-right">Loss days</TableHead>
                 <TableHead className="text-right">Win rate</TableHead>
                 <TableHead className="text-right">Trades</TableHead>
@@ -166,6 +169,7 @@ export function ViewsTab({ runId, suggestedBalanceUsd, refreshKey = 0 }: { runId
                       {s.testedStartDays > 0 ? `${s.lostCapitalDays} / ${s.testedStartDays}` : "—"}
                     </TableCell>
                     <TableCell className={cn("text-right tabular-nums", s.lowestBalanceUsd < 0 && "text-negative")}>{formatUsd(s.lowestBalanceUsd)}</TableCell>
+                    <TableCell className={cn("text-right tabular-nums", (s.deepestLossUsd ?? 0) < 0 && "text-negative")}>{formatUsd(s.deepestLossUsd ?? 0)}</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {s.lossDays} <span className="text-xs text-muted-foreground">/ {s.lossDays + s.profitDays}</span>
                     </TableCell>

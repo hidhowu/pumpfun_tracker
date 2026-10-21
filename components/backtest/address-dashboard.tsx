@@ -20,6 +20,7 @@ import { AddressStrategyPanel } from "./address-strategy-panel";
 import { AddressTradeHistory } from "./address-trade-history";
 import { AddressQualityCard } from "./address-quality-card";
 import { AddressWalletCard } from "./address-wallet-card";
+import { LossDepthCard } from "./loss-depth-card";
 import { ProgressBar, RunStatusBadge, StageBadge, formatDate, stageDescription } from "./shared";
 
 const ACTIVE = new Set(["queued", "running"]);
@@ -216,6 +217,8 @@ export function AddressDashboard({ runId, address }: { runId: string; address: s
       <AddressWalletCard wallet={wallet} />
 
       <AddressQualityCard daily={trader.stats.daily} />
+
+      <LossDepthCard depth={detail.lossDepth} />
 
       <Tabs defaultValue="simulation" className="flex flex-col gap-4">
         <TabsList className="max-w-full justify-start overflow-x-auto">

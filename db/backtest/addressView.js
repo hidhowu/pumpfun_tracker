@@ -4,6 +4,7 @@ import { BacktestPosition } from "../models/BacktestPosition.js";
 import { BacktestAddress } from "../models/BacktestAddress.js";
 import { computeStreaks } from "../pnl.js";
 import { traderProgressPercent } from "./progress.js";
+import { lossDepthView } from "./dayStats.js";
 
 /**
  * The per-address detail behind the backtest address page: a simulated wallet
@@ -103,6 +104,8 @@ async function loadLedger(run, address) {
   return {
     starting,
     closes,
+    // The deepest the realised P&L got (see lossDepthView): one wallet through the whole window, so no daily reset.
+    lossDepth: lossDepthView(closes.map((c) => ({ t: c.t, day: dayKey(c.t), pnlUsd: c.pnl })), { startingUsd: starting }),
     negativeByDay,
     negativeCount,
     maxNegativeDepth,
@@ -168,6 +171,7 @@ export async function getRunAddress(runId, address, { statsFor }) {
       negativeBalanceEventCount: ledger.negativeCount,
       maxNegativeBalanceUsd: ledger.maxNegativeDepth,
     },
+    lossDepth: ledger.lossDepth,
   };
 }
 

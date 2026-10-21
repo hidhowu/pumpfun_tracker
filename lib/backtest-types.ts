@@ -350,6 +350,22 @@ export type BacktestSettingsView = {
 };
 
 /** One address of a run, as the address page shows it: the run it belongs to, its progress, and its simulated wallet. */
+/**
+ * How deep the losses went (see lossDepthView in db/backtest/dayStats.js). Realised results of closed trades, in the order they closed.
+ * `lowest` is the deepest point over the whole time frame with no boundaries (a later, deeper low replaces an earlier one); null = it never went
+ * below zero. When the balance resets daily every day is its own wallet, so it is the worst day. Percentages are a share of the starting balance.
+ */
+export type BacktestLossDepth = {
+  startingUsd: number;
+  resetDaily: boolean;
+  lowest: { pnlUsd: number; percent: number; at: number | null } | null;
+  /** The lowest point any single day reached on its own (every day starts at 0). */
+  deepestDay: { date: string; pnlUsd: number; percent: number; at: number | null } | null;
+  days: Array<{ date: string; lowestPnlUsd: number; lowestPnlAt: number | null; endPnlUsd: number; trades: number }>;
+  /** The running P&L reduced to its turning points - enough to count how many times it dropped to a level (lib/loss-depth.ts). */
+  swings: Array<{ t: number; pnlUsd: number }>;
+};
+
 export type BacktestAddressDetail = {
   run: Pick<BacktestRunDefinition, "_id" | "name" | "days" | "windowStart" | "windowEnd" | "profileName" | "settings" | "status" | "control">;
   trader: BacktestRunTraderView;
@@ -365,6 +381,7 @@ export type BacktestAddressDetail = {
     negativeBalanceEventCount: number;
     maxNegativeBalanceUsd: number;
   };
+  lossDepth: BacktestLossDepth;
 };
 
 export type BacktestPnlPeriod = "day" | "week" | "month" | "all";
@@ -429,6 +446,7 @@ export type BacktestCombinedWallet = {
     lostCapitalDays: number;
   };
   days: BacktestCombinedDay[];
+  lossDepth: BacktestLossDepth;
   /** Balance after every buy and sell (empty when the balance resets daily). */
   curve: Array<{ t: number; balanceUsd: number }>;
   /** false while addresses are still being worked on: the figures then cover only the trades simulated so far. */
@@ -471,6 +489,8 @@ export type BacktestViewSummary = {
   negativeBalanceEventCount: number;
   testedStartDays: number;
   lostCapitalDays: number;
+  /** The deepest point the realised P&L reached over the window, as a negative dollar amount (0 = never below zero). */
+  deepestLossUsd: number;
   feesUsd: number;
 };
 

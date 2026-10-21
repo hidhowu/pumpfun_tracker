@@ -61,3 +61,75 @@ export function summariseDays(days) {
     withoutBestDay: without,
   };
 }
+
+/**
+ * How deep the losses went, as opposed to how a day ended. A day that closes at +20 may have been at -80 an hour earlier, and the
+ * daily total hides that. Here the closed trades are walked in the order they closed and the running P&L is followed, with no
+ * boundaries: if it fell to -120, climbed back, and later fell to -121, the deepest point is -121.
+ *
+ *  lowest        the deepest point the running P&L reached over the whole time frame (null = it never went below zero). With
+ *                `resetEachDay` every day is its own wallet that starts again at 0, so this is the worst day's low instead.
+ *  deepestDay    the lowest point any single day reached on its own (a day starts at 0): +20 at the end of a day that touched -80
+ *                reads as -80 here.
+ *  days          per day: the lowest point it reached (0 = never below zero), where it ended, and how many trades closed.
+ *  swings        the running P&L reduced to its turning points (every peak and trough, nothing in between). That is all that is needed
+ *                to count how many times it dropped to any level: see countReaches() in lib/loss-depth.ts.
+ *
+ * Only closed trades count (an open trade has no result yet), so the figures are of realised results. Percentages are a share of
+ * `startingUsd`.
+ *
+ * @param {Array<{t: number, day: string, pnlUsd: number}>} trades closed trades, any order; `t` = close time in ms, `day` = the day it is booked on
+ * @param {{startingUsd?: number, resetEachDay?: boolean}} [opts]
+ */
+export function lossDepthView(trades, { startingUsd = 0, resetEachDay = false } = {}) {
+  const sorted = [...trades].sort((a, b) => a.t - b.t);
+  const ofStart = (usd) => (startingUsd > 0 ? (usd / startingUsd) * 100 : 0);
+
+  const byDay = new Map();
+  const raw = sorted.length ? [{ t: sorted[0].t, pnlUsd: 0 }] : [];
+  let run = 0;
+  let overall = null;
+  let currentDay = null;
+  for (const trade of sorted) {
+    if (resetEachDay && currentDay !== null && trade.day !== currentDay) {
+      run = 0;
+      raw.push({ t: trade.t, pnlUsd: 0 });
+    }
+    currentDay = trade.day;
+    run += trade.pnlUsd || 0;
+    raw.push({ t: trade.t, pnlUsd: run });
+    if (run < 0 && (!overall || run < overall.pnlUsd)) overall = { pnlUsd: run, at: trade.t };
+
+    let d = byDay.get(trade.day);
+    if (!d) {
+      d = { lowestPnlUsd: 0, lowestPnlAt: null, endPnlUsd: 0, trades: 0 };
+      byDay.set(trade.day, d);
+    }
+    d.endPnlUsd += trade.pnlUsd || 0;
+    d.trades += 1;
+    if (d.endPnlUsd < d.lowestPnlUsd) {
+      d.lowestPnlUsd = d.endPnlUsd;
+      d.lowestPnlAt = trade.t;
+    }
+  }
+
+  const days = [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([date, d]) => ({ date, ...d }));
+  let worstDay = null;
+  for (const d of days) if (d.lowestPnlUsd < 0 && (!worstDay || d.lowestPnlUsd < worstDay.lowestPnlUsd)) worstDay = d;
+  const deepestDay = worstDay ? { date: worstDay.date, pnlUsd: worstDay.lowestPnlUsd, percent: ofStart(worstDay.lowestPnlUsd), at: worstDay.lowestPnlAt } : null;
+
+  let lowest = overall ? { pnlUsd: overall.pnlUsd, percent: ofStart(overall.pnlUsd), at: overall.at } : null;
+  if (resetEachDay) lowest = deepestDay ? { pnlUsd: deepestDay.pnlUsd, percent: deepestDay.percent, at: deepestDay.at } : null;
+
+  // Turning points only: a run of rising (or falling) points collapses into its last one, equal values into one.
+  const swings = [];
+  for (const point of raw) {
+    const last = swings.at(-1);
+    if (last && last.pnlUsd === point.pnlUsd) continue;
+    const before = swings.at(-2);
+    if (before && last && (last.pnlUsd - before.pnlUsd) * (point.pnlUsd - last.pnlUsd) > 0) swings[swings.length - 1] = point;
+    else swings.push(point);
+  }
+
+  return { startingUsd, resetDaily: resetEachDay, lowest, deepestDay, days, swings };
+}

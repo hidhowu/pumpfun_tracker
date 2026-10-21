@@ -1,6 +1,7 @@
 import { BacktestRun } from "../models/BacktestRun.js";
 import { BacktestRunTrader } from "../models/BacktestRunTrader.js";
 import { BacktestPosition } from "../models/BacktestPosition.js";
+import { lossDepthView } from "./dayStats.js";
 
 /**
  * Combined backtest: every address of the run trades as ONE wallet. They share a starting balance and every trade has the same
@@ -23,6 +24,12 @@ import { BacktestPosition } from "../models/BacktestPosition.js";
  * is a negative-balance event, or a refused buy when a negative balance is not allowed - starting that day would have lost the
  * capital. Winning streaks cover later drops, so a run can survive from day one and still have bad days to start on. With the daily
  * reset every day is its own wallet, so a day is judged on its own trades.
+ *
+ * Deepest loss: a day's total hides how far it dropped on the way (+20 at the end of a day that touched -80). `lossDepth` follows the
+ * realised P&L of the closed trades in the order they closed and reports the lowest point it reached over the whole window (no
+ * boundaries - a later, deeper low replaces an earlier one), the worst single day, and the turning points needed to count how many
+ * times it dropped to a given level. With the daily reset every day is its own wallet, so the lowest point is the worst day. See
+ * lossDepthView() in dayStats.js. Closed trades only: an open trade has no result yet.
  *
  * Because it is computed from the positions that exist, the figures are complete only once every address is simulated.
  */
@@ -168,9 +175,11 @@ export function buildCombinedLedger(positions, { startingUsd, resetDaily = false
   let endBalance = startingUsd;
   /** Books a closed trade's result on a day: its P&L and win/loss. */
   let closedCount = 0;
+  const booked = []; // every closed trade with the day it is booked on, for the deepest-loss figures
   const book = (p, key) => {
     const d = dayOf(key);
     closedCount += 1;
+    booked.push({ t: new Date(p.closedAt).getTime(), day: key, pnlUsd: p.realizedPnlUsd || 0 });
     d.pnlUsd += p.realizedPnlUsd || 0;
     d.trades += 1;
     if ((p.realizedPnlUsd || 0) > 0) d.wins += 1;
@@ -288,6 +297,7 @@ export function buildCombinedLedger(positions, { startingUsd, resetDaily = false
     },
     days: dayList,
     curve,
+    lossDepth: lossDepthView(booked, { startingUsd, resetEachDay: resetDaily }),
   };
 }
 
