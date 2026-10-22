@@ -144,7 +144,6 @@ export function CombinedWalletPanel({ runId, viewId, refreshKey = 0, onLoaded }:
   }
 
   const { config, wallet, days } = data;
-  const dipByDay = new Map(data.lossDepth.days.map((d) => [d.date, d.lowestPnlUsd]));
   const reset = config.resetDaily;
   const returnPercent = config.startingBalanceUsd > 0 ? (wallet.realizedPnlUsd / config.startingBalanceUsd) * 100 : 0;
   const hasTrades = wallet.closedPositionCount + wallet.openPositionCount > 0;
@@ -238,7 +237,6 @@ export function CombinedWalletPanel({ runId, viewId, refreshKey = 0, onLoaded }:
                 <TableHead className="text-right">Started at</TableHead>
                 <TableHead className="text-right">Ended at</TableHead>
                 <TableHead className="text-right">Lowest</TableHead>
-                <TableHead className="text-right" title="The lowest the day's profit and loss fell to, counting from zero at the start of the day">Dipped to</TableHead>
                 <TableHead className="text-right">P&amp;L</TableHead>
                 <TableHead className="text-right">Trades</TableHead>
                 <TableHead className="text-right">Went negative</TableHead>
@@ -254,7 +252,6 @@ export function CombinedWalletPanel({ runId, viewId, refreshKey = 0, onLoaded }:
                   <TableCell className="text-right tabular-nums">{formatUsd(d.startBalanceUsd)}</TableCell>
                   <TableCell className={cn("text-right tabular-nums", d.endBalanceUsd < 0 && "text-negative")}>{formatUsd(d.endBalanceUsd)}</TableCell>
                   <TableCell className={cn("text-right tabular-nums", d.lowestBalanceUsd < 0 && "text-negative")}>{formatUsd(d.lowestBalanceUsd)}</TableCell>
-                  <TableCell className={cn("text-right tabular-nums", (dipByDay.get(d.date) ?? 0) < 0 && "text-negative")}>{d.trades > 0 ? formatUsd(dipByDay.get(d.date) ?? 0) : "—"}</TableCell>
                   <TableCell className={cn("text-right font-medium tabular-nums", pnlTone(d.pnlUsd))}>{d.trades > 0 ? formatUsd(d.pnlUsd) : "—"}</TableCell>
                   <TableCell className="text-right tabular-nums">
                     {d.trades > 0 ? (
@@ -301,7 +298,6 @@ export function CombinedWalletPanel({ runId, viewId, refreshKey = 0, onLoaded }:
                 <TableCell />
                 <TableCell />
                 <TableCell className={cn("text-right tabular-nums", wallet.lowestBalanceUsd < 0 && "text-negative")}>{formatUsd(wallet.lowestBalanceUsd)}</TableCell>
-                <TableCell className={cn("text-right tabular-nums", data.lossDepth.lowest && "text-negative")}>{formatUsd(data.lossDepth.lowest?.pnlUsd ?? 0)}</TableCell>
                 <TableCell className={cn("text-right font-medium tabular-nums", pnlTone(totals.pnlUsd))}>{formatUsd(totals.pnlUsd)}</TableCell>
                 <TableCell className="text-right tabular-nums">
                   {totals.trades} <span className="text-xs text-muted-foreground">{totals.wins}W/{totals.losses}L</span>

@@ -25,11 +25,9 @@ import { lossDepthView } from "./dayStats.js";
  * capital. Winning streaks cover later drops, so a run can survive from day one and still have bad days to start on. With the daily
  * reset every day is its own wallet, so a day is judged on its own trades.
  *
- * Deepest loss: a day's total hides how far it dropped on the way (+20 at the end of a day that touched -80). `lossDepth` follows the
- * realised P&L of the closed trades in the order they closed and reports the lowest point it reached over the whole window (no
- * boundaries - a later, deeper low replaces an earlier one), the worst single day, and the turning points needed to count how many
- * times it dropped to a given level. With the daily reset every day is its own wallet, so the lowest point is the worst day. See
- * lossDepthView() in dayStats.js. Closed trades only: an open trade has no result yet.
+ * Deepest loss: `lossDepth` is the deepest the balance went, with no day borders - for every closed trade, how low did the running total
+ * go if trading had started there, and the lowest of all those. It is made from the trades' results only, so a daily reset does not change
+ * it. See lossDepthView() in dayStats.js. Closed trades only: an open trade has no result yet.
  *
  * Because it is computed from the positions that exist, the figures are complete only once every address is simulated.
  */
@@ -297,7 +295,7 @@ export function buildCombinedLedger(positions, { startingUsd, resetDaily = false
     },
     days: dayList,
     curve,
-    lossDepth: lossDepthView(booked, { startingUsd, resetEachDay: resetDaily }),
+    lossDepth: lossDepthView(booked, { startingUsd }),
   };
 }
 

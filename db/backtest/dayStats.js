@@ -63,73 +63,69 @@ export function summariseDays(days) {
 }
 
 /**
- * How deep the losses went, as opposed to how a day ended. A day that closes at +20 may have been at -80 an hour earlier, and the
- * daily total hides that. Here the closed trades are walked in the order they closed and the running P&L is followed, with no
- * boundaries: if it fell to -120, climbed back, and later fell to -121, the deepest point is -121.
+ * The deepest the balance went, as a number to size your nerve against: "how much can I be down at one time and still stick with this?"
  *
- *  lowest        the deepest point the running P&L reached over the whole time frame (null = it never went below zero). With
- *                `resetEachDay` every day is its own wallet that starts again at 0, so this is the worst day's low instead.
- *  deepestDay    the lowest point any single day reached on its own (a day starts at 0): +20 at the end of a day that touched -80
- *                reads as -80 here.
- *  days          per day: the lowest point it reached (0 = never below zero), where it ended, and how many trades closed.
- *  swings        the running P&L reduced to its turning points (every peak and trough, nothing in between). That is all that is needed
- *                to count how many times it dropped to any level: see countReaches() in lib/loss-depth.ts.
+ * It does not depend on days. The closed trades are put in the order they closed, and for EVERY trade the question is asked as if trading
+ * had started right there: after that trade and each one that follows, where is the running total, and what is the lowest it gets to?
  *
- * Only closed trades count (an open trade has no result yet), so the figures are of realised results. Percentages are a share of
- * `startingUsd`.
+ *   trades  +20  -5  +8  -7  +1  -15  +20  +20
+ *   from trade 1: running total 20, 15, 23, 16, 17, 2, 22, 42   -> lowest +2
+ *   from trade 2: -5, 3, -4, -3, -18, 2, 22                     -> lowest -18
+ *   from trade 3: 8, 1, 2, -13, 7, 27                           -> lowest -13
+ *   from trade 4: -7, -6, -21, -1, 19                           -> lowest -21     <- the deepest point
  *
- * @param {Array<{t: number, day: string, pnlUsd: number}>} trades closed trades, any order; `t` = close time in ms, `day` = the day it is booked on
- * @param {{startingUsd?: number, resetEachDay?: boolean}} [opts]
+ * The deepest point is the lowest of those lowest points. (It is the biggest fall from any high to a later low: the +23 after trade 3 to
+ * the +2 after trade 6.) `depths` holds every starting trade's lowest point that is below zero, so the page can answer "from how many
+ * starting trades did the balance go down at least this far" for any level, which is what "times reached" means here.
+ *
+ * Only closed trades count (an open trade has no result yet). Percentages are a share of `startingUsd`.
+ *
+ * @param {Array<{t: number, pnlUsd: number}>} trades closed trades, any order; `t` = close time in ms
+ * @param {{startingUsd?: number}} [opts]
+ * @returns {{ startingUsd: number, trades: number, belowZero: number,
+ *   lowest: {pnlUsd: number, percent: number, startTrade: number, startAt: number, troughTrade: number, troughAt: number} | null,
+ *   depths: number[] }} startTrade / troughTrade are 1-based positions in closing order; depths ascending (deepest first), cents
  */
-export function lossDepthView(trades, { startingUsd = 0, resetEachDay = false } = {}) {
+export function lossDepthView(trades, { startingUsd = 0 } = {}) {
   const sorted = [...trades].sort((a, b) => a.t - b.t);
-  const ofStart = (usd) => (startingUsd > 0 ? (usd / startingUsd) * 100 : 0);
+  const n = sorted.length;
+  const total = new Array(n + 1); // total[m] = running total after the first m trades
+  total[0] = 0;
+  for (let i = 0; i < n; i++) total[i + 1] = total[i] + (sorted[i].pnlUsd || 0);
 
-  const byDay = new Map();
-  const raw = sorted.length ? [{ t: sorted[0].t, pnlUsd: 0 }] : [];
-  let run = 0;
-  let overall = null;
-  let currentDay = null;
-  for (const trade of sorted) {
-    if (resetEachDay && currentDay !== null && trade.day !== currentDay) {
-      run = 0;
-      raw.push({ t: trade.t, pnlUsd: 0 });
-    }
-    currentDay = trade.day;
-    run += trade.pnlUsd || 0;
-    raw.push({ t: trade.t, pnlUsd: run });
-    if (run < 0 && (!overall || run < overall.pnlUsd)) overall = { pnlUsd: run, at: trade.t };
-
-    let d = byDay.get(trade.day);
-    if (!d) {
-      d = { lowestPnlUsd: 0, lowestPnlAt: null, endPnlUsd: 0, trades: 0 };
-      byDay.set(trade.day, d);
-    }
-    d.endPnlUsd += trade.pnlUsd || 0;
-    d.trades += 1;
-    if (d.endPnlUsd < d.lowestPnlUsd) {
-      d.lowestPnlUsd = d.endPnlUsd;
-      d.lowestPnlAt = trade.t;
+  // lowestAfter[m] = the lowest running total from m trades on (index of it in lowestAt[m]).
+  const lowestAfter = new Array(n + 2).fill(Infinity);
+  const lowestAt = new Array(n + 2).fill(-1);
+  for (let m = n; m >= 1; m--) {
+    if (total[m] < lowestAfter[m + 1]) {
+      lowestAfter[m] = total[m];
+      lowestAt[m] = m;
+    } else {
+      lowestAfter[m] = lowestAfter[m + 1];
+      lowestAt[m] = lowestAt[m + 1];
     }
   }
 
-  const days = [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([date, d]) => ({ date, ...d }));
-  let worstDay = null;
-  for (const d of days) if (d.lowestPnlUsd < 0 && (!worstDay || d.lowestPnlUsd < worstDay.lowestPnlUsd)) worstDay = d;
-  const deepestDay = worstDay ? { date: worstDay.date, pnlUsd: worstDay.lowestPnlUsd, percent: ofStart(worstDay.lowestPnlUsd), at: worstDay.lowestPnlAt } : null;
-
-  let lowest = overall ? { pnlUsd: overall.pnlUsd, percent: ofStart(overall.pnlUsd), at: overall.at } : null;
-  if (resetEachDay) lowest = deepestDay ? { pnlUsd: deepestDay.pnlUsd, percent: deepestDay.percent, at: deepestDay.at } : null;
-
-  // Turning points only: a run of rising (or falling) points collapses into its last one, equal values into one.
-  const swings = [];
-  for (const point of raw) {
-    const last = swings.at(-1);
-    if (last && last.pnlUsd === point.pnlUsd) continue;
-    const before = swings.at(-2);
-    if (before && last && (last.pnlUsd - before.pnlUsd) * (point.pnlUsd - last.pnlUsd) > 0) swings[swings.length - 1] = point;
-    else swings.push(point);
+  const depths = [];
+  let best = null;
+  for (let k = 0; k < n; k++) {
+    const depth = lowestAfter[k + 1] - total[k]; // started at trade k+1
+    if (depth < 0) {
+      depths.push(Math.round(depth * 100) / 100);
+      if (!best || depth < best.depth) best = { depth, k, trough: lowestAt[k + 1] };
+    }
   }
+  depths.sort((a, b) => a - b);
 
-  return { startingUsd, resetDaily: resetEachDay, lowest, deepestDay, days, swings };
+  const lowest = best
+    ? {
+        pnlUsd: best.depth,
+        percent: startingUsd > 0 ? (best.depth / startingUsd) * 100 : 0,
+        startTrade: best.k + 1,
+        startAt: sorted[best.k].t,
+        troughTrade: best.trough,
+        troughAt: sorted[best.trough - 1].t,
+      }
+    : null;
+  return { startingUsd, trades: n, belowZero: depths.length, lowest, depths };
 }

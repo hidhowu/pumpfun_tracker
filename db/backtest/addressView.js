@@ -104,8 +104,8 @@ async function loadLedger(run, address) {
   return {
     starting,
     closes,
-    // The deepest the realised P&L got (see lossDepthView): one wallet through the whole window, so no daily reset.
-    lossDepth: lossDepthView(closes.map((c) => ({ t: c.t, day: dayKey(c.t), pnlUsd: c.pnl })), { startingUsd: starting }),
+    // The deepest the balance went, from any starting trade (see lossDepthView).
+    lossDepth: lossDepthView(closes.map((c) => ({ t: c.t, pnlUsd: c.pnl })), { startingUsd: starting }),
     negativeByDay,
     negativeCount,
     maxNegativeDepth,

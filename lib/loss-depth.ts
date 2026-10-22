@@ -1,27 +1,22 @@
 import type { BacktestLossDepth } from "@/lib/backtest-types";
 
 /**
- * How many times the running P&L dropped to `depthUsd` below zero. It counts a drop through the line as one time; it only counts again
- * after the P&L has climbed back above the line first. (Going from -130 to -125 and down again is still the same visit; going from
- * -130 to -40 and later to -90 is two visits to a -80 line.)
+ * "Times reached": from how many starting trades did the balance go down at least `depthUsd`? `depths` is each starting trade's lowest
+ * point (negative, deepest first), so this is the number of entries at or below -depthUsd.
  *
- * `swings` are the turning points of the running P&L (peaks and troughs), which is all that matters here: between two turning points the
- * P&L only moves one way, so it crosses a line exactly when the two points are on opposite sides of it.
+ * Example, trades +20 -5 +8 -7 +1 -15 +20 +20: the lowest points from trades 2..6 are -18, -13, -21, -14, -15, so a -$12 level was reached from 5 starting trades.
  */
-export function countReaches(swings: BacktestLossDepth["swings"], depthUsd: number): { count: number; at: number[] } {
-  const at: number[] = [];
-  if (!(depthUsd > 0)) return { count: 0, at };
-  const line = -depthUsd;
-  let armed = true;
-  for (const point of swings) {
-    if (armed && point.pnlUsd <= line) {
-      at.push(point.t);
-      armed = false;
-    } else if (!armed && point.pnlUsd > line) {
-      armed = true;
-    }
+export function countReaches(depths: BacktestLossDepth["depths"], depthUsd: number): number {
+  if (!(depthUsd > 0)) return 0;
+  const line = -depthUsd + 1e-9; // cents are rounded on the server; don't lose an exact hit to float noise
+  let lo = 0;
+  let hi = depths.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (depths[mid] <= line) lo = mid + 1;
+    else hi = mid;
   }
-  return { count: at.length, at };
+  return lo;
 }
 
 /** Round-number loss levels up to the deepest one (a quarter, half and three quarters of it, then the deepest itself). */

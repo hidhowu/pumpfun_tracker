@@ -351,19 +351,19 @@ export type BacktestSettingsView = {
 
 /** One address of a run, as the address page shows it: the run it belongs to, its progress, and its simulated wallet. */
 /**
- * How deep the losses went (see lossDepthView in db/backtest/dayStats.js). Realised results of closed trades, in the order they closed.
- * `lowest` is the deepest point over the whole time frame with no boundaries (a later, deeper low replaces an earlier one); null = it never went
- * below zero. When the balance resets daily every day is its own wallet, so it is the worst day. Percentages are a share of the starting balance.
+ * The deepest the balance went (see lossDepthView in db/backtest/dayStats.js): for every closed trade, how low the running total got if
+ * trading had started right there, and the lowest of all of those. No day borders. Realised results only. Percent = share of the starting balance.
+ * `lowest` is null when it never went below zero; trade numbers are positions in closing order.
  */
 export type BacktestLossDepth = {
   startingUsd: number;
-  resetDaily: boolean;
-  lowest: { pnlUsd: number; percent: number; at: number | null } | null;
-  /** The lowest point any single day reached on its own (every day starts at 0). */
-  deepestDay: { date: string; pnlUsd: number; percent: number; at: number | null } | null;
-  days: Array<{ date: string; lowestPnlUsd: number; lowestPnlAt: number | null; endPnlUsd: number; trades: number }>;
-  /** The running P&L reduced to its turning points - enough to count how many times it dropped to a level (lib/loss-depth.ts). */
-  swings: Array<{ t: number; pnlUsd: number }>;
+  /** Closed trades looked at. */
+  trades: number;
+  /** In how many starting trades the balance went below zero afterwards. */
+  belowZero: number;
+  lowest: { pnlUsd: number; percent: number; startTrade: number; startAt: number; troughTrade: number; troughAt: number } | null;
+  /** Each starting trade's lowest point that is below zero, deepest first - what "times reached" is counted from (lib/loss-depth.ts). */
+  depths: number[];
 };
 
 export type BacktestAddressDetail = {
