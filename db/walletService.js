@@ -8,6 +8,7 @@ import { WalletPendingExecution } from "./models/WalletPendingExecution.js";
 import { WalletDailySnapshot } from "./models/WalletDailySnapshot.js";
 import { WalletHourlySnapshot } from "./models/WalletHourlySnapshot.js";
 import { todayUtcString } from "./simulation/snapshot.js";
+import { walletPanic } from "./walletPanic.js";
 import { BacktestView } from "./models/BacktestView.js";
 import { BacktestRunTrader } from "./models/BacktestRunTrader.js";
 import { validateField, validateSettingsPatch, validateTrailingStops } from "./settingsLimits.js";
@@ -43,7 +44,7 @@ const NUMBER_FIELDS = [
   "jitoFeeUsd",
 ];
 // null = disabled
-const NULLABLE_NUMBER_FIELDS = ["stopLossPercent", "takeProfitPercent"];
+const NULLABLE_NUMBER_FIELDS = ["stopLossPercent", "takeProfitPercent", "panicLossUsd"];
 const BOOLEAN_FIELDS = ["autoResetBalanceDaily"];
 export const TRACKING_METHODS = ["logs", "api"];
 
@@ -322,10 +323,12 @@ export async function listWallets() {
   ]);
   const countByWallet = new Map(traderCounts.map((c) => [String(c._id), c.count]));
   const todayPnlByWallet = new Map(todayPnl.map((p) => [String(p._id), p.combinedUsd]));
-  return wallets.map((w) => ({
+  const panics = await Promise.all(wallets.map((w) => walletPanic(w._id, w.settings?.panicLossUsd)));
+  return wallets.map((w, i) => ({
     ...w,
     traderCount: countByWallet.get(String(w._id)) || 0,
     todayRealizedPnlUsd: todayPnlByWallet.get(String(w._id)) || 0,
+    panic: panics[i],
   }));
 }
 

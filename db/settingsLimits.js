@@ -32,6 +32,7 @@ const NUMBER_LIMITS = {
 const NULLABLE_LIMITS = {
   stopLossPercent: [0, 100, { minExclusive: true }],
   takeProfitPercent: [0, 100_000, { minExclusive: true }],
+  panicLossUsd: [0, 1_000_000_000, { minExclusive: true }], // a wallet's panic level in dollars; null = off
 };
 
 const FIELD_ALIASES = {

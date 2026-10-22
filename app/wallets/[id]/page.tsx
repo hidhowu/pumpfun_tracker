@@ -25,6 +25,8 @@ import { WalletTradersTab } from "@/components/wallets/wallet-traders-tab";
 import { WalletTradeHistory } from "@/components/wallets/wallet-trade-history";
 import { WalletSettingsPanel } from "@/components/wallets/wallet-settings-panel";
 import { LinkedLiveCard } from "@/components/wallets/linked-live-card";
+import { PanicBar } from "@/components/wallets/panic-bar";
+import { cn } from "@/lib/utils";
 import { ExportCsvDialog } from "@/components/export-csv-dialog";
 import { deleteWallet, getWallet, renameWallet } from "@/lib/api";
 import type { WalletView } from "@/lib/types";
@@ -166,6 +168,17 @@ export default function WalletDetailPage() {
             </div>
           </div>
 
+          {wallet.panic && (
+            <div
+              className={cn(
+                "rounded-xl border px-4 py-3",
+                wallet.panic.panic ? "border-negative/60 bg-negative/10 shadow-[0_0_0_1px_var(--negative)]" : "border-border/60 bg-card/40"
+              )}
+            >
+              <PanicBar panic={wallet.panic} />
+            </div>
+          )}
+
           <LinkedLiveCard walletId={wallet._id} />
 
           <Tabs defaultValue="performance" className="flex flex-col gap-4">
@@ -201,7 +214,7 @@ export default function WalletDetailPage() {
                 walletId={wallet._id}
                 settings={wallet.settings}
                 lastAutoResetAt={wallet.lastAutoResetAt}
-                onUpdated={(settings) => setWallet((prev) => (prev ? { ...prev, settings } : prev))}
+                onUpdated={(settings, updated) => setWallet((prev) => (prev ? { ...prev, settings, panic: updated ? updated.panic : prev.panic } : prev))}
                 onReset={(updated) => setWallet(updated)}
               />
             </TabsContent>

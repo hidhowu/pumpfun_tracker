@@ -79,6 +79,10 @@ const WalletSchema = new Schema({
     //    (db/simulation/sdkQuote.js) - the SDK's quote already contains pump.fun's fee, so pumpFeePercent is not charged again.
     // Per wallet: a trader in two wallets is followed both ways, each wallet by its own method.
     trackingMethod: { type: String, enum: ["logs", "api"], default: "logs" },
+    // Panic level: how deep a loss stretch (in dollars, a positive number) this wallet may reach before it counts as doing worse than
+    // expected - normally a bit beyond the "deepest point" its backtest showed. null = off. Display only (db/walletPanic.js): it
+    // never stops or changes a trade.
+    panicLossUsd: { type: Number, default: null },
   },
 });
 

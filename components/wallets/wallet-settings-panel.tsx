@@ -28,7 +28,7 @@ type Props = {
   walletId: string;
   settings: WalletSettings;
   lastAutoResetAt?: string | null;
-  onUpdated: (settings: WalletSettings) => void;
+  onUpdated: (settings: WalletSettings, wallet?: WalletView) => void;
   onReset?: (wallet: WalletView) => void;
 };
 
@@ -151,7 +151,7 @@ export function WalletSettingsPanel({ walletId, settings, lastAutoResetAt, onUpd
   async function save(patch: Partial<WalletSettings>) {
     try {
       const { wallet } = await updateWalletSettings(walletId, patch);
-      onUpdated(wallet.settings);
+      onUpdated(wallet.settings, wallet);
       toast.success("Wallet setting updated");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update setting");
@@ -437,6 +437,17 @@ export function WalletSettingsPanel({ walletId, settings, lastAutoResetAt, onUpd
             />
 
             <TrailingStopsSection trailingStops={settings.trailingStops} onSave={(rules) => save({ trailingStops: rules })} />
+
+            <NumberField
+              id="w-panic"
+              label="Panic level (loss)"
+              prefix="$"
+              step={10}
+              min={0}
+              value={settings.panicLossUsd ?? 0}
+              onSave={(v) => save({ panicLossUsd: v !== 0 ? Math.abs(v) : null })}
+              description="0 = off. How deep a loss stretch this wallet may reach before you should panic - e.g. the backtest's deepest point was $100, so enter 150. The wallet shows a bar that fills (green, yellow, red) as the loss since its highest point approaches this, and turns red when it reaches it. Profit in between counts, only closed trades are counted, and it never stops or changes a trade."
+            />
           </div>
         </div>
 

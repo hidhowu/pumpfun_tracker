@@ -25,6 +25,7 @@ import { createWallet, duplicateWallet, listWallets } from "@/lib/api";
 import { formatUsd } from "@/lib/format";
 import type { WalletView } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { PanicBar } from "@/components/wallets/panic-bar";
 
 function CreateWalletDialog({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
@@ -315,15 +316,20 @@ export default function WalletsPage() {
                   const todayPositive = todayPnl > 0;
                   const todayNegative = todayPnl < 0;
                   return (
-                    <TableRow key={wallet._id} className="border-border/60">
+                    <TableRow key={wallet._id} className={cn("border-border/60", wallet.panic?.panic && "bg-negative/10 hover:bg-negative/15")}>
                       <TableCell className="max-w-3xs pl-4 sm:max-w-xs">
                         <Link
                           href={`/wallets/${wallet._id}`}
-                          className="group flex min-w-0 items-center gap-1 font-medium hover:text-primary"
+                          className={cn("group flex min-w-0 items-center gap-1 font-medium hover:text-primary", wallet.panic?.panic && "text-negative")}
                         >
                           <span className="truncate">{wallet.name}</span>
                           <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
                         </Link>
+                        {wallet.panic && (
+                          <div className="mt-1.5 max-w-60">
+                            <PanicBar panic={wallet.panic} compact />
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {formatUsd(wallet.balanceUsd)}

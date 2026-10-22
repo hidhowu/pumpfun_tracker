@@ -381,6 +381,24 @@ export type WalletSettings = {
   autoResetBalanceDaily: boolean;
   /** How the wallet learns about its traders' trades: the tracker's RPC logs (default) or pump.fun's user-trades API. See db/models/Wallet.js. */
   trackingMethod?: "logs" | "api";
+  /** Panic level in dollars (a positive loss amount); null/absent = off. See db/walletPanic.js. */
+  panicLossUsd?: number | null;
+};
+
+/** Where a wallet stands against its panic level - present on a WalletView only when the wallet has one. See db/walletPanic.js. */
+export type WalletPanic = {
+  limitUsd: number;
+  /** How far below its highest point the wallet's realised P&L is right now (what fills the bar). */
+  currentLossUsd: number;
+  /** The worst such fall since the wallet began (the backtest's "deepest point"). */
+  deepestLossUsd: number;
+  deepestAt: string | null;
+  /** currentLossUsd / limitUsd - may be above 1. */
+  fraction: number;
+  panic: boolean;
+  /** The worst fall has reached the level at some point, even if the wallet has recovered since. */
+  everPanicked: boolean;
+  closedTrades: number;
 };
 
 export type WalletView = {
@@ -395,6 +413,7 @@ export type WalletView = {
   lastAutoResetDate: string | null;
   lastAutoResetAt: string | null;
   settings: WalletSettings;
+  panic?: WalletPanic | null; // null/absent when the wallet has no panic level
   traderCount?: number; // present on the /api/wallets list endpoint only
   todayRealizedPnlUsd?: number; // present on the /api/wallets list endpoint only - sum of realizedPnlUsd for positions closed today (UTC)
 };

@@ -5,6 +5,7 @@ import { Wallet } from "@/db/models/Wallet";
 import { isObjectIdString } from "@/db/settingsLimits";
 import { deleteWallet, renameWallet, updateWalletSettings } from "@/db/walletService";
 import { applyDailyBalanceResets } from "@/db/simulation/walletSnapshot";
+import { withPanic } from "@/db/walletPanic";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -19,7 +20,7 @@ export async function GET(_request: NextRequest, { params }: Params) {
   // this wallet was created (e.g. pumpFeePercent/jitoFeeUsd).
   const wallet = await Wallet.findById(id);
   if (!wallet) return NextResponse.json({ error: "Wallet not found" }, { status: 404 });
-  return NextResponse.json({ wallet: JSON.parse(JSON.stringify(wallet)) });
+  return NextResponse.json({ wallet: await withPanic(JSON.parse(JSON.stringify(wallet))) });
 }
 
 /** Body: { name?: string, settings?: Partial<Wallet["settings"]> } - either or both. */
@@ -45,7 +46,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   }
   if (!wallet) wallet = await Wallet.findById(id);
   if (!wallet) return NextResponse.json({ error: "Wallet not found" }, { status: 404 });
-  return NextResponse.json({ wallet: JSON.parse(JSON.stringify(wallet)) });
+  return NextResponse.json({ wallet: await withPanic(JSON.parse(JSON.stringify(wallet))) });
 }
 
 /** Cascades WalletTrader/WalletPosition/WalletPendingExecution/WalletDailySnapshot - see db/walletService.js's deleteWallet. */
