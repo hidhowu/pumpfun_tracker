@@ -3,11 +3,12 @@ import { connectDb } from "@/db/connect";
 import { requireApiSession } from "@/lib/auth/session";
 import { createBacktestRun, getQueuePosition, listBacktestRuns } from "@/db/backtest/service";
 
-export async function GET() {
+/** Optional ?address=: only the backtests that contain that address (a full address, or the start of one). */
+export async function GET(request: NextRequest) {
   const denied = await requireApiSession();
   if (denied) return denied;
   await connectDb();
-  const runs = await listBacktestRuns();
+  const runs = await listBacktestRuns({ address: request.nextUrl.searchParams.get("address") ?? "" });
   return NextResponse.json({ runs: JSON.parse(JSON.stringify(runs)) });
 }
 

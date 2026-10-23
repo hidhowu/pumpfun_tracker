@@ -159,8 +159,8 @@ export function updateBacktestAddress(address: string, patch: { label?: string; 
   return request(`/api/backtest/addresses/${address}`, { method: "PATCH", body: JSON.stringify(patch) });
 }
 
-export function listBacktestRuns(): Promise<{ runs: BacktestRunSummary[] }> {
-  return request(`/api/backtest/runs`);
+export function listBacktestRuns(address = ""): Promise<{ runs: BacktestRunSummary[] }> {
+  return request(`/api/backtest/runs${address ? `?address=${encodeURIComponent(address)}` : ""}`);
 }
 
 export type TimingOverrides = { executionDelaySeconds?: number; riskCheckIntervalSeconds?: number; fillLatencySeconds?: number };

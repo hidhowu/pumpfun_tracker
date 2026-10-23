@@ -740,9 +740,18 @@ export async function getQueuePosition(runId) {
   return at < 0 ? null : at;
 }
 
-/** Every run with its progress and headline numbers - for the Runs tab. One pass over the runs' address rows, done by the database. */
-export async function listBacktestRuns() {
-  const runs = await BacktestRun.find({}, RUN_FIELDS).sort({ createdAt: -1 }).lean();
+/**
+ * Every run with its progress and headline numbers - for the Runs tab. One pass over the runs' address rows, done by the database.
+ * `address` keeps only the runs that contain it: a full address matches exactly, anything shorter is read as the start of an address (both use the address index).
+ */
+export async function listBacktestRuns({ address = "" } = {}) {
+  const search = String(address).trim();
+  const filter = {};
+  if (search) {
+    const match = isValidSolanaAddress(search) ? search : { $regex: `^${escapeRegex(search)}` };
+    filter._id = { $in: await BacktestRunTrader.distinct("runId", { address: match }) };
+  }
+  const runs = await BacktestRun.find(filter, RUN_FIELDS).sort({ createdAt: -1 }).lean();
   for (const run of runs) await ensureRunStats(run);
   const [summaries, order] = await Promise.all([summariseRuns(runs), queueOrder()]);
   return runs.map((run) => {

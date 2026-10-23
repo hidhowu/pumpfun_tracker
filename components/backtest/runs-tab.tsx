@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowUpRight, FlaskConical, GitMerge, Loader2, Pencil, PlayCircle, RefreshCcw, Trash2, Wallet } from "lucide-react";
+import { ArrowUpRight, FlaskConical, GitMerge, Loader2, Pencil, PlayCircle, RefreshCcw, Search, Trash2, Wallet } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   AlertDialog,
@@ -46,15 +47,25 @@ export function RunsTab() {
   const [toRestart, setToRestart] = useState<BacktestRunSummary | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [resuming, setResuming] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState(""); // the search once typing has paused
+  const latest = useRef(0);
+
+  // Searching waits for a pause in typing before asking the server.
+  useEffect(() => {
+    const timer = setTimeout(() => setAppliedSearch(search.trim()), 350);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const refresh = useCallback(async () => {
+    const call = ++latest.current;
     try {
-      const { runs } = await listBacktestRuns();
-      setRuns(runs);
+      const { runs } = await listBacktestRuns(appliedSearch);
+      if (call === latest.current) setRuns(runs); // an older answer must not replace a newer search
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load backtests");
     }
-  }, []);
+  }, [appliedSearch]);
 
   const anyActive = runs?.some((r) => ACTIVE.has(r.status)) ?? false;
 
@@ -100,7 +111,7 @@ export function RunsTab() {
     );
   }
 
-  if (runs.length === 0) {
+  if (runs.length === 0 && !appliedSearch && !search) {
     return (
       <div className="flex min-h-[200px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-card/40 px-4 text-center">
         <FlaskConical className="size-6 text-muted-foreground" />
@@ -111,13 +122,18 @@ export function RunsTab() {
 
   return (
     <>
-      {runs.length >= 2 && (
-        <div className="mb-3 flex justify-end">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="relative min-w-0 flex-1 basis-56">
+          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find backtests containing an address" className="pl-8" />
+        </div>
+        {runs.length >= 2 && (
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setMergeOpen(true)}>
             <GitMerge className="size-4" /> Merge backtests
           </Button>
-        </div>
-      )}
+        )}
+      </div>
+      {runs.length === 0 && <p className="rounded-xl border border-dashed border-border bg-card/40 px-4 py-8 text-center text-sm text-muted-foreground">No backtest contains that address.</p>}
       <MergeRunsDialog runs={runs} open={mergeOpen} onOpenChange={setMergeOpen} onMerged={refresh} />
       <div className="grid gap-4 lg:grid-cols-2">
         {runs.map((run) => {
