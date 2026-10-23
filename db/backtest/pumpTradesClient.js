@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { getActiveProxyPool, recordProxyResult, redactCredentials, PROXY_BROKEN_HTTP_STATUSES, PUMP_CURL_USER_AGENT } from "../proxyService.js";
+import { getActiveProxyPool, recordProxyResult, redactCredentials, PROXY_BROKEN_HTTP_STATUSES, randomPumpUserAgent } from "../proxyService.js";
 import { resolveBacktestSettings } from "./settings.js";
 import { SlotPool, Semaphore, sleep } from "./slotPool.js";
 
@@ -124,7 +124,7 @@ export class PumpTradesClient {
   }
 
   async #curl(url, proxyUrl) {
-    const args = ["-s", "-m", "20", "--compressed", "-A", PUMP_CURL_USER_AGENT, "-H", "accept: application/json", "-w", `${MARKER}%{http_code}|%header{retry-after}`];
+    const args = ["-s", "-m", "20", "--compressed", "-A", randomPumpUserAgent(), "-H", "accept: application/json", "-w", `${MARKER}%{http_code}|%header{retry-after}`];
     if (proxyUrl) args.push("--proxy", proxyUrl);
     args.push(url);
     const { stdout } = await execFileAsync("curl", args, { maxBuffer: 16 * 1024 * 1024 });

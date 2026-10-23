@@ -10,11 +10,27 @@ const PROXY_URL_RE = /^(https?|socks[45]h?):\/\/\S+$/i;
 const TEST_URL = "https://frontend-api-v3.pump.fun/coins-v3/So11111111111111111111111111111111111111112";
 
 /**
- * Every curl call to pump.fun sends this User-Agent. Cloudflare in front of pump.fun answers curl's default "curl/x.y" UA with a
- * 403 "Just a moment..." challenge (direct or through any proxy); this short browser-style UA gets a 200 (tested Oct 23 2026). A
- * full Chrome UA string was blocked once through a proxy while this one passed every time, so keep it short.
+ * Every curl call to pump.fun sends one of these User-Agents, picked at random per request (randomPumpUserAgent) so no single UA
+ * string becomes a fingerprint. Cloudflare in front of pump.fun answers curl's default "curl/x.y" UA with a 403 "Just a moment..."
+ * challenge (direct or through any proxy); each of these real browser strings got 200s through a proxy with no 403 (tested Oct 23
+ * 2026). Add to the list only after testing a string the same way.
  */
-export const PUMP_CURL_USER_AGENT = "Mozilla/5.0 Chrome/130";
+const PUMP_USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+];
+
+/** A random browser User-Agent for one curl call to pump.fun. */
+export function randomPumpUserAgent() {
+  return PUMP_USER_AGENTS[Math.floor(Math.random() * PUMP_USER_AGENTS.length)];
+}
 
 // Module-level cache, shared by every caller in this process (both the
 // Next.js app and the standalone tracker daemon import db/pumpFunApi.js,
@@ -167,7 +183,7 @@ export async function testProxy(proxyId, { enableOnSuccess = false } = {}) {
     // one JSON/error body) works identically on both. -w appends the HTTP
     // status, which is what actually decides pass/fail: curl exits 0 for
     // ANY HTTP response, including a 403 from pump.fun blocking this IP.
-    const { stdout } = await execFileAsync("curl", ["-s", "-m", "10", "-A", PUMP_CURL_USER_AGENT, "-w", "\n%{http_code}", "--proxy", proxy.url, TEST_URL]);
+    const { stdout } = await execFileAsync("curl", ["-s", "-m", "10", "-A", randomPumpUserAgent(), "-w", "\n%{http_code}", "--proxy", proxy.url, TEST_URL]);
     const status = Number(stdout.slice(stdout.lastIndexOf("\n") + 1).trim());
     if (!status) error = "No HTTP response through proxy";
     else if (PROXY_BROKEN_HTTP_STATUSES.has(status)) error = `HTTP ${status} through proxy (${status === 407 ? "proxy auth rejected" : "blocked by pump.fun"})`;

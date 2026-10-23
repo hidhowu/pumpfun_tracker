@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { getActiveProxyPool, recordProxyResult, PROXY_BROKEN_HTTP_STATUSES, PUMP_CURL_USER_AGENT } from "./proxyService.js";
+import { getActiveProxyPool, recordProxyResult, PROXY_BROKEN_HTTP_STATUSES, randomPumpUserAgent } from "./proxyService.js";
 import { getOnchainPrice } from "./onchainPrice.js";
 
 const execFileAsync = promisify(execFile);
@@ -72,7 +72,7 @@ const MAX_PROXY_ATTEMPTS_PER_CALL = 2;
 let proxyRoundRobinIndex = 0;
 
 async function runCurl(url, proxyUrl) {
-  const args = ["-s", "-m", "10", "-A", PUMP_CURL_USER_AGENT, "-w", `${STATUS_MARKER}%{http_code}`];
+  const args = ["-s", "-m", "10", "-A", randomPumpUserAgent(), "-w", `${STATUS_MARKER}%{http_code}`];
   if (proxyUrl) args.push("--proxy", proxyUrl);
   args.push(url);
   const { stdout } = await execFileAsync("curl", args);
@@ -90,8 +90,8 @@ async function runCurl(url, proxyUrl) {
  * protection) rather than a header check. Shelling out to curl (present by
  * default on Windows 10+ and any Unix box) is the pragmatic fix, since it
  * demonstrably isn't blocked. As of Oct 23 2026 Cloudflare also 403s curl's
- * own default User-Agent, so every call sends PUMP_CURL_USER_AGENT
- * (db/proxyService.js).
+ * own default User-Agent, so every call sends a random browser one
+ * (randomPumpUserAgent, db/proxyService.js).
  *
  * Proxy-aware: with proxies configured (managed from the /proxies UI),
  * round-robins through them via `curl --proxy`, retrying the next one on a
