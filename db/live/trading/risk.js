@@ -6,6 +6,7 @@ import { Trader } from "../../models/Trader.js";
 import { getPrice, prefetchPrices, PRICE_MAX_AGE } from "../../pumpFunApi.js";
 import { logEvent } from "../../systemLog.js";
 import { buyCostUsd, lotValueUsd } from "./lots.js";
+import { buildTrigger, confirmExit } from "../../simulation/exitTrigger.js";
 
 /**
  * The live wallet's OWN exit rules: stop-loss, take-profit, max hold time and trailing stops, judged against what each live position really
@@ -17,7 +18,7 @@ import { buyCostUsd, lotValueUsd } from "./lots.js";
  * the way that follows the simulation, so the two can be compared). A trader that was blacklisted is exited whatever the setting.
  */
 
-async function queueSell(lot, closeReason, track) {
+async function queueSell(lot, closeReason, track, trigger = null) {
   try {
     await LiveExecution.create({
       liveWalletId: lot.liveWalletId,
@@ -27,6 +28,7 @@ async function queueSell(lot, closeReason, track) {
       action: "sell",
       closeReason,
       track,
+      trigger,
       triggerAt: new Date(),
       sourceSignature: `exit:${closeReason}:${lot._id}`,
     });
@@ -81,12 +83,28 @@ export async function checkLiveRiskExits() {
       if (peak || trough) await LiveLot.updateOne({ _id: lot._id, status: "open" }, { $set: { ...peak, ...trough } });
 
       const s = sim.settings;
-      const exit = async (reason) => {
-        if (await queueSell(lot, reason, ownTrack)) queued += 1;
+      // What this sweep saw, kept with the exit (db/simulation/exitTrigger.js).
+      const triggerFor = (kind, thresholdPercent, rule) =>
+        buildTrigger(kind, { thresholdPercent, unrealizedPercent: percent, valueUsd: value, priceUsd: price.priceUsd, priceSource: price.source, rule });
+      // Real money and no execution delay: a stop-loss / trailing stop is queued only if a fresh read agrees it is breached.
+      const confirmed = (trigger) =>
+        confirmExit(trigger, {
+          totalCost: cost,
+          valueNow: async () => {
+            const now = await getPrice(lot.mint, { fresh: true });
+            return now?.priceUsd ? lotValueUsd(lot, now.priceUsd) : null;
+          },
+          meta: { liveWalletId: String(lot.liveWalletId), traderAddress: lot.traderAddress, mint: lot.mint },
+        });
+      const exit = async (reason, trigger) => {
+        if (await queueSell(lot, reason, ownTrack, trigger)) queued += 1;
       };
-      if (s.stopLossPercent != null && percent <= -Math.abs(s.stopLossPercent)) return exit("stop_loss");
-      if (s.takeProfitPercent != null && percent >= Math.abs(s.takeProfitPercent)) return exit("take_profit");
-      if (s.maxTradeTimeSeconds > 0 && (Date.now() - lot.openedAt.getTime()) / 1000 >= s.maxTradeTimeSeconds) return exit("max_hold_time");
+      if (s.stopLossPercent != null && percent <= -Math.abs(s.stopLossPercent)) {
+        const trigger = await confirmed(triggerFor("stop_loss", -Math.abs(s.stopLossPercent)));
+        return trigger ? exit("stop_loss", trigger) : undefined;
+      }
+      if (s.takeProfitPercent != null && percent >= Math.abs(s.takeProfitPercent)) return exit("take_profit", triggerFor("take_profit", Math.abs(s.takeProfitPercent)));
+      if (s.maxTradeTimeSeconds > 0 && (Date.now() - lot.openedAt.getTime()) / 1000 >= s.maxTradeTimeSeconds) return exit("max_hold_time", triggerFor("max_hold_time", null));
 
       const rules = s.trailingStops || [];
       if (rules.length > 0) {
@@ -99,7 +117,8 @@ export async function checkLiveRiskExits() {
               logEvent("trade", `[live] Trailing-stop armed on ${lot.mint} for ${lot.traderAddress} at +${percent.toFixed(1)}% (exits at ${rule.exitPercent}%)`, { meta: { liveWalletId: String(lot.liveWalletId), mint: lot.mint } });
             }
           } else if (percent <= rule.exitPercent) {
-            return exit("trailing_stop");
+            const trigger = await confirmed(triggerFor("trailing_stop", rule.exitPercent, rule));
+            return trigger ? exit("trailing_stop", trigger) : undefined;
           }
         }
       }

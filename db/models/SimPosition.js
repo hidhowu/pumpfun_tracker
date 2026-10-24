@@ -68,6 +68,8 @@ const SimPositionSchema = new Schema({
     default: null,
   },
   closeTriggerSignature: { type: String, default: null },
+  // The exit rule behind a stop-loss / take-profit / trailing-stop / max-hold close: its level, the price the sweep saw, and the price at the fill.
+  closeTrigger: { type: Schema.Types.Mixed, default: null },
   sellPriceUsd: { type: Number, default: null },
   proceedsUsd: { type: Number, default: null }, // gross proceeds, excludes fee
   sellFeeUsd: { type: Number, default: null }, // total: sellPumpFeeUsd + sellJitoFeeUsd

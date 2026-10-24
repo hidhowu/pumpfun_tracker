@@ -13,6 +13,7 @@ import { mirrorExit } from "../live/trading/mirror.js";
 import { TradeError } from "../live/trading/pumpSwap.js";
 import { priceBuy, priceSell, valueMany } from "./sdkQuote.js";
 import { tokenHasTrades } from "./apiClients.js";
+import { CONFIRMED_EXITS, buildTrigger, confirmExit, triggerHolds } from "./exitTrigger.js";
 
 /** Wallets that follow their traders through pump.fun's API (Wallet.settings.trackingMethod) fill and are checked at SDK quotes, not spot prices. */
 const isApiWallet = (wallet) => wallet?.settings?.trackingMethod === "api";
@@ -206,7 +207,7 @@ async function executeWalletBuy(pending) {
  * Freezes the numbers of a close: what the position sells for at `priceUsd`, the fees, the realized P&L, and how it moves the
  * running counters. Stored on the position (pendingClose) before anything is paid out, so a resumed close books exactly this.
  */
-function planClose(position, { priceUsd, fees, closeReason, closeSignature, pendingId }) {
+function planClose(position, { priceUsd, fees, closeReason, closeSignature, pendingId, trigger = null }) {
   const proceedsUsd = position.tokenAmount * priceUsd;
   const sellFees = computeTradeFees(proceedsUsd, fees);
   const totalCost = position.costBasisUsd + position.buyFeeUsd;
@@ -217,6 +218,8 @@ function planClose(position, { priceUsd, fees, closeReason, closeSignature, pend
     pendingId: String(pendingId),
     closeReason,
     closeSignature,
+    // What made this exit happen, with the price it actually filled at added (db/simulation/exitTrigger.js).
+    trigger: trigger ? { ...trigger, fillPercent: closeUnrealized.unrealizedPercent, fillPriceUsd: priceUsd } : null,
     priceUsd,
     proceedsUsd,
     feeUsd: sellFees.totalFeeUsd,
@@ -261,6 +264,7 @@ async function bookWalletClose(position, plan) {
         closedAt: new Date(),
         closeReason: plan.closeReason,
         closeTriggerSignature: plan.closeSignature,
+        closeTrigger: plan.trigger ?? null,
         sellPriceUsd: plan.priceUsd,
         proceedsUsd: plan.proceedsUsd,
         sellFeeUsd: plan.feeUsd,
@@ -341,12 +345,24 @@ async function executeWalletSell(pending) {
       priceUsd = price.priceUsd;
     }
 
+    // A stop-loss / trailing stop is only carried out while the price at the fill still breaches its level (db/simulation/exitTrigger.js).
+    if (pending.trigger && CONFIRMED_EXITS.has(pending.closeReason)) {
+      const { unrealizedPercent } = computeUnrealized(position.tokenAmount * priceUsd, position.costBasisUsd + position.buyFeeUsd);
+      if (!triggerHolds(pending.trigger, unrealizedPercent)) {
+        return markSkipped(
+          pending,
+          `${pending.closeReason} not confirmed at the fill: the position is at ${unrealizedPercent.toFixed(1)}% (${method}), above the ${pending.trigger.thresholdPercent}% level the sweep read ${pending.trigger.sweepPercent.toFixed(1)}% for`
+        );
+      }
+    }
+
     const fresh = planClose(position, {
       priceUsd,
       fees: feeSettings(walletDoc, method),
       closeReason: pending.closeReason || "trader_sell",
       closeSignature: pending.closeReason && pending.closeReason !== "trader_sell" ? null : pending.sourceSignature,
       pendingId: pending._id,
+      trigger: pending.trigger,
     });
     const claimed = await WalletPosition.findOneAndUpdate(
       { _id: position._id, status: "open", pendingClose: null },
@@ -372,7 +388,7 @@ async function executeWalletSell(pending) {
  * already queued - the trader's own sell, or an exit from an earlier sweep -
  * this is a no-op. Returns true if a new exit was queued.
  */
-async function queueExit(position, executionDelaySeconds, closeReason) {
+async function queueExit(position, executionDelaySeconds, closeReason, trigger = null) {
   // A live wallet connected to this wallet follows the exit at once, with no execution delay (db/live/trading/mirror.js).
   mirrorExit(position, closeReason).catch((err) =>
     logEvent("trade", `Failed to queue the live ${closeReason} exit of ${position.mint} for wallet ${position.walletId}: ${err.message}`, {
@@ -387,6 +403,7 @@ async function queueExit(position, executionDelaySeconds, closeReason) {
       mint: position.mint,
       action: "sell",
       closeReason,
+      trigger,
       triggerAt: new Date(Date.now() + (executionDelaySeconds || 0) * 1000),
       sourceSignature: `exit:${closeReason}:${position._id}`,
     });
@@ -485,15 +502,19 @@ export async function checkWalletRiskExits() {
       const wallet = walletCache.get(String(position.walletId));
       if (!wallet) return false;
 
+      const isApi = apiIds.has(String(position._id));
       let currentValue;
-      if (apiIds.has(String(position._id))) {
+      let priceSource;
+      if (isApi) {
         const value = apiValues.get(String(position._id));
         if (!value) return false; // couldn't be priced this sweep - checked again on the next one
         currentValue = value.valueUsd;
+        priceSource = `${value.method}_quote`;
       } else {
         const price = await getPrice(position.mint, { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
         if (!price?.priceUsd) return false;
         currentValue = position.tokenAmount * price.priceUsd;
+        priceSource = price.source;
       }
       const totalCost = position.costBasisUsd + position.buyFeeUsd;
       const { unrealizedUsd, unrealizedPercent } = computeUnrealized(currentValue, totalCost);
@@ -523,18 +544,42 @@ export async function checkWalletRiskExits() {
       const trailingStops = settings.trailingStops || [];
       if (!hasStopLoss && !hasTakeProfit && !hasMaxHoldTime && trailingStops.length === 0) return false;
 
+      // What this sweep saw, kept with every exit it queues (db/simulation/exitTrigger.js).
+      const triggerFor = (kind, thresholdPercent, rule) =>
+        buildTrigger(kind, {
+          thresholdPercent,
+          unrealizedPercent,
+          valueUsd: currentValue,
+          priceUsd: currentValue / position.tokenAmount,
+          priceSource,
+          rule,
+        });
+      // Stop-loss and trailing stops are judged on a LOW price, so a fresh read (valued the way this wallet values it) must agree
+      // before the exit is queued - this also keeps a connected live wallet from mirroring an exit that was a bad reading.
+      const confirmed = (trigger) =>
+        confirmExit(trigger, {
+          totalCost,
+          valueNow: async () => {
+            if (isApi) return (await valueMany([{ id: String(position._id), mint: position.mint, tokenAmount: position.tokenAmount }])).get(String(position._id))?.valueUsd ?? null;
+            const now = await getPrice(position.mint, { fresh: true });
+            return now?.priceUsd ? position.tokenAmount * now.priceUsd : null;
+          },
+          meta: { walletId: String(position.walletId), traderAddress: position.traderAddress, mint: position.mint },
+        });
+
       if (hasStopLoss && unrealizedPercent <= -Math.abs(settings.stopLossPercent)) {
-        return !!(await queueExit(position, settings.executionDelaySeconds, "stop_loss"));
+        const trigger = await confirmed(triggerFor("stop_loss", -Math.abs(settings.stopLossPercent)));
+        return !!trigger && !!(await queueExit(position, settings.executionDelaySeconds, "stop_loss", trigger));
       }
 
       if (hasTakeProfit && unrealizedPercent >= Math.abs(settings.takeProfitPercent)) {
-        return !!(await queueExit(position, settings.executionDelaySeconds, "take_profit"));
+        return !!(await queueExit(position, settings.executionDelaySeconds, "take_profit", triggerFor("take_profit", Math.abs(settings.takeProfitPercent))));
       }
 
       if (hasMaxHoldTime) {
         const elapsedSeconds = (Date.now() - position.openedAt.getTime()) / 1000;
         if (elapsedSeconds >= settings.maxTradeTimeSeconds) {
-          return !!(await queueExit(position, settings.executionDelaySeconds, "max_hold_time"));
+          return !!(await queueExit(position, settings.executionDelaySeconds, "max_hold_time", triggerFor("max_hold_time", null)));
         }
       }
 
@@ -561,7 +606,8 @@ export async function checkWalletRiskExits() {
               );
             }
           } else if (unrealizedPercent <= rule.exitPercent) {
-            return !!(await queueExit(position, settings.executionDelaySeconds, "trailing_stop"));
+            const trigger = await confirmed(triggerFor("trailing_stop", rule.exitPercent, rule));
+            return !!trigger && !!(await queueExit(position, settings.executionDelaySeconds, "trailing_stop", trigger));
           }
         }
       }

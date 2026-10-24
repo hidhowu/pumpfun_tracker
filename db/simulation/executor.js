@@ -10,6 +10,7 @@ import { logEvent } from "../systemLog.js";
 import { computeTradeFees, realizedCounterDeltaOnClose } from "../fees.js";
 import { applyOnce, wasApplied, savePlan, leaseExpiry, failOrRetry, reapStale } from "./atomic.js";
 import { isTradingPaused } from "./guards.js";
+import { CONFIRMED_EXITS, buildTrigger, confirmExit, triggerHolds } from "./exitTrigger.js";
 
 // ProfileTrader keeps everything of one (profile, trader) pair in one document, so a balance + counters change is ONE
 // atomic write; the applied-operation keys live in its sim subdocument.
@@ -201,7 +202,7 @@ async function executeBuy(pending) {
 }
 
 /** Freezes the numbers of a close - see planClose in walletExecutor.js; identical maths, stored on the position (pendingClose) before anything is paid out. */
-function planClose(position, { priceUsd, fees, closeReason, closeSignature, pendingId }) {
+function planClose(position, { priceUsd, fees, closeReason, closeSignature, pendingId, trigger = null }) {
   const proceedsUsd = position.tokenAmount * priceUsd;
   const sellFees = computeTradeFees(proceedsUsd, fees);
   const totalCost = position.costBasisUsd + position.buyFeeUsd;
@@ -214,6 +215,8 @@ function planClose(position, { priceUsd, fees, closeReason, closeSignature, pend
     pendingId: String(pendingId),
     closeReason,
     closeSignature,
+    // What made this exit happen, with the price it actually filled at added (db/simulation/exitTrigger.js).
+    trigger: trigger ? { ...trigger, fillPercent: closeUnrealized.unrealizedPercent, fillPriceUsd: priceUsd } : null,
     priceUsd,
     proceedsUsd,
     feeUsd: sellFees.totalFeeUsd,
@@ -266,6 +269,7 @@ async function bookClose(position, plan) {
         closedAt: new Date(),
         closeReason: plan.closeReason,
         closeTriggerSignature: plan.closeSignature,
+        closeTrigger: plan.trigger ?? null,
         sellPriceUsd: plan.priceUsd,
         proceedsUsd: plan.proceedsUsd,
         sellFeeUsd: plan.feeUsd,
@@ -326,12 +330,24 @@ async function executeSell(pending) {
     const price = await getPrice(pending.mint, { fresh: true });
     if (!price?.priceUsd) return retryWithoutPrice(pending);
 
+    // A stop-loss / trailing stop is only carried out while the price at the fill still breaches its level (db/simulation/exitTrigger.js).
+    if (pending.trigger && CONFIRMED_EXITS.has(pending.closeReason)) {
+      const { unrealizedPercent } = computeUnrealized(position.tokenAmount * price.priceUsd, position.costBasisUsd + position.buyFeeUsd);
+      if (!triggerHolds(pending.trigger, unrealizedPercent)) {
+        return markSkipped(
+          pending,
+          `${pending.closeReason} not confirmed at the fill: the position is at ${unrealizedPercent.toFixed(1)}% (${price.source ?? "unknown source"}), above the ${pending.trigger.thresholdPercent}% level the sweep read ${pending.trigger.sweepPercent.toFixed(1)}% for`
+        );
+      }
+    }
+
     const fresh = planClose(position, {
       priceUsd: price.priceUsd,
       fees: settings,
       closeReason: pending.closeReason || "trader_sell",
       closeSignature: pending.closeReason && pending.closeReason !== "trader_sell" ? null : pending.sourceSignature,
       pendingId: pending._id,
+      trigger: pending.trigger,
     });
     const claimed = await SimPosition.findOneAndUpdate(
       { _id: position._id, status: "open", pendingClose: null },
@@ -357,7 +373,7 @@ async function executeSell(pending) {
  * already queued - the trader's own sell, or an exit from an earlier sweep -
  * this is a no-op. Returns true if a new exit was queued.
  */
-async function queueExit(position, executionDelaySeconds, closeReason) {
+async function queueExit(position, executionDelaySeconds, closeReason, trigger = null) {
   try {
     await PendingExecution.create({
       profileId: position.profileId,
@@ -365,6 +381,7 @@ async function queueExit(position, executionDelaySeconds, closeReason) {
       mint: position.mint,
       action: "sell",
       closeReason,
+      trigger,
       triggerAt: new Date(Date.now() + (executionDelaySeconds || 0) * 1000),
       sourceSignature: `exit:${closeReason}:${position._id}`,
     });
@@ -545,18 +562,33 @@ export async function checkRiskExits() {
       const trailingStops = settings.trailingStops || [];
       if (!hasStopLoss && !hasTakeProfit && !hasMaxHoldTime && trailingStops.length === 0) return false;
 
+      // What this sweep saw, kept with every exit it queues (db/simulation/exitTrigger.js).
+      const triggerFor = (kind, thresholdPercent, rule) =>
+        buildTrigger(kind, { thresholdPercent, unrealizedPercent, valueUsd: currentValue, priceUsd: price.priceUsd, priceSource: price.source, rule });
+      // Stop-loss and trailing stops are judged on a LOW price, so a fresh read must agree before the exit is queued.
+      const confirmed = (trigger) =>
+        confirmExit(trigger, {
+          totalCost,
+          valueNow: async () => {
+            const now = await getPrice(position.mint, { fresh: true });
+            return now?.priceUsd ? position.tokenAmount * now.priceUsd : null;
+          },
+          meta: { profileId: String(position.profileId), traderAddress: position.traderAddress, mint: position.mint },
+        });
+
       if (hasStopLoss && unrealizedPercent <= -Math.abs(settings.stopLossPercent)) {
-        return !!(await queueExit(position, settings.executionDelaySeconds, "stop_loss"));
+        const trigger = await confirmed(triggerFor("stop_loss", -Math.abs(settings.stopLossPercent)));
+        return !!trigger && !!(await queueExit(position, settings.executionDelaySeconds, "stop_loss", trigger));
       }
 
       if (hasTakeProfit && unrealizedPercent >= Math.abs(settings.takeProfitPercent)) {
-        return !!(await queueExit(position, settings.executionDelaySeconds, "take_profit"));
+        return !!(await queueExit(position, settings.executionDelaySeconds, "take_profit", triggerFor("take_profit", Math.abs(settings.takeProfitPercent))));
       }
 
       if (hasMaxHoldTime) {
         const elapsedSeconds = (Date.now() - position.openedAt.getTime()) / 1000;
         if (elapsedSeconds >= settings.maxTradeTimeSeconds) {
-          return !!(await queueExit(position, settings.executionDelaySeconds, "max_hold_time"));
+          return !!(await queueExit(position, settings.executionDelaySeconds, "max_hold_time", triggerFor("max_hold_time", null)));
         }
       }
 
@@ -583,7 +615,8 @@ export async function checkRiskExits() {
               );
             }
           } else if (unrealizedPercent <= rule.exitPercent) {
-            return !!(await queueExit(position, settings.executionDelaySeconds, "trailing_stop"));
+            const trigger = await confirmed(triggerFor("trailing_stop", rule.exitPercent, rule));
+            return !!trigger && !!(await queueExit(position, settings.executionDelaySeconds, "trailing_stop", trigger));
           }
         }
       }

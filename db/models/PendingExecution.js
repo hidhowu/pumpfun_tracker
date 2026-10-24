@@ -28,6 +28,8 @@ const PendingExecutionSchema = new Schema({
     enum: ["trader_sell", "stop_loss", "take_profit", "trailing_stop", "max_hold_time", "blacklisted"],
     default: "trader_sell",
   },
+  // What made this exit happen (db/simulation/exitTrigger.js): the rule, its level, and the price the sweep saw. Null for a copied trade.
+  trigger: { type: Schema.Types.Mixed, default: null },
   // Crash safety (db/simulation/atomic.js): a claimed item holds a lease; one that outlives it was abandoned mid-fill and is
   // re-queued. "fill" is the frozen plan (price, size, fees, ids) written BEFORE any money moves, so a resumed run
   // finishes the exact same fill instead of pricing it again.

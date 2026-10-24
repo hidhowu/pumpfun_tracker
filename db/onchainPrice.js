@@ -32,9 +32,19 @@ import { HttpRpcEndpoint } from "./models/HttpRpcEndpoint.js";
  * accounts each): callers within a ~20ms window are micro-batched together,
  * so a whole risk sweep costs one or two RPC calls, not one per token.
  *
+ * Not every token is quoted in SOL. A token launched against another quote
+ * mint (say a tokenized stock) records it in its BondingCurve's quote_mint, and
+ * its PumpSwap pool is derived from THAT mint instead of wSOL. The quote mint
+ * is learned from the curve, the pool is looked up with it, the quote token's
+ * decimals come from its mint account, and its USD price from Jupiter - so
+ * these tokens are priced from the chain like any other instead of from
+ * pump.fun's web API (whose figure for them is noisy and was seen to dip for a
+ * moment, which sold positions by mistake).
+ *
  * SOL-quoted prices are converted with SOL/USD from Jupiter's price API.
  * Returns null for a mint it can't price (e.g. migrated somewhere other
- * than PumpSwap) - db/pumpFunApi.js then falls back to pump.fun's API.
+ * than PumpSwap, or a quote token Jupiter has no price for) -
+ * db/pumpFunApi.js then falls back to pump.fun's API.
  */
 
 const PUMP_PROGRAM = new PublicKey(pumpIdl.address);
@@ -46,27 +56,30 @@ const USD_STABLES = new Set([
   "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
 ]);
 const QUOTE_DECIMALS = { [WSOL_MINT]: 9, [DEFAULT_PUBKEY]: 9, EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 6, Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: 6 };
+const quoteDecimals = new Map(Object.entries(QUOTE_DECIMALS)); // quote mint -> decimals; others are read off their mint account once, then remembered
 
 const pumpCoder = new BorshAccountsCoder(pumpIdl);
 const ammCoder = new BorshAccountsCoder(pumpAmmIdl);
 
 // Per-mint facts that never change once learned: token decimals, whether it
-// graduated, and its pool's addresses.
-const mintFacts = new Map(); // mint -> { decimals?, graduated?, pool?, baseVault?, quoteVault? }
+// graduated, which token it is quoted in, and its pool's addresses.
+const mintFacts = new Map(); // mint -> { decimals?, graduated?, quoteMint?, pool?, baseVault?, quoteVault? }
 const facts = (mint) => {
   if (!mintFacts.has(mint)) mintFacts.set(mint, {});
   return mintFacts.get(mint);
 };
 
 const curvePda = (mint) => PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), new PublicKey(mint).toBuffer()], PUMP_PROGRAM)[0].toBase58();
-function poolPda(mint) {
+function poolPda(mint, quoteMint = WSOL_MINT) {
   const mintKey = new PublicKey(mint);
   const authority = PublicKey.findProgramAddressSync([Buffer.from("pool-authority"), mintKey.toBuffer()], PUMP_PROGRAM)[0];
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("pool"), Buffer.from([0, 0]), authority.toBuffer(), mintKey.toBuffer(), new PublicKey(WSOL_MINT).toBuffer()],
+    [Buffer.from("pool"), Buffer.from([0, 0]), authority.toBuffer(), mintKey.toBuffer(), new PublicKey(quoteMint).toBuffer()],
     PUMP_AMM_PROGRAM
   )[0].toBase58();
 }
+/** The canonical pool of a graduated mint: derived from the token it is quoted in (wSOL until its curve says otherwise). */
+const poolAddress = (mint) => poolPda(mint, facts(mint).quoteMint ?? WSOL_MINT);
 
 // ------------------------------------------------------------------- RPC
 
@@ -145,10 +158,53 @@ export async function getSolUsd({ maxAgeMs = 10_000 } = {}) {
   return solUsd.value;
 }
 
-function quoteToUsd(quoteMint, solPrice) {
+// USD price of any other quote token, from Jupiter. A refresh that fails keeps the last good value, but only for QUOTE_USD_MAX_STALE_MS -
+// an old price of a volatile token is worse than none (the caller then falls back to pump.fun's API).
+const QUOTE_USD_MAX_STALE_MS = 10 * 60_000;
+const quoteUsdCache = new Map(); // quote mint -> { value, fetchedAt }
+
+/** quote mint -> USD per token for the quote mints that are neither SOL nor a stablecoin (missing = no price). `maxAgeMs: 0` forces a fresh request. */
+async function getQuoteUsdMany(quoteMints, { maxAgeMs = 10_000 } = {}) {
+  const wanted = [...new Set(quoteMints)].filter((m) => m !== WSOL_MINT && m !== DEFAULT_PUBKEY && !USD_STABLES.has(m));
+  const stale = wanted.filter((m) => {
+    const cached = quoteUsdCache.get(m);
+    return !cached || Date.now() - cached.fetchedAt > maxAgeMs;
+  });
+  if (stale.length) {
+    try {
+      const res = await fetch(`https://lite-api.jup.ag/price/v3?ids=${stale.join(",")}`, { signal: AbortSignal.timeout(5000) });
+      const body = await res.json();
+      for (const m of stale) {
+        const price = body?.[m]?.usdPrice;
+        if (Number.isFinite(price) && price > 0) quoteUsdCache.set(m, { value: price, fetchedAt: Date.now() });
+      }
+    } catch {
+      // keep the last good values below
+    }
+  }
+  const out = new Map();
+  for (const m of wanted) {
+    const cached = quoteUsdCache.get(m);
+    if (cached && Date.now() - cached.fetchedAt <= QUOTE_USD_MAX_STALE_MS) out.set(m, cached.value);
+  }
+  return out;
+}
+
+/** Decimals of every quote mint not known yet, read off the mint accounts in one call (SPL Token and Token-2022 share the layout). */
+async function learnQuoteDecimals(quoteMints) {
+  const unknown = [...new Set(quoteMints)].filter((m) => !quoteDecimals.has(m));
+  if (!unknown.length) return;
+  const accounts = await getAccounts(unknown);
+  for (const m of unknown) {
+    const data = accounts.get(m);
+    if (data) quoteDecimals.set(m, mintDecimals(data));
+  }
+}
+
+function quoteToUsd(quoteMint, solPrice, otherUsd) {
   if (quoteMint === WSOL_MINT || quoteMint === DEFAULT_PUBKEY) return solPrice;
   if (USD_STABLES.has(quoteMint)) return 1;
-  return null; // some other quote token - not priced here
+  return otherUsd?.get(quoteMint) ?? null; // some other quote token - priced only if Jupiter has it
 }
 
 // --------------------------------------------------------------- pricing
@@ -183,6 +239,8 @@ async function priceBatch(mints, { freshSol = false } = {}) {
     }
     const curveData = acc1.get(curvePda(mint));
     const curve = curveData ? safeDecode(pumpCoder, "BondingCurve", curveData) : null;
+    const curveQuote = curve?.quote_mint?.toBase58?.();
+    if (curveQuote) f.quoteMint = curveQuote === DEFAULT_PUBKEY ? WSOL_MINT : curveQuote; // fixed at launch, and the pool is derived from it
     if (curve && !curve.complete) curvePriced.push([mint, curve]);
     else {
       if (curve?.complete) f.graduated = true;
@@ -197,13 +255,13 @@ async function priceBatch(mints, { freshSol = false } = {}) {
   if (graduated.length) {
     const unknown = graduated.filter((m) => !facts(m).baseVault);
     if (unknown.length) {
-      const poolAccs = await getAccounts(unknown.map(poolPda));
+      const poolAccs = await getAccounts(unknown.map(poolAddress));
       for (const mint of unknown) {
-        const data = poolAccs.get(poolPda(mint));
+        const data = poolAccs.get(poolAddress(mint));
         const pool = data ? safeDecode(ammCoder, "Pool", data) : null;
         if (!pool) continue;
         Object.assign(facts(mint), {
-          pool: poolPda(mint),
+          pool: poolAddress(mint),
           baseVault: pool.pool_base_token_account.toBase58(),
           quoteVault: pool.pool_quote_token_account.toBase58(),
         });
@@ -222,10 +280,17 @@ async function priceBatch(mints, { freshSol = false } = {}) {
   }
 
   const sol = await solPromise;
+  // Decimals and USD price of every quote token in play that isn't SOL or a stablecoin (empty for the usual SOL-quoted batch).
+  const quoteMints = [
+    ...curvePriced.map(([, curve]) => curve.quote_mint?.toBase58?.() ?? DEFAULT_PUBKEY),
+    ...[...pools.values()].map(({ pool }) => pool.quote_mint.toBase58()),
+  ];
+  await learnQuoteDecimals(quoteMints);
+  const otherUsd = await getQuoteUsdMany(quoteMints, { maxAgeMs: freshSol ? 0 : 10_000 });
   for (const [mint, curve] of curvePriced) {
     const quoteMint = curve.quote_mint?.toBase58?.() ?? DEFAULT_PUBKEY;
-    const qDec = QUOTE_DECIMALS[quoteMint];
-    const usdPerQuote = quoteToUsd(quoteMint, sol);
+    const qDec = quoteDecimals.get(quoteMint);
+    const usdPerQuote = quoteToUsd(quoteMint, sol, otherUsd);
     const dec = facts(mint).decimals ?? 6;
     const vToken = Number(curve.virtual_token_reserves);
     if (qDec === undefined || !usdPerQuote || !vToken) continue;
@@ -234,8 +299,8 @@ async function priceBatch(mints, { freshSol = false } = {}) {
   }
   for (const [mint, { pool, base, quote }] of pools) {
     const quoteMint = pool.quote_mint.toBase58();
-    const qDec = QUOTE_DECIMALS[quoteMint];
-    const usdPerQuote = quoteToUsd(quoteMint, sol);
+    const qDec = quoteDecimals.get(quoteMint);
+    const usdPerQuote = quoteToUsd(quoteMint, sol, otherUsd);
     const dec = facts(mint).decimals ?? 6;
     if (qDec === undefined || !usdPerQuote || !base) continue;
     const quoteReserves = quote + Number(pool.virtual_quote_reserves ?? 0);
