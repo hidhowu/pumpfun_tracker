@@ -13,7 +13,7 @@ import { mirrorExit } from "../live/trading/mirror.js";
 import { TradeError } from "../live/trading/pumpSwap.js";
 import { priceBuy, priceSell, valueMany } from "./sdkQuote.js";
 import { tokenHasTrades } from "./apiClients.js";
-import { CONFIRMED_EXITS, buildTrigger, confirmExit, triggerHolds } from "./exitTrigger.js";
+import { CONFIRMED_EXITS, buildTrigger, confirmExit, recoveryLevel, triggerHolds } from "./exitTrigger.js";
 
 /** Wallets that follow their traders through pump.fun's API (Wallet.settings.trackingMethod) fill and are checked at SDK quotes, not spot prices. */
 const isApiWallet = (wallet) => wallet?.settings?.trackingMethod === "api";
@@ -351,7 +351,7 @@ async function executeWalletSell(pending) {
       if (!triggerHolds(pending.trigger, unrealizedPercent)) {
         return markSkipped(
           pending,
-          `${pending.closeReason} not confirmed at the fill: the position is at ${unrealizedPercent.toFixed(1)}% (${method}), above the ${pending.trigger.thresholdPercent}% level the sweep read ${pending.trigger.sweepPercent.toFixed(1)}% for`
+          `${pending.closeReason} not confirmed at the fill: the position is at ${unrealizedPercent.toFixed(1)}% (${method}), recovered past the ${recoveryLevel(pending.trigger)}% level (exit level ${pending.trigger.thresholdPercent}%) the sweep read ${pending.trigger.sweepPercent.toFixed(1)}% for`
         );
       }
     }

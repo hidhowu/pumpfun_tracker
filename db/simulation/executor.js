@@ -10,7 +10,7 @@ import { logEvent } from "../systemLog.js";
 import { computeTradeFees, realizedCounterDeltaOnClose } from "../fees.js";
 import { applyOnce, wasApplied, savePlan, leaseExpiry, failOrRetry, reapStale } from "./atomic.js";
 import { isTradingPaused } from "./guards.js";
-import { CONFIRMED_EXITS, buildTrigger, confirmExit, triggerHolds } from "./exitTrigger.js";
+import { CONFIRMED_EXITS, buildTrigger, confirmExit, recoveryLevel, triggerHolds } from "./exitTrigger.js";
 
 // ProfileTrader keeps everything of one (profile, trader) pair in one document, so a balance + counters change is ONE
 // atomic write; the applied-operation keys live in its sim subdocument.
@@ -336,7 +336,7 @@ async function executeSell(pending) {
       if (!triggerHolds(pending.trigger, unrealizedPercent)) {
         return markSkipped(
           pending,
-          `${pending.closeReason} not confirmed at the fill: the position is at ${unrealizedPercent.toFixed(1)}% (${price.source ?? "unknown source"}), above the ${pending.trigger.thresholdPercent}% level the sweep read ${pending.trigger.sweepPercent.toFixed(1)}% for`
+          `${pending.closeReason} not confirmed at the fill: the position is at ${unrealizedPercent.toFixed(1)}% (${price.source ?? "unknown source"}), recovered past the ${recoveryLevel(pending.trigger)}% level (exit level ${pending.trigger.thresholdPercent}%) the sweep read ${pending.trigger.sweepPercent.toFixed(1)}% for`
         );
       }
     }
