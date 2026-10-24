@@ -141,6 +141,9 @@ export function ViewsTab({ runId, suggestedBalanceUsd, refreshKey = 0 }: { runId
                 <TableHead className="text-right" title="The deepest the profit and loss fell to over the whole window (realised results)">
                   Deepest loss
                 </TableHead>
+                <TableHead className="text-right" title="The total of the worst 7 days in a row (every 7 days in a row added up: 1-7, 2-8, 3-9 ...)">
+                  Worst 7 days
+                </TableHead>
                 <TableHead className="text-right">Loss days</TableHead>
                 <TableHead className="text-right">Win rate</TableHead>
                 <TableHead className="text-right">Trades</TableHead>
@@ -170,6 +173,7 @@ export function ViewsTab({ runId, suggestedBalanceUsd, refreshKey = 0 }: { runId
                     </TableCell>
                     <TableCell className={cn("text-right tabular-nums", s.lowestBalanceUsd < 0 && "text-negative")}>{formatUsd(s.lowestBalanceUsd)}</TableCell>
                     <TableCell className={cn("text-right tabular-nums", (s.deepestLossUsd ?? 0) < 0 && "text-negative")}>{formatUsd(s.deepestLossUsd ?? 0)}</TableCell>
+                    <TableCell className={cn("text-right tabular-nums", (s.worstStretchUsd ?? 0) < 0 && "text-negative")}>{s.worstStretchUsd != null ? formatUsd(s.worstStretchUsd) : "—"}</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {s.lossDays} <span className="text-xs text-muted-foreground">/ {s.lossDays + s.profitDays}</span>
                     </TableCell>

@@ -13,6 +13,7 @@ import type { BacktestCombinedWallet, BacktestViewWallet } from "@/lib/backtest-
 import { cn } from "@/lib/utils";
 import { formatDateTime, formatSignedPercent, pnlTone } from "./shared";
 import { LossDepthCard } from "./loss-depth-card";
+import { WorstStretchCard } from "./worst-stretch-card";
 
 const axisTick = { fill: "var(--muted-foreground)", fontSize: 11 };
 const DAY_MS = 86_400_000;
@@ -206,6 +207,8 @@ export function CombinedWalletPanel({ runId, viewId, refreshKey = 0, onLoaded }:
       </div>
 
       <LossDepthCard depth={data.lossDepth} />
+
+      <WorstStretchCard stretch={data.worstStretch} />
 
       <div className="flex flex-col gap-2">
         <h3 className="text-sm font-semibold">{reset ? "Profit and loss of each day" : "Balance over time"}</h3>

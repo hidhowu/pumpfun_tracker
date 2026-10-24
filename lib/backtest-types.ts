@@ -366,6 +366,30 @@ export type BacktestLossDepth = {
   depths: number[];
 };
 
+/**
+ * The worst stretch of days in a row (see worstStretchView in db/backtest/dayStats.js): every `length` consecutive days added up (1-7, 2-8, 3-9 ...),
+ * and the window with the lowest total. `worst` is null when the backtest covers fewer than `length` days. Percent = share of the starting balance.
+ */
+export type BacktestWorstStretch = {
+  length: number;
+  startingUsd: number;
+  /** Calendar days from the first to the last day of the backtest. */
+  dayCount: number;
+  /** How many stretches of `length` days there are. */
+  windows: number;
+  /** How many of them added up to a loss. */
+  belowZero: number;
+  worst: {
+    startDate: string;
+    endDate: string;
+    pnlUsd: number;
+    percent: number;
+    trades: number;
+    lossDays: number;
+    days: Array<{ date: string; pnlUsd: number; trades: number }>;
+  } | null;
+};
+
 export type BacktestAddressDetail = {
   run: Pick<BacktestRunDefinition, "_id" | "name" | "days" | "windowStart" | "windowEnd" | "profileName" | "settings" | "status" | "control">;
   trader: BacktestRunTraderView;
@@ -447,6 +471,7 @@ export type BacktestCombinedWallet = {
   };
   days: BacktestCombinedDay[];
   lossDepth: BacktestLossDepth;
+  worstStretch: BacktestWorstStretch;
   /** Balance after every buy and sell (empty when the balance resets daily). */
   curve: Array<{ t: number; balanceUsd: number }>;
   /** false while addresses are still being worked on: the figures then cover only the trades simulated so far. */
@@ -491,6 +516,8 @@ export type BacktestViewSummary = {
   lostCapitalDays: number;
   /** The deepest point the realised P&L reached over the window, as a negative dollar amount (0 = never below zero). */
   deepestLossUsd: number;
+  /** The total of the worst 7 days in a row (null when the window is shorter than 7 days). */
+  worstStretchUsd: number | null;
   feesUsd: number;
 };
 

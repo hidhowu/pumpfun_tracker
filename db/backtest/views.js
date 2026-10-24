@@ -218,6 +218,7 @@ function summarise(ledger, feesUsd) {
     testedStartDays: w.testedStartDays,
     lostCapitalDays: w.lostCapitalDays,
     deepestLossUsd: ledger.lossDepth.lowest?.pnlUsd ?? 0,
+    worstStretchUsd: ledger.worstStretch.worst?.pnlUsd ?? null, // the worst 7 days in a row (null = fewer than 7 days)
     feesUsd,
   };
 }

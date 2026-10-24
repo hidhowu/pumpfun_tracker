@@ -1,7 +1,7 @@
 import { BacktestRun } from "../models/BacktestRun.js";
 import { BacktestRunTrader } from "../models/BacktestRunTrader.js";
 import { BacktestPosition } from "../models/BacktestPosition.js";
-import { lossDepthView } from "./dayStats.js";
+import { lossDepthView, worstStretchView } from "./dayStats.js";
 
 /**
  * Combined backtest: every address of the run trades as ONE wallet. They share a starting balance and every trade has the same
@@ -28,6 +28,10 @@ import { lossDepthView } from "./dayStats.js";
  * Deepest loss: `lossDepth` is the deepest the balance went, with no day borders - for every closed trade, how low did the running total
  * go if trading had started there, and the lowest of all those. It is made from the trades' results only, so a daily reset does not change
  * it. See lossDepthView() in dayStats.js. Closed trades only: an open trade has no result yet.
+ *
+ * Worst 7 days: `worstStretch` adds up every 7 days in a row of the day list (days 1-7, 2-8, 3-9 ...) and reports the window with the lowest
+ * total. It uses each day's P&L as the daily breakdown shows it, so a daily reset changes it the same way it changes that breakdown.
+ * See worstStretchView() in dayStats.js.
  *
  * Because it is computed from the positions that exist, the figures are complete only once every address is simulated.
  */
@@ -296,6 +300,7 @@ export function buildCombinedLedger(positions, { startingUsd, resetDaily = false
     days: dayList,
     curve,
     lossDepth: lossDepthView(booked, { startingUsd }),
+    worstStretch: worstStretchView(dayList, { length: 7, startingUsd }),
   };
 }
 

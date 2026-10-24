@@ -129,3 +129,69 @@ export function lossDepthView(trades, { startingUsd = 0 } = {}) {
     : null;
   return { startingUsd, trades: n, belowZero: depths.length, lowest, depths };
 }
+
+const DAY_MS = 86_400_000;
+const dateKey = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/**
+ * The worst stretch of days in a row: every window of `length` consecutive calendar days (days 1-7, then 2-8, then 3-9 ...) is added up,
+ * and the window with the lowest total is the worst one. A day with no trade is a day with 0 in it - it still takes its place in the row.
+ * A stretch needs all `length` days inside the window, so a run shorter than that has none.
+ *
+ * A day's result is the day's `pnlUsd` exactly as the daily breakdown shows it. Percentages are a share of `startingUsd`.
+ *
+ * @param {Array<{date: string, pnlUsd: number, trades?: number}>} days one entry per UTC day, any order
+ * @param {{length?: number, startingUsd?: number}} [opts]
+ * @returns {{ length: number, startingUsd: number, dayCount: number, windows: number, belowZero: number,
+ *   worst: {startDate: string, endDate: string, pnlUsd: number, percent: number, trades: number, lossDays: number,
+ *     days: Array<{date: string, pnlUsd: number, trades: number}>} | null }}
+ *   belowZero = how many of the windows added up to a loss; worst = null when there are fewer than `length` days
+ */
+export function worstStretchView(days, { length = 7, startingUsd = 0 } = {}) {
+  const byDate = new Map(days.map((d) => [d.date, d]));
+  const keys = [...byDate.keys()].sort();
+  const row = []; // every calendar day from the first to the last, gaps filled with an empty day
+  if (keys.length) {
+    for (let t = Date.parse(`${keys[0]}T00:00:00Z`); t <= Date.parse(`${keys.at(-1)}T00:00:00Z`); t += DAY_MS) {
+      const key = dateKey(t);
+      const d = byDate.get(key);
+      row.push({ date: key, pnlUsd: d?.pnlUsd || 0, trades: d?.trades || 0 });
+    }
+  }
+
+  const windows = Math.max(0, row.length - length + 1);
+  if (windows === 0) return { length, startingUsd, dayCount: row.length, windows: 0, belowZero: 0, worst: null };
+
+  let sum = 0;
+  for (let i = 0; i < length; i++) sum += row[i].pnlUsd;
+  let belowZero = 0;
+  let worstAt = 0;
+  let worstSum = sum;
+  for (let i = 0; i < windows; i++) {
+    if (i > 0) sum += row[i + length - 1].pnlUsd - row[i - 1].pnlUsd;
+    if (sum < -1e-9) belowZero += 1;
+    if (sum < worstSum - 1e-9) {
+      worstSum = sum;
+      worstAt = i;
+    }
+  }
+
+  const picked = row.slice(worstAt, worstAt + length);
+  const pnlUsd = picked.reduce((n, d) => n + d.pnlUsd, 0); // re-added directly, so the running sum's float drift never reaches the page
+  return {
+    length,
+    startingUsd,
+    dayCount: row.length,
+    windows,
+    belowZero,
+    worst: {
+      startDate: picked[0].date,
+      endDate: picked.at(-1).date,
+      pnlUsd,
+      percent: startingUsd > 0 ? (pnlUsd / startingUsd) * 100 : 0,
+      trades: picked.reduce((n, d) => n + d.trades, 0),
+      lossDays: picked.filter((d) => d.pnlUsd < 0).length,
+      days: picked,
+    },
+  };
+}
