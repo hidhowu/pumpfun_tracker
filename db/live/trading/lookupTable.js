@@ -11,6 +11,8 @@ import { base58Encode } from "../walletKeys.js";
  * adds the accounts it uses and goes on. It costs about 0.01-0.02 SOL of rent (refundable by closing the table) and a few network fees.
  *
  * The table's address is kept on the LiveWallet. Tables are only ever extended, never shrunk; at 256 addresses a fresh table is started.
+ * A wallet with no table recorded is looked up on the chain first (findExistingTable): a table the wallet already owns - made by a script, say -
+ * is adopted instead of paying for a second one.
  */
 
 const MAX_ADDRESSES = 256;
@@ -21,9 +23,44 @@ const CONFIRM_WAIT_MS = 45_000;
 const cache = new Map(); // table address -> { at, table }
 const locks = new Map(); // wallet id -> promise of the growth in progress
 
+const ALT_PROGRAM = "AddressLookupTab1e1111111111111111111111111";
+const ADOPT_RETRY_MS = 10 * 60_000;
+const adoptTried = new Map(); // wallet id -> when the chain was last searched for a table of its own
+
+/**
+ * The lookup table a wallet already owns on the chain (its authority is the wallet), if any: one that is still active. Found with one
+ * getProgramAccounts on the lookup-table program, filtered by authority (byte 22 of a table is its authority), reading only the 56-byte header.
+ * @returns {Promise<string | null>} the table's address
+ */
+export async function findExistingTable(walletAddress) {
+  const found = (await rpc("getProgramAccounts", [ALT_PROGRAM, { encoding: "base64", commitment: "confirmed", dataSlice: { offset: 0, length: 56 }, filters: [{ memcmp: { offset: 22, bytes: walletAddress } }] }])) ?? [];
+  const U64_MAX = (1n << 64n) - 1n;
+  const active = found
+    .map((entry) => ({ address: entry.pubkey, deactivated: Buffer.from(entry.account.data[0], "base64").readBigUInt64LE(4) !== U64_MAX }))
+    .filter((t) => !t.deactivated);
+  return active[0]?.address ?? null;
+}
+
+/** A wallet with no table on record adopts one it already owns on the chain (searched at most every 10 minutes). Returns the address, or null. */
+async function adoptExistingTable(live) {
+  const key = String(live._id);
+  if ((adoptTried.get(key) ?? 0) > Date.now() - ADOPT_RETRY_MS) return null;
+  adoptTried.set(key, Date.now());
+  try {
+    const address = await findExistingTable(live.address);
+    if (!address) return null;
+    await LiveWallet.updateOne({ _id: live._id, lookupTable: null }, { $set: { lookupTable: address } });
+    live.lookupTable = address;
+    logEvent("tracker", `[live-wallet] "${live.name}": found its existing lookup table ${address} on the chain and will use it`, { meta: { walletId: String(live._id), lookupTable: address } });
+    return address;
+  } catch {
+    return null; // the RPC may refuse the search; the wallet then simply has no table yet
+  }
+}
+
 /** The wallet's table, or null when it has none (or it can't be read). */
 export async function loadWalletTable(live, { fresh = false } = {}) {
-  const address = live.lookupTable;
+  const address = live.lookupTable ?? (await adoptExistingTable(live));
   if (!address) return null;
   const hit = cache.get(address);
   if (hit && !fresh && Date.now() - hit.at < CACHE_MS) return hit.table;

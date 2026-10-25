@@ -28,11 +28,13 @@ async function fetchTransaction(signature) {
 }
 
 /**
- * @param {{ signature: string, owner: string, mint: string, side: "buy" | "sell", tipLamports: number }} options
+ * @param {{ signature: string, owner: string, mint: string, side: "buy" | "sell", tipLamports: number, outMint?: string | null }} options
+ *   outMint: a sale that does not end in SOL (one stage of a sale down a chain of quote tokens, db/live/trading/sellChain.js) pays out this token instead:
+ *   its balance change is reported as outDeltaRaw and the SOL change is not swap money (it is the fee and the deposit of the accounts opened).
  * @returns {Promise<{ failed: true, error: string } | { failed: false, signature: string, slot: number, blockTime: number | null, swapLamports: number,
- *   feeLamports: number, tipLamports: number, rentLamports: number, tokenDeltaRaw: bigint, tokenAfterRaw: bigint }>}
+ *   feeLamports: number, tipLamports: number, rentLamports: number, tokenDeltaRaw: bigint, tokenAfterRaw: bigint, outDeltaRaw: bigint }>}
  */
-export async function readTradeOutcome({ signature, owner, mint, side, tipLamports }) {
+export async function readTradeOutcome({ signature, owner, mint, side, tipLamports, outMint = null }) {
   const tx = await fetchTransaction(signature);
   if (!tx) throw new OutcomeError("The confirmed transaction couldn't be read from the chain yet.");
   const meta = tx.meta;
@@ -63,10 +65,12 @@ export async function readTradeOutcome({ signature, owner, mint, side, tipLampor
 
   const feeLamports = meta.fee;
   const adjustedChange = solChange - unwrapped;
-  const swapLamports = side === "buy" ? -adjustedChange - feeLamports - tipLamports - rentLamports : adjustedChange + feeLamports + tipLamports;
+  const outDeltaRaw = outMint ? sum(mine(meta.postTokenBalances, outMint)) - sum(mine(meta.preTokenBalances, outMint)) : 0n;
+  const swapLamports = outMint ? 0 : side === "buy" ? -adjustedChange - feeLamports - tipLamports - rentLamports : adjustedChange + feeLamports + tipLamports;
 
   if (side === "buy" && tokenDeltaRaw <= 0n) throw new OutcomeError("The confirmed buy didn't add any tokens to the wallet.");
   if (side === "sell" && tokenDeltaRaw >= 0n) throw new OutcomeError("The confirmed sell didn't take any tokens out of the wallet.");
+  if (outMint && outDeltaRaw <= 0n) throw new OutcomeError("The confirmed sell didn't pay out any of the token it was meant to end in.");
   if (swapLamports < 0) throw new OutcomeError("The amounts in the confirmed transaction don't add up.");
 
   return {
@@ -80,5 +84,6 @@ export async function readTradeOutcome({ signature, owner, mint, side, tipLampor
     rentLamports,
     tokenDeltaRaw,
     tokenAfterRaw: sum(after),
+    outDeltaRaw,
   };
 }

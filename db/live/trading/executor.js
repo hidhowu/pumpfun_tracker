@@ -11,14 +11,17 @@ import { isTradingPaused } from "../../simulation/guards.js";
 import { base58Decode, base58Encode, decryptWalletSecret } from "../walletKeys.js";
 import { invalidateChainSnapshot } from "../chain.js";
 import { prepareBuy, prepareSell, TradeError } from "./pumpSwap.js";
+import { WSOL_MINT } from "./market.js";
 import { usdToTipLamports } from "./jito.js";
-import { SendError, buildSignedTrade, landTrade } from "./liveTx.js";
+import { SendError, buildSignedTrade, fitsTransaction, landTrade } from "./liveTx.js";
 import { OutcomeError, readTradeOutcome } from "./outcome.js";
 import { oneToken, settle, swapPriceUsd } from "./lots.js";
 import { assumedJitoFeeUsd, tradingSettings, networkFeeLamports, BASE_FEE_LAMPORTS } from "./settings.js";
 import { collectTradeAddresses, growWalletTable, loadWalletTable } from "./lookupTable.js";
 import { recordTx } from "./txStats.js";
 import { flagSellFailure } from "./alerts.js";
+import { dryStyleIds, lotStyleIds, selectedStyleId } from "./styles.js";
+import { findUnpaired } from "./pairing.js";
 
 /**
  * The live wallets' trade queue worker: takes what db/live/trading/mirror.js queued and turns it into real trades (or, in a dry run, into the trades the
@@ -95,11 +98,23 @@ const safeReason = (err) => (err instanceof Skip || err instanceof SendError || 
 /**
  * Builds and signs one trade: the swap's instructions, sized to fit one transaction. A swap that doesn't fit (paying with SOL, token-quoted
  * markets) puts every account it can use into the wallet's lookup table - creating the table the first time - and is built again.
- * @param {() => Promise<object>} prepare builds the swap (prepareBuy / prepareSell with this trade's numbers)
+ * @param {(context: { fitTables: Function }) => Promise<object>} prepare builds the swap (prepareBuy / prepareSell with this trade's numbers). A sale made of several
+ *   swaps (db/live/trading/sellChain.js) uses `fitTables` to check, before simulating, that a run of swaps fits one transaction. Only a single swap that doesn't fit
+ *   grows the lookup table (it takes seconds and costs rent); a longer run that doesn't fit is split instead, so the sale of the token itself never waits for that.
  */
 async function buildLiveTx({ live, keypair, fill, prepare }) {
   const startedAt = Date.now();
-  const prepared = await prepare();
+  const fitTables = async (instructions, rebuild, extra = [], { mayGrow = true } = {}) => {
+    const withTable = (table) => [...extra, ...(table ? [table] : [])];
+    const fits = (table) => fitsTransaction({ payer: keypair.publicKey, instructions, lookupTables: withTable(table), sendMode: fill.sendMode });
+    let table = await loadWalletTable(live);
+    if (fits(table)) return withTable(table);
+    if (!mayGrow) throw new TradeError("it doesn't fit one transaction with the wallet's lookup table as it is", "too_big");
+    table = await growWalletTable({ keypair, live, addresses: await collectTradeAddresses(rebuild) });
+    if (!fits(table)) throw new TradeError("it doesn't fit one transaction, even with the wallet's lookup table", "too_big");
+    return withTable(table);
+  };
+  const prepared = await prepare({ fitTables });
   const sign = (table) =>
     buildSignedTrade({
       keypair,
@@ -116,7 +131,7 @@ async function buildLiveTx({ live, keypair, fill, prepare }) {
     signed = await sign(table);
   } catch (err) {
     if (!(err instanceof SendError && err.kind === "too_big")) throw err;
-    const addresses = await collectTradeAddresses(async () => (await prepare()).instructions);
+    const addresses = await collectTradeAddresses(async () => (await prepare({ fitTables })).instructions);
     table = await growWalletTable({ keypair, live, addresses });
     signed = await sign(table);
   }
@@ -211,6 +226,8 @@ async function insertLot(item, live, fill, { buy, tokenRaw, decimals, tokenProgr
         openedAt: new Date(),
         sourceSignature: item.sourceSignature,
         exitMode: live.exitMode,
+        // A dry run works out every style the wallet has (own, follow, its cool-downs) side by side; dryDone says they have all decided.
+        ...(fill.mode === "dry" ? { dryStyles: dryStyleIds(live), dryExits: Object.fromEntries(dryStyleIds(live).map((id) => [id, null])), dryDone: false } : {}),
         sizeScale: fill.sizeScale ?? 1,
         buy,
         tokenRaw: tokenRaw.toString(),
@@ -310,11 +327,15 @@ async function sellableRaw(live, lot, fill) {
   const held = BigInt(lot.tokenRaw);
   let amount = held > keep ? held - keep : held; // a lot of one token or less is sold whole
   if (fill.mode === "live") {
-    const accounts = (await rpc("getTokenAccountsByOwner", [live.address, { mint: lot.mint }, { encoding: "jsonParsed", commitment: "confirmed" }])).value;
-    const onChain = accounts.reduce((total, a) => total + BigInt(a.account.data.parsed.info.tokenAmount.amount), 0n);
+    const onChain = await onChainBalance(live, lot.mint);
     if (onChain < amount) amount = onChain; // never ask for more than the account holds
   }
   return amount;
+}
+
+async function onChainBalance(live, mint) {
+  const accounts = (await rpc("getTokenAccountsByOwner", [live.address, { mint }, { encoding: "jsonParsed", commitment: "confirmed" }])).value;
+  return accounts.reduce((total, a) => total + BigInt(a.account.data.parsed.info.tokenAmount.amount), 0n);
 }
 
 function sellLeg({ venue, route, sendMode, signature, at, swapLamports, tipLamports, assumedTipLamports, feeLamports, tokenRaw, decimals, solUsd, verified }) {
@@ -344,7 +365,8 @@ async function executeSell(item, live, sim) {
     if (buying && Date.now() - item.createdAt.getTime() < MAX_WAIT_FOR_BUY_MS) return later(item, 1);
     throw new Skip("no live position for this trader and token");
   }
-  if (lot.status === "closed") return item.fill?.tx ? markDone(item) : markSkipped(item, "this position is already closed");
+  // A closed dry lot is still worked on while its other styles have not decided (db/live/trading/styles.js); nothing else is, once closed.
+  if (lot.status === "closed" && !(lot.mode === "dry" && lot.dryDone === false)) return item.fill?.tx ? markDone(item) : markSkipped(item, "this position is already closed");
 
   let fill = item.fill;
   if (!fill) {
@@ -369,71 +391,147 @@ async function executeSell(item, live, sim) {
 
   if (fill.mode === "dry") return executeDrySell(item, live, lot, fill);
 
-  if (!fill.tx) {
-    const sellRaw = fill.sellRaw ? BigInt(fill.sellRaw) : await sellableRaw(live, lot, fill);
-    if (sellRaw <= 0n) throw new Skip("the wallet no longer holds any of this token");
-    const tx = await withKeypair(live, async (keypair) => {
-      const { signed, prepared, startedAt } = await buildLiveTx({
-        live,
-        keypair,
-        fill,
-        prepare: () => prepareSell({ owner: keypair.publicKey, mint: item.mint, tokenRaw: sellRaw, slippagePercent: fill.slippagePercent, solUsd: fill.solUsd, payWithSol: true }),
-      });
-      return { ...signed, startedAt, venue: prepared.venue, route: prepared.route, decimals: prepared.decimals };
-    });
-    await setFill(item, { sellRaw: sellRaw.toString(), tx });
-  }
+  return executeLiveSell(item, live, lot);
+}
 
-  const tx = item.fill.tx;
-  let landed;
-  try {
-    landed = await landAndRecord(item, live, tx);
-  } catch (err) {
-    if (err instanceof SendError && (err.kind === "expired" || err.kind === "failed")) await setFill(item, { tx: null, sellRaw: null });
-    throw err;
-  }
-  const outcome = await readTradeOutcome({ signature: tx.signature, owner: live.address, mint: item.mint, side: "sell", tipLamports: tx.tipLamports });
-  if (outcome.failed) {
-    await setFill(item, { tx: null, sellRaw: null });
-    await recordTx({ item, live, tx, outcome: "reverted", error: outcome.error, startedAt: tx.startedAt, signature: tx.signature });
-    throw new SendError(`The sell was refused by the chain: ${outcome.error}`, "failed");
-  }
-  await recordTx({ item, live, tx, outcome: "success", startedAt: tx.startedAt, sentAt: landed.sentAt, landedAt: landed.landedAt, signature: tx.signature });
-  const sell = sellLeg({
-    venue: tx.venue,
-    route: tx.route,
-    sendMode: tx.sendMode,
-    signature: tx.signature,
-    at: outcome.blockTime ? new Date(outcome.blockTime * 1000) : new Date(),
-    swapLamports: outcome.swapLamports,
-    tipLamports: outcome.tipLamports,
-    assumedTipLamports: fill.assumedTipLamports ?? 0,
-    feeLamports: outcome.feeLamports,
-    tokenRaw: -outcome.tokenDeltaRaw,
-    decimals: tx.decimals,
-    solUsd: fill.solUsd,
-    verified: true,
-  });
-  const result = settle(lot.buy, sell);
-  const closed = await LiveLot.findOneAndUpdate(
-    { _id: lot._id, status: "open" },
-    { $set: { status: "closed", closedAt: new Date(), sell, closeReason: item.closeReason, sellFailure: null, ...result } },
-    { returnDocument: "after" }
-  );
-  await markDone(item);
-  invalidateChainSnapshot(live.address);
-  if (closed) {
-    logEvent("trade", `[live] Sold ${item.mint} for ${item.traderAddress}: ${item.closeReason} pnl=$${result.realizedPnlUsd.toFixed(2)} (${result.realizedPnlPercent.toFixed(1)}%) via ${tx.route}/${tx.sendMode} (${tx.signature})`, {
-      meta: { liveWalletId: String(live._id), mint: item.mint, signature: tx.signature, realizedPnlUsd: result.realizedPnlUsd },
+const sum = (list, key) => list.reduce((total, stage) => total + (stage[key] || 0), 0);
+
+/**
+ * A live sale. A token quoted in SOL is one transaction. A token quoted in other tokens is sold down the chain to SOL (db/live/trading/sellChain.js): as
+ * many swaps as fit one transaction go together; if the whole chain doesn't fit, the first transaction sells the token itself for the token it is quoted in
+ * (or as far down as it can), and the next transactions sell what the one before paid out, until SOL is reached. Each landed stage is written on the lot
+ * before the next is built, so a sale that is interrupted - or gave up - carries on from what it holds, never from the token that is already sold.
+ *
+ * Only the first transaction is sent the way the wallet is set to (Jito or raw): it is the one that sells the token the position is in, and the
+ * price that counts. Every later one is raw - no tip, only the priority fee.
+ */
+async function executeLiveSell(item, live, lot) {
+  for (;;) {
+    const fill = item.fill;
+    if (!fill.tx) {
+      const carry = lot.sellCarry?.mint ? lot.sellCarry : null;
+      const fromMint = carry?.mint ?? item.mint;
+      let sellRaw;
+      if (carry) {
+        sellRaw = BigInt(carry.raw);
+        const held = await onChainBalance(live, fromMint);
+        if (held < sellRaw) sellRaw = held;
+      } else {
+        sellRaw = fill.sellRaw ? BigInt(fill.sellRaw) : await sellableRaw(live, lot, fill);
+      }
+      if (sellRaw <= 0n) throw new Skip(carry ? `nothing is left of ${fromMint}, which an earlier part of this sale was paid in` : "the wallet no longer holds any of this token");
+      const continuing = lot.sellStages.length > 0; // an earlier transaction of this sale has landed
+      const stageFill = continuing ? { ...fill, sendMode: "raw", tipLamports: 0 } : fill;
+      const tx = await withKeypair(live, async (keypair) => {
+        const { signed, prepared, startedAt } = await buildLiveTx({
+          live,
+          keypair,
+          fill: stageFill,
+          prepare: ({ fitTables }) => prepareSell({ owner: keypair.publicKey, mint: item.mint, from: fromMint, tokenRaw: sellRaw, slippagePercent: fill.slippagePercent, solUsd: fill.solUsd, payWithSol: true, fitTables }),
+        });
+        const stage = prepared.stage ? { fromMint: prepared.stage.fromMint, toMint: prepared.stage.toMint, final: prepared.stage.final } : { fromMint: item.mint, toMint: WSOL_MINT, final: true };
+        return { ...signed, startedAt, venue: prepared.venue, route: prepared.route, decimals: prepared.decimals, stage, inRaw: sellRaw.toString() };
+      });
+      await setFill(item, { sellRaw: continuing ? null : sellRaw.toString(), tx });
+    }
+
+    const tx = item.fill.tx;
+    const stage = tx.stage ?? { fromMint: item.mint, toMint: WSOL_MINT, final: true };
+    let landed;
+    try {
+      landed = await landAndRecord(item, live, tx);
+    } catch (err) {
+      if (err instanceof SendError && (err.kind === "expired" || err.kind === "failed")) await setFill(item, { tx: null, sellRaw: null });
+      throw err;
+    }
+    const outcome = await readTradeOutcome({ signature: tx.signature, owner: live.address, mint: stage.fromMint, side: "sell", tipLamports: tx.tipLamports, outMint: stage.final ? null : stage.toMint });
+    if (outcome.failed) {
+      await setFill(item, { tx: null, sellRaw: null });
+      await recordTx({ item, live, tx, outcome: "reverted", error: outcome.error, startedAt: tx.startedAt, signature: tx.signature });
+      throw new SendError(`The sell was refused by the chain: ${outcome.error}`, "failed");
+    }
+    await recordTx({ item, live, tx, outcome: "success", startedAt: tx.startedAt, sentAt: landed.sentAt, landedAt: landed.landedAt, signature: tx.signature });
+    const at = outcome.blockTime ? new Date(outcome.blockTime * 1000) : new Date();
+    const record = {
+      signature: tx.signature,
+      fromMint: stage.fromMint,
+      toMint: stage.toMint,
+      inRaw: (-outcome.tokenDeltaRaw).toString(),
+      outRaw: stage.final ? null : outcome.outDeltaRaw.toString(),
+      swapLamports: outcome.swapLamports,
+      tipLamports: outcome.tipLamports,
+      feeLamports: outcome.feeLamports,
+      sendMode: tx.sendMode,
+      venue: tx.venue,
+      route: tx.route,
+      at,
+    };
+    const recorded = lot.sellStages.some((done) => done.signature === tx.signature); // this stage was written before a restart
+    const previous = lot.sellStages.filter((done) => done.signature !== tx.signature);
+
+    if (!stage.final) {
+      if (!recorded) {
+        const carry = { mint: stage.toMint, raw: outcome.outDeltaRaw.toString() };
+        await LiveLot.updateOne({ _id: lot._id, status: "open" }, { $push: { sellStages: record }, $set: { sellCarry: carry } });
+        lot.sellStages.push(record);
+        lot.sellCarry = carry;
+      }
+      await setFill(item, { tx: null, sellRaw: null });
+      await LiveExecution.updateOne({ _id: item._id }, { $set: { leaseUntil: new Date(Date.now() + LIVE_LEASE_MS) } }); // the next transaction is a whole new landing
+      invalidateChainSnapshot(live.address);
+      logEvent("trade", `[live] Sold ${item.mint} for ${item.traderAddress} as far as ${stage.toMint} (${tx.route}/${tx.sendMode}, ${tx.signature}); selling that on down to SOL`, {
+        meta: { liveWalletId: String(live._id), mint: item.mint, signature: tx.signature },
+      });
+      continue;
+    }
+
+    const first = previous[0] ?? record;
+    const sell = sellLeg({
+      venue: first.venue,
+      route: previous.length ? "chain" : tx.route,
+      sendMode: first.sendMode,
+      signature: tx.signature,
+      at,
+      swapLamports: outcome.swapLamports,
+      tipLamports: sum(previous, "tipLamports") + outcome.tipLamports,
+      assumedTipLamports: item.fill.assumedTipLamports ?? 0,
+      feeLamports: sum(previous, "feeLamports") + outcome.feeLamports,
+      tokenRaw: BigInt(first.inRaw),
+      decimals: tx.decimals,
+      solUsd: item.fill.solUsd,
+      verified: true,
     });
+    const result = settle(lot.buy, sell);
+    const closed = await LiveLot.findOneAndUpdate(
+      { _id: lot._id, status: "open" },
+      { $set: { status: "closed", closedAt: new Date(), sell, closeReason: item.closeReason, sellFailure: null, sellCarry: null, ...result }, $push: { sellStages: record } },
+      { returnDocument: "after" }
+    );
+    await markDone(item);
+    invalidateChainSnapshot(live.address);
+    if (closed) {
+      logEvent("trade", `[live] Sold ${item.mint} for ${item.traderAddress}: ${item.closeReason} pnl=$${result.realizedPnlUsd.toFixed(2)} (${result.realizedPnlPercent.toFixed(1)}%) via ${sell.route}/${tx.sendMode}${previous.length ? ` in ${previous.length + 1} transactions` : ""} (${tx.signature})`, {
+        meta: { liveWalletId: String(live._id), mint: item.mint, signature: tx.signature, realizedPnlUsd: result.realizedPnlUsd },
+      });
+    }
+    return;
   }
 }
 
-/** A dry-run sell: what the chain would pay for the lot's tokens right now, recorded for the exit mode(s) that decided it. */
+/**
+ * A dry-run sell: what the chain would pay for the lot's tokens right now, recorded for the exit style(s) that decided it. The lot closes the moment the style
+ * the wallet is set to has decided; the other styles are recorded whenever they decide, before or after (a lot is "done" once all of them have).
+ */
 async function executeDrySell(item, live, lot, fill) {
-  const tracks = item.track ? [item.track] : ["own", "follow"]; // a trader's sell or a blacklisting settles both ways at once
+  const styles = lotStyleIds(lot);
+  const tracks = item.track ? [item.track].filter((id) => styles.includes(id)) : styles; // a trader's sell or a blacklisting settles every way at once
   const todo = tracks.filter((track) => !lot.dryExits?.[track]);
-  if (todo.length === 0 || lot.status === "closed") return markDone(item);
+  // A trade the simulation never took has no simulated exit to follow: its "follow" way takes the exit "own" makes, at the same moment.
+  if (todo.includes("own") && styles.includes("follow") && !lot.dryExits?.follow && !todo.includes("follow") && (lot.unpaired || (await findUnpaired([lot])).length > 0)) {
+    todo.push("follow");
+    if (!lot.unpaired) await LiveLot.updateOne({ _id: lot._id }, { $set: { unpaired: true } });
+  }
+  if (todo.length === 0) return markDone(item);
 
   const sellRaw = await sellableRaw(live, lot, fill);
   if (sellRaw <= 0n) throw new Skip("nothing left to sell in this lot");
@@ -468,26 +566,13 @@ async function executeDrySell(item, live, lot, fill) {
   };
 
   const $set = Object.fromEntries(todo.map((track) => [`dryExits.${track}`, exit]));
-  const updated = await LiveLot.findOneAndUpdate({ _id: lot._id, status: "open" }, { $set }, { returnDocument: "after" });
-  if (updated?.dryExits?.own && updated?.dryExits?.follow) {
-    // Both ways have decided: the lot is settled by the exit mode the wallet is set to.
-    const chosen = updated.dryExits[live.exitMode] ?? updated.dryExits.own;
-    await LiveLot.updateOne(
-      { _id: lot._id, status: "open" },
-      {
-        $set: {
-          status: "closed",
-          closedAt: new Date(),
-          closeReason: chosen.reason,
-          sell: { ...sell, swapLamports: chosen.swapLamports ?? chosen.netLamports + fill.tipLamports + (fill.assumedTipLamports ?? 0) + feeLamports, priceUsd: chosen.priceUsd },
-          costUsd: result.costUsd,
-          proceedsUsd: chosen.proceedsUsd,
-          realizedPnlUsd: chosen.realizedPnlUsd,
-          realizedPnlPercent: chosen.realizedPnlPercent,
-        },
-      }
-    );
+  // The style the wallet is set to has decided: the position is closed with this exit.
+  const closes = lot.status === "open" && todo.includes(styles.includes(selectedStyleId(live)) ? selectedStyleId(live) : "own");
+  if (closes) {
+    Object.assign($set, { status: "closed", closedAt: new Date(), closeReason: exit.reason, sell, costUsd: result.costUsd, proceedsUsd: result.proceedsUsd, realizedPnlUsd: result.realizedPnlUsd, realizedPnlPercent: result.realizedPnlPercent });
   }
+  const updated = await LiveLot.findOneAndUpdate(closes ? { _id: lot._id, status: "open" } : { _id: lot._id }, { $set }, { returnDocument: "after" });
+  if (updated && updated.dryDone === false && styles.every((id) => updated.dryExits?.[id])) await LiveLot.updateOne({ _id: lot._id }, { $set: { dryDone: true } });
   await markDone(item);
   logEvent("trade", `[live:dry] Would have sold ${item.mint} for ${item.traderAddress} (${todo.join("+")}): ${item.closeReason} pnl=$${result.realizedPnlUsd.toFixed(2)}`, { meta: { liveWalletId: String(live._id), mint: item.mint } });
 }

@@ -47,6 +47,7 @@ export async function findEmptyTokenAccounts(live) {
 
   const busy = new Set([
     ...(await LiveLot.distinct("mint", { liveWalletId: live._id, status: "open" })),
+    ...(await LiveLot.distinct("sellCarry.mint", { liveWalletId: live._id, status: "open" })).filter(Boolean), // paid out by a sale that isn't finished
     ...(await LiveExecution.distinct("mint", { liveWalletId: live._id, status: { $in: ["pending", "processing"] } })),
   ]);
   return found.filter((f) => !busy.has(f.mint));

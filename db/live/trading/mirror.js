@@ -14,8 +14,12 @@ import { isTradingPaused } from "../../simulation/guards.js";
  *    and never while the live wallet is paused (exits and sells are not affected by the pause);
  *  - a trader's sell, and a blacklisting, are mirrored to whatever the live wallet holds from that trader;
  *  - a stop-loss / take-profit / trailing-stop / max-hold exit is mirrored only when the live wallet is set to FOLLOW the simulation's exits
- *    (a dry run always records the followed outcome next to its own).
+ *    (a dry run always records the followed outcome next to the other styles' - even after its position has closed, because the style the wallet
+ *    is set to decided first: db/live/trading/styles.js).
  */
+
+/** A lot the exits still matter to: an open position, or a dry one whose styles have not all decided yet. */
+const stillWorkedOn = { $or: [{ status: "open" }, { mode: "dry", dryDone: false }] };
 
 const liveFor = (simWalletId) => LiveWallet.findOne({ connectedWalletId: simWalletId }, { _id: 1, tradingMode: 1, exitMode: 1, paused: 1 }).lean();
 
@@ -33,7 +37,7 @@ async function enqueue(fields) {
 export async function liveHolds(simWalletId, traderAddress, mint) {
   const live = await liveFor(simWalletId);
   if (!live) return null;
-  const lot = await LiveLot.exists({ liveWalletId: live._id, traderAddress, mint, status: "open" });
+  const lot = await LiveLot.exists({ liveWalletId: live._id, traderAddress, mint, ...stillWorkedOn });
   if (lot) return live;
   const buying = await LiveExecution.exists({ liveWalletId: live._id, traderAddress, mint, action: "buy", status: { $in: ["pending", "processing"] } });
   return buying ? live : null;
@@ -83,13 +87,14 @@ export async function mirrorSell(wallet, traderAddress, trade) {
 export async function mirrorExit(position, closeReason) {
   const live = await liveFor(position.walletId);
   if (!live) return false;
-  const lot = await LiveLot.findOne({ liveWalletId: live._id, traderAddress: position.traderAddress, mint: position.mint, status: "open" }, { mode: 1 }).lean();
+  const lot = await LiveLot.findOne({ liveWalletId: live._id, traderAddress: position.traderAddress, mint: position.mint, ...stillWorkedOn }, { mode: 1, dryExits: 1 }).lean();
   if (!lot) return false;
   const blacklisted = closeReason === "blacklisted";
-  let track = null; // null = the live position itself (live lot), or both ways at once (dry-run lot)
+  let track = null; // null = the live position itself (live lot), or every way at once (dry-run lot)
   if (lot.mode === "live") {
     if (!blacklisted && live.exitMode !== "follow") return false; // the live wallet judges these itself
   } else if (!blacklisted) {
+    if (lot.dryExits?.follow) return false; // already recorded
     track = "follow"; // a dry run records what following the simulation would have done
   }
   return enqueue({

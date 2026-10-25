@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AddressChip, formatAmount, formatPrice, PnlPill, signedUsd, TokenAvatar, toneClass, tokenLabel, TypePill } from "./shared";
 import { getTradingLots, sellLotNow } from "@/lib/live-wallet-api";
 import { formatRelativeTime, formatUsd } from "@/lib/format";
+import { styleLabel } from "@/lib/live-wallet-styles";
 import { cn } from "@/lib/utils";
 import type { LotDryExit, TradingLot, TradingLotsPage } from "@/lib/live-wallet-types";
 
@@ -57,16 +58,16 @@ function ExitLine({ label, exit, chosen }: { label: string; exit: LotDryExit | n
           <PnlPill usd={exit.pnlUsd} pct={exit.pnlPercent} />
         </span>
       ) : (
-        <span className="text-xs text-muted-foreground">still holding</span>
+        <span className="text-xs text-muted-foreground">would still be holding</span>
       )}
     </div>
   );
 }
 
 /** One copied trade: what the live wallet did next to what the simulation did, with the difference. */
-const ROUTES: Record<string, string> = { direct: "direct", multihop: "multi-hop swap", pool: "via quote-token pool", jupiter: "via Jupiter", estimate: "estimate" };
+const ROUTES: Record<string, string> = { direct: "direct", multihop: "multi-hop swap", pool: "via quote-token pool", jupiter: "via Jupiter", chain: "sold down its quote tokens in several transactions", estimate: "estimate" };
 
-function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exitMode: "own" | "follow"; walletId: string; onChanged: () => void }) {
+function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exitMode: string; walletId: string; onChanged: () => void }) {
   const [selling, setSelling] = useState(false);
   async function sellNow() {
     setSelling(true);
@@ -116,7 +117,7 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
             </span>
           ) : null}
           <TypePill label={open ? "Open" : reasonLabel(lot.closeReason)} tone={open ? "receive" : "neutral"} />
-          {!lot.paired ? <TypePill label="No simulated counterpart" tone="neutral" /> : null}
+          {!lot.paired ? <TypePill label="Simulation didn't take it - own entry rules" tone="neutral" /> : null}
           <span className="text-xs text-muted-foreground">{formatRelativeTime(lot.openedAt)}</span>
         </div>
       </div>
@@ -158,8 +159,9 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
       {lot.dry ? (
         <div className="space-y-1.5">
           <div className="text-xs font-extrabold tracking-wide text-muted-foreground uppercase">What each exit way would have done</div>
-          <ExitLine label="Its own entry" exit={lot.dry.own} chosen={exitMode === "own"} />
-          <ExitLine label="Follow simulation" exit={lot.dry.follow} chosen={exitMode === "follow"} />
+          {Object.entries(lot.dry).map(([id, exit]) => (
+            <ExitLine key={id} label={styleLabel(id)} exit={exit} chosen={exitMode === id} />
+          ))}
         </div>
       ) : null}
 
@@ -190,7 +192,7 @@ const FILTERS = [
 ] as const;
 
 /** The copied trades, newest first, each with the simulation's matching position beside it. */
-export function TradingLots({ walletId, exitMode, refreshKey }: { walletId: string; exitMode: "own" | "follow"; refreshKey: number }) {
+export function TradingLots({ walletId, exitMode, refreshKey }: { walletId: string; exitMode: string; refreshKey: number }) {
   const [status, setStatus] = useState<"open" | "closed" | undefined>(undefined);
   const [page, setPage] = useState(1);
   const [data, setData] = useState<TradingLotsPage | null>(null);

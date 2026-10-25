@@ -25,8 +25,8 @@ const LiveExecutionSchema = new Schema({
   },
   // What made this exit happen (db/simulation/exitTrigger.js). Null for a copied trade.
   trigger: { type: Schema.Types.Mixed, default: null },
-  // Dry run only: which exit mode decided this sell ("own" | "follow"); a live sell has none.
-  track: { type: String, enum: ["own", "follow", null], default: null },
+  // Dry run only: which exit style decided this sell ("own", "follow", "cd180", ...); a live sell has none.
+  track: { type: String, default: null },
   leaseUntil: { type: Date, default: null },
   fill: { type: Schema.Types.Mixed, default: null },
   errorAttempts: { type: Number, default: 0 },

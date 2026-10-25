@@ -19,7 +19,7 @@ const LegSchema = new Schema(
     // live percentages line up with the simulation's.
     assumedTipLamports: { type: Number, default: 0 },
     sendMode: { type: String, enum: ["raw", "jito", null], default: null },
-    // How SOL reached the market's quote token: "direct" (SOL-quoted), "multihop", "pool" or "jupiter".
+    // How SOL reached the market's quote token: "direct" (SOL-quoted), "multihop", "pool" or "jupiter"; a sale that took several transactions: "chain".
     route: { type: String, default: null },
     // The deposit the chain holds for the token account this buy opened. It is NOT part of the cost: it comes back when the account is burned
     // (db/live/trading/burnEngine.js), so it stays in the wallet's balance and never shows as a loss.
@@ -32,20 +32,7 @@ const LegSchema = new Schema(
   { _id: false }
 );
 
-/** What leaving a dry-run position would have given, under one exit mode. */
-const DryExitSchema = new Schema(
-  {
-    reason: { type: String, default: null },
-    at: { type: Date, default: null },
-    priceUsd: { type: Number, default: null },
-    netLamports: { type: Number, default: 0 },
-    swapLamports: { type: Number, default: null },
-    proceedsUsd: { type: Number, default: null },
-    realizedPnlUsd: { type: Number, default: null },
-    realizedPnlPercent: { type: Number, default: null },
-  },
-  { _id: false }
-);
+/* A dry run's exit (dryExits.<style id>): { reason, at, priceUsd, netLamports, swapLamports, proceedsUsd, realizedPnlUsd, realizedPnlPercent } - what leaving the position would have given under that exit style. */
 
 /**
  * What one traded token position of one copied trader is on a live wallet: the exact tokens that trade received, so when the
@@ -67,7 +54,7 @@ const LiveLotSchema = new Schema({
   sourceSignature: { type: String, default: null }, // the trader's trade that started it
   // The simulation did not take this trade after the live wallet already had (e.g. the simulated balance ran out in between).
   unpaired: { type: Boolean, default: false },
-  exitMode: { type: String, enum: ["own", "follow"], default: "own" }, // which exit rules it follows (live mode); a dry run follows both
+  exitMode: { type: String, default: "own" }, // which exit style it follows (live mode); a dry run works every style out (db/live/trading/styles.js)
   // Live trade size / simulation trade size when the lot was bought (the wallet's trade ratio). The simulation's dollars are multiplied by it to compare like with like.
   sizeScale: { type: Number, default: 1 },
 
@@ -88,16 +75,22 @@ const LiveLotSchema = new Schema({
     default: null,
   },
 
+  // A sale of a token quoted in other tokens takes one transaction per stage when the whole chain down to SOL doesn't fit one
+  // (db/live/trading/sellChain.js): each landed stage is recorded here, and what it paid out (a quote token) waits in sellCarry for the next one.
+  sellStages: { type: [Schema.Types.Mixed], default: [] },
+  sellCarry: { type: new Schema({ mint: String, raw: String }, { _id: false }), default: null },
+
   // Trackers for the live wallet's OWN exit rules (peak / lowest value, which trailing stops are armed).
   maxValueUsd: { type: Number, default: null },
   minValueUsd: { type: Number, default: null },
   armedTrailingStopIds: { type: [String], default: [] },
 
-  // Dry run only: what each exit mode would have done, so the two can be compared. The lot closes when both have decided.
-  dryExits: {
-    own: { type: DryExitSchema, default: null },
-    follow: { type: DryExitSchema, default: null },
-  },
+  // Dry run only: what each exit style would have done (key = style id: "own", "follow", "cd180", ... each a DryExit), so they can be compared.
+  // The lot closes when the style the wallet is set to has decided; the others go on being worked out in the background until they have decided too
+  // (dryDone says they all have). The styles are those the wallet had when the lot was opened.
+  dryStyles: { type: [String], default: undefined },
+  dryExits: { type: Schema.Types.Mixed, default: () => ({ own: null, follow: null }) },
+  dryDone: { type: Boolean, default: undefined },
 });
 
 LiveLotSchema.index({ liveWalletId: 1, traderAddress: 1, mint: 1 }, { unique: true });

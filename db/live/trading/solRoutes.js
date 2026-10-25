@@ -4,7 +4,7 @@ import { getTokenUsd } from "../../onchainPrice.js";
 import { curlGetJson } from "../../proxiedCurl.js";
 import { pumpSdks } from "./sdk.js";
 import { ataOf, TOKEN_PROGRAM, TradeError, WSOL, WSOL_MINT } from "./market.js";
-import { big, bn, buildDirectBuy, buildDirectSell } from "./directSwap.js";
+import { big, bn, buildDirectBuy } from "./directSwap.js";
 
 /**
  * Trading a token that is quoted in another token (USDC, PUMP, ...) with nothing but SOL in the wallet. The SOL is turned into the quote token
@@ -18,6 +18,8 @@ import { big, bn, buildDirectBuy, buildDirectSell } from "./directSwap.js";
  *
  * The routes are found before the clock starts (findSolRoutes), and a route that can't be built is noted and the next one tried. Every route is
  * checked against the quote token's market price, so a thin or mispriced pool is refused instead of quietly costing money.
+ *
+ * This file is the BUY side. Selling such a token - which can mean going down a whole chain of quote tokens to reach SOL - is db/live/trading/sellChain.js.
  */
 
 export const SOL_ROUTES = {
@@ -40,6 +42,8 @@ export const SOL_ROUTES = {
   /** Jupiter route: venues the swap must not use (Manifest sometimes delivered ~4.7% less than it quoted). */
   JUPITER_EXCLUDE_DEXES: "Manifest",
   JUPITER_MAX_ACCOUNTS: 22,
+  /** Jupiter sale of a leftover quote token (a transaction of its own, so it has room for more accounts). */
+  JUPITER_SELL_MAX_ACCOUNTS: 40,
   /** Compute-unit limit for a trade that swaps first (the priority fee is charged on this limit). */
   COMPUTE_UNITS: 400_000,
   /** Leftover of the quote token after a two-step sale that is kept out of the second swap, so a small price move can't make it fail (%). */
@@ -57,7 +61,7 @@ const routeCache = new Map(); // quote mint -> { at, promise }
 const ROUTE_CACHE_MS = 5 * 60_000;
 
 /** The PumpSwap pool selling `quoteMint` for SOL, or null: SOL_POOLS first (instant), otherwise the most liquid such pair DexScreener lists. */
-async function deepestSolPool(quoteMint) {
+export async function deepestSolPool(quoteMint) {
   const known = SOL_ROUTES.SOL_POOLS[quoteMint.toBase58()];
   if (known) return new PublicKey(known);
   const { status, body } = await curlGetJson(`https://api.dexscreener.com/latest/dex/tokens/${quoteMint.toBase58()}`, { timeoutSec: 6 });
@@ -94,7 +98,7 @@ export function findSolRoutes(conn, quote, { jupiter = true } = {}) {
 
 // ------------------------------------------------------------------ Jupiter (buys only)
 
-async function jupiter(path, body) {
+export async function jupiter(path, body) {
   const key = process.env.JUPITER_API_KEY;
   const headers = { ...(body ? { "content-type": "application/json" } : {}), ...(key ? { "x-api-key": key } : {}) };
   const res = await fetch(`${key ? "https://api.jup.ag" : "https://lite-api.jup.ag"}/swap/v1${path}`, {
@@ -109,7 +113,7 @@ async function jupiter(path, body) {
   return json;
 }
 
-const toInstruction = (i) =>
+export const toInstruction = (i) =>
   new TransactionInstruction({
     programId: new PublicKey(i.programId),
     keys: i.accounts.map((a) => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
@@ -131,7 +135,15 @@ async function jupiterSwapToQuote(conn, owner, quote, shortfallRaw, solUsd, quot
     if (attempt === 1) throw new Error("Jupiter's price keeps coming in under what the buy needs");
     lamports = (lamports * shortfallRaw * 1003n) / (floor * 1000n) + 1n;
   }
-  const ixs = await jupiter("/swap-instructions", { quoteResponse: q, userPublicKey: owner.toBase58(), wrapAndUnwrapSol: true });
+  const plan = await jupiterSwapPlan(conn, owner, q);
+  return { ...plan, lamports: BigInt(q.inAmount), route: jupiterRouteLabel(q) };
+}
+
+export const jupiterRouteLabel = (q) => (q.routePlan || []).map((r) => r.swapInfo?.label).filter(Boolean).join(" + ");
+
+/** The instructions and lookup tables of a Jupiter swap that was quoted (SOL is wrapped / unwrapped around it). */
+export async function jupiterSwapPlan(conn, owner, quoteResponse) {
+  const ixs = await jupiter("/swap-instructions", { quoteResponse, userPublicKey: owner.toBase58(), wrapAndUnwrapSol: true });
   const tableKeys = (ixs.addressLookupTableAddresses || []).map((a) => new PublicKey(a));
   const infos = tableKeys.length ? await conn.getMultipleAccountsInfo(tableKeys, "confirmed") : [];
   const lookupTables = infos.map((info, i) => (info ? new AddressLookupTableAccount({ key: tableKeys[i], state: AddressLookupTableAccount.deserialize(info.data) }) : null)).filter(Boolean);
@@ -139,8 +151,6 @@ async function jupiterSwapToQuote(conn, owner, quote, shortfallRaw, solUsd, quot
     // Jupiter's own compute-budget instructions are left out: the compute limit and priority fee are set once for the whole transaction.
     instructions: [...ixs.setupInstructions, ixs.swapInstruction, ...(ixs.cleanupInstruction ? [ixs.cleanupInstruction] : []), ...ixs.otherInstructions].map(toInstruction),
     lookupTables,
-    lamports: BigInt(q.inAmount),
-    route: (q.routePlan || []).map((r) => r.swapInfo?.label).filter(Boolean).join(" + "),
   };
 }
 
@@ -151,9 +161,9 @@ function budgetInQuote(budgetLamports, solUsd, quoteUsd, quote) {
   return BigInt(Math.floor((Number(budgetLamports) / LAMPORTS) * (solUsd / quoteUsd) * 10 ** quote.decimals));
 }
 
-async function simulateUnsigned(conn, owner, instructions, accounts) {
+export async function simulateUnsigned(conn, owner, instructions, accounts, lookupTables = []) {
   const unsigned = new VersionedTransaction(
-    new TransactionMessage({ payerKey: owner, recentBlockhash: PublicKey.default.toBase58(), instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), ...instructions] }).compileToV0Message()
+    new TransactionMessage({ payerKey: owner, recentBlockhash: PublicKey.default.toBase58(), instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), ...instructions] }).compileToV0Message(lookupTables)
   );
   return conn.simulateTransaction(unsigned, { sigVerify: false, replaceRecentBlockhash: true, commitment: "processed", accounts: { encoding: "base64", addresses: accounts.map((a) => a.toBase58()) } });
 }
@@ -274,100 +284,6 @@ export async function buildPaidBuy({ conn, owner, market, budgetLamports, solUsd
     }
   }
   throw new TradeError(`No way to pay for this token with SOL worked. ${skipped.join(" | ")}`, "no_route");
-}
-
-// ------------------------------------------------------------------ selling
-
-/** pump-amm's multi_hop_swap the other way: the token -> quote token -> SOL in one instruction. */
-async function multiHopSell({ conn, owner, market, tokenRaw, reference, slippagePercent }) {
-  const { pump } = pumpSdks();
-  const hops = multiHopHops(market, "sell");
-  const instructionsFor = (minAmountOut) => pump.PUMP_SDK.multiHopSwapInstructions({ user: owner, hops, side: "sell", amountIn: bn(tokenRaw), minAmountOut });
-  const out = big(await new pump.OnlinePumpSdk(conn).simulateMultiHopSwap({ user: owner, hops, side: "sell", amountIn: bn(tokenRaw) }));
-  if (out <= 0n) throw new Error("the simulation paid no SOL");
-  const shortfall = Number(reference.expectedLamports - out) / Number(reference.expectedLamports);
-  if (shortfall * 100 > SOL_ROUTES.SELL_MAX_SHORTFALL_PERCENT) throw new Error(`it would pay ${(shortfall * 100).toFixed(1)}% less than the market price (limit ${SOL_ROUTES.SELL_MAX_SHORTFALL_PERCENT}%)`);
-  const minOut = (out * BigInt(Math.round((100 - slippagePercent) * 100))) / 10000n;
-  return { instructions: await instructionsFor(bn(minOut)), expectedLamports: out, minLamports: minOut, lookupTables: [], note: `${Math.abs(shortfall * 100).toFixed(1)}% ${shortfall < 0 ? "more" : "less"} than the market price` };
-}
-
-/** The token's own sale for the quote token, then the quote token sold for SOL on its pool - both in one transaction. */
-async function poolSell({ conn, owner, market, route, tokenRaw, slippagePercent, solUsd, quoteUsd }) {
-  const { amm } = pumpSdks();
-  const { quote } = market;
-  const quoteAta = ataOf(owner, quote.mint, quote.program);
-  const first = await buildDirectSell(market, owner, tokenRaw, slippagePercent);
-  const [sim, held] = await Promise.all([
-    simulateUnsigned(conn, owner, first.instructions, [quoteAta]),
-    conn.getTokenAccountBalance(quoteAta, "confirmed").then((r) => BigInt(r.value.amount)).catch(() => 0n),
-  ]);
-  if (sim.value.err || !sim.value.accounts?.[0]) throw new Error(`the simulation was refused: ${JSON.stringify(sim.value.err)} ${(sim.value.logs || []).slice(-3).join(" | ")}`);
-  const delta = tokenAmountAt64(Buffer.from(sim.value.accounts[0].data[0], "base64")) - held;
-  if (delta <= 0n) throw new Error("the simulation delivered no quote tokens");
-  // Sell a little less than the simulation shows (the real price can differ a hair), plus whatever an earlier sale left behind.
-  const amountIn = (delta * BigInt(Math.round((100 - SOL_ROUTES.SELL_SWAP_MARGIN_PERCENT) * 100))) / 10000n + held;
-
-  const state = await new amm.OnlinePumpAmmSdk(conn).swapSolanaState(route.poolKey, owner);
-  if (!state.pool.baseMint.equals(quote.mint) || state.pool.quoteMint.toBase58() !== WSOL_MINT) throw new Error("the pool isn't quote token / SOL");
-  const priced = amm.sellBaseInput({
-    base: bn(amountIn),
-    slippage: SOL_ROUTES.SWAP_SLIPPAGE_PERCENT,
-    quoteTransferFee: state.quoteTransferFee,
-    baseReserve: state.poolBaseAmount,
-    quoteReserve: state.poolQuoteAmount,
-    virtualQuoteReserves: state.pool.virtualQuoteReserves,
-    feeBucketsTotal: state.pool.protocolFees.add(state.pool.creatorFees),
-    baseMintAccount: state.baseMintAccount,
-    baseMint: state.baseMint,
-    coinCreator: state.pool.coinCreator,
-    creator: state.pool.creator,
-    feeConfig: state.feeConfig,
-    globalConfig: state.globalConfig,
-    quoteMint: state.pool.quoteMint,
-    isMayhemMode: state.pool.isMayhemMode,
-    creatorFeeBps: state.pool.creatorFeeBps,
-  });
-  const worthUsd = (Number(amountIn) / 10 ** quote.decimals) * quoteUsd;
-  const paidUsd = (Number(priced.uiQuote.toString()) / LAMPORTS) * solUsd;
-  const shortfall = 1 - paidUsd / worthUsd;
-  if (shortfall * 100 > SOL_ROUTES.SELL_MAX_SHORTFALL_PERCENT) throw new Error(`the pool pays ${(shortfall * 100).toFixed(1)}% less than the quote token's market price (limit ${SOL_ROUTES.SELL_MAX_SHORTFALL_PERCENT}%)`);
-  const second = await amm.PUMP_AMM_SDK.sellBaseInput(state, bn(amountIn), SOL_ROUTES.SWAP_SLIPPAGE_PERCENT);
-  return {
-    instructions: [...first.instructions, ...second],
-    expectedLamports: big(priced.uiQuote),
-    minLamports: big(priced.minQuote),
-    lookupTables: [],
-    note: `${Math.abs(shortfall * 100).toFixed(2)}% ${shortfall < 0 ? "over" : "under"} the quote token's market price`,
-  };
-}
-
-/**
- * Builds the sale of a token quoted in another token so that it pays out SOL, trying the routes in order.
- * @returns {Promise<{ sale: { venue, instructions, expectedLamports, minLamports, lookupTables, note }, route: string, skipped: string[] }>}
- */
-export async function buildPaidSell({ conn, owner, market, tokenRaw, solUsd, slippagePercent, routes }) {
-  const { quote } = market;
-  const quoteUsd = await getTokenUsd(quote.mint.toBase58());
-  if (!(quoteUsd > 0)) throw new TradeError(`The quote token ${quote.mint.toBase58()} has no price, so the sale can't be checked against the market.`, "no_price");
-  const direct = await buildDirectSell(market, owner, tokenRaw, slippagePercent, { quoteOnly: true });
-  const reference = { expectedLamports: BigInt(Math.floor((Number(direct.expectedQuoteRaw) / 10 ** quote.decimals) * (quoteUsd / solUsd) * LAMPORTS)) };
-  const skipped = [];
-  for (const route of routes.filter((r) => r.kind !== "jupiter")) {
-    try {
-      const sale = route.kind === "multihop" ? await multiHopSell({ conn, owner, market, tokenRaw, reference, slippagePercent }) : await poolSell({ conn, owner, market, route, tokenRaw, slippagePercent, solUsd, quoteUsd });
-      return { sale: { venue: market.venue, ...sale }, route: route.kind, skipped };
-    } catch (err) {
-      skipped.push(`${ROUTE_NAMES[route.kind]}: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-  throw new TradeError(`No way to turn this token's quote token back into SOL worked. ${skipped.join(" | ") || "No route exists."}`, "no_route");
-}
-
-/** The estimate used when only a price is wanted: what the sale would pay in SOL at the quote token's market price. */
-export async function estimateSellLamports(expectedQuoteRaw, quote, solUsd) {
-  const quoteUsd = await getTokenUsd(quote.mint.toBase58());
-  if (!(quoteUsd > 0)) throw new TradeError(`The quote token ${quote.mint.toBase58()} has no price.`, "no_price");
-  return BigInt(Math.floor((Number(expectedQuoteRaw) / 10 ** quote.decimals) * (quoteUsd / solUsd) * LAMPORTS));
 }
 
 export { budgetInQuote, sleepRoute };

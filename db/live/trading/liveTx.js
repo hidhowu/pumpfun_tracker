@@ -70,6 +70,25 @@ export async function buildSignedTrade({ keypair, instructions, sendMode, tipLam
   };
 }
 
+/**
+ * Would these instructions, with the compute budget and (in Jito mode) the tip, fit one transaction? Sized the way buildSignedTrade builds it.
+ * @param {{ payer: PublicKey, instructions: object[], lookupTables?: object[], sendMode?: "raw" | "jito" }} options
+ */
+export function fitsTransaction({ payer, instructions, lookupTables = [], sendMode = "jito" }) {
+  try {
+    const extra = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1 }), ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 })];
+    if (sendMode === "jito") {
+      const tip = tipInstruction(payer, 1);
+      tip.keys.push({ pubkey: SANDWICH_GUARD, isSigner: false, isWritable: false });
+      extra.push(tip);
+    }
+    const message = new TransactionMessage({ payerKey: payer, recentBlockhash: PublicKey.default.toBase58(), instructions: [...extra, ...instructions] }).compileToV0Message(lookupTables);
+    return new VersionedTransaction(message).serialize().length <= SIZE_LIMIT;
+  } catch {
+    return false;
+  }
+}
+
 async function statusOf(signature) {
   const result = await rpc("getSignatureStatuses", [[signature], { searchTransactionHistory: true }]).catch(() => null);
   return result?.value?.[0] ?? null;

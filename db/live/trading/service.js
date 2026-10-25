@@ -16,6 +16,7 @@ import { buyCostUsd, lotValueUsd } from "./lots.js";
 import { MAX_PRIORITY_MICRO_LAMPORTS, MAX_TIP_USD, RATIO_MAX, RATIO_MIN, tradingSettings } from "./settings.js";
 import { listStuckSells } from "./alerts.js";
 import { getTxStats } from "./txStats.js";
+import { COOLDOWN_DEFAULT_STOP_PERCENT, COOLDOWN_MAX_SECONDS, COOLDOWN_MAX_STYLES, COOLDOWN_MIN_SECONDS, cooldownStylesOf, lotStyleIds, styleLabel } from "./styles.js";
 import { createWalletTable, loadWalletTable } from "./lookupTable.js";
 import { resolveMarket } from "./market.js";
 import { prepareBuy } from "./pumpSwap.js";
@@ -88,6 +89,7 @@ export async function getTradingState(liveId) {
     connected: !!sim,
     tradingMode: live.tradingMode,
     exitMode: live.exitMode,
+    cooldownStyles: cooldownStylesOf(live).map(({ id, seconds, stopLossPercent }) => ({ id, seconds, stopLossPercent })),
     buySlippagePercent: live.buySlippagePercent ?? 15,
     sellSlippagePercent: live.sellSlippagePercent ?? 25,
     sendMode: cfg.sendMode,
@@ -117,7 +119,7 @@ const SLIPPAGE_MAX = 90;
 
 /**
  * @param {string} liveId
- * @param {{ connectedWalletId?: string | null, tradingMode?: "dry" | "live", exitMode?: "own" | "follow", buySlippagePercent?: number, sellSlippagePercent?: number,
+ * @param {{ connectedWalletId?: string | null, tradingMode?: "dry" | "live", exitMode?: "own" | "follow" | string, cooldownStyles?: { seconds: number, stopLossPercent?: number }[], buySlippagePercent?: number, sellSlippagePercent?: number,
  *   sendMode?: "raw" | "jito", jitoTipUsd?: number | null, scaleJitoFee?: boolean, rawPriorityMicroLamports?: number, tradeRatioSim?: number, tradeRatioLive?: number, paused?: boolean }} patch
  * @param {{ userId: string, username: string, code?: string, ip?: string }} actor
  */
@@ -152,9 +154,25 @@ export async function updateTrading(liveId, patch, { userId, username, code, ip 
     }
   }
 
-  if (patch.exitMode !== undefined) {
-    if (patch.exitMode !== "own" && patch.exitMode !== "follow") throw new TradingError("Exit rules must be 'own' or 'follow'.");
-    set.exitMode = patch.exitMode;
+  if (patch.cooldownStyles !== undefined) {
+    if (!Array.isArray(patch.cooldownStyles) || patch.cooldownStyles.length > COOLDOWN_MAX_STYLES) throw new TradingError(`Give a list of at most ${COOLDOWN_MAX_STYLES} cool-down styles.`);
+    const seen = new Set();
+    set.cooldownStyles = patch.cooldownStyles.map((c) => {
+      const seconds = Math.round(Number(c?.seconds));
+      const stopLossPercent = c?.stopLossPercent == null ? COOLDOWN_DEFAULT_STOP_PERCENT : Number(c.stopLossPercent);
+      if (!Number.isFinite(seconds) || seconds < COOLDOWN_MIN_SECONDS || seconds > COOLDOWN_MAX_SECONDS) throw new TradingError(`A cool-down must be between ${COOLDOWN_MIN_SECONDS} seconds and ${COOLDOWN_MAX_SECONDS / 3600} hours.`);
+      if (!Number.isFinite(stopLossPercent) || stopLossPercent <= 0 || stopLossPercent > 100) throw new TradingError("The stop-loss during a cool-down must be between 0 and 100 (50 means -50%).");
+      if (seen.has(seconds)) throw new TradingError("Two cool-down styles have the same length.");
+      seen.add(seconds);
+      return { seconds, stopLossPercent };
+    });
+  }
+  {
+    // The exit rules must name a style the wallet has (counting the cool-down styles being saved in this same change).
+    const styleIds = ["own", "follow", ...cooldownStylesOf({ cooldownStyles: set.cooldownStyles ?? live.cooldownStyles }).map((c) => c.id)];
+    const next = patch.exitMode ?? live.exitMode ?? "own";
+    if (!styleIds.includes(next)) throw new TradingError(patch.exitMode !== undefined ? "Choose 'own', 'follow' or one of the cool-down styles." : "The exit rules are set to a cool-down style that is being removed. Choose another first.");
+    if (patch.exitMode !== undefined) set.exitMode = patch.exitMode;
   }
   for (const key of ["buySlippagePercent", "sellSlippagePercent"]) {
     if (patch[key] === undefined) continue;
@@ -218,8 +236,9 @@ export async function updateTrading(liveId, patch, { userId, username, code, ip 
     if (err?.code === 11000) throw new TradingError("That simulation wallet is already connected to another live wallet.", 409);
     throw err;
   }
-  const changes = Object.entries(set).map(([k, v]) => `${k}=${v instanceof Date ? "now" : v}`).join(", ");
-  logEvent("tracker", `[live-wallet] "${live.name}" trading settings changed by ${username}: ${changes}`, { level: set.tradingMode === "live" ? "warn" : "info", meta: { walletId: String(live._id), ...Object.fromEntries(Object.entries(set).map(([k, v]) => [k, String(v)])) } });
+  const show = (v) => (v instanceof Date ? "now" : typeof v === "object" && v !== null ? JSON.stringify(v) : v);
+  const changes = Object.entries(set).map(([k, v]) => `${k}=${show(v)}`).join(", ");
+  logEvent("tracker", `[live-wallet] "${live.name}" trading settings changed by ${username}: ${changes}`, { level: set.tradingMode === "live" ? "warn" : "info", meta: { walletId: String(live._id), ...Object.fromEntries(Object.entries(set).map(([k, v]) => [k, String(show(v))])) } });
   return getTradingState(liveId);
 }
 
@@ -351,10 +370,12 @@ export async function listLots(liveId, { status = null, page = 1, limit = 25 } =
         live,
         sim,
         paired: !!sim,
+        unpaired: !!lot.unpaired,
         // The simulation trades a different number of dollars when the wallet has a trade-size ratio: its dollars are multiplied by this to match.
         scale: lot.sizeScale ?? 1,
         sellFailure: lot.sellFailure ? { at: lot.sellFailure.at, reason: lot.sellFailure.reason, failures: lot.sellFailure.failures } : null,
-        dry: lot.mode === "dry" ? { own: dryView(lot.dryExits?.own), follow: dryView(lot.dryExits?.follow) } : null,
+        // What each exit style did (or null while it hasn't decided), in the order the wallet lists them.
+        dry: lot.mode === "dry" ? Object.fromEntries(lotStyleIds(lot).map((id) => [id, dryView(lot.dryExits?.[id])])) : null,
         // live minus simulation, on the same trade (the simulation's dollars scaled to the live trade size)
         differenceUsd: live.pnlUsd != null && sim?.pnlUsd != null ? live.pnlUsd - sim.pnlUsd * (lot.sizeScale ?? 1) : null,
         differencePercent: live.pnlPercent != null && sim?.pnlPercent != null ? live.pnlPercent - sim.pnlPercent : null,
@@ -371,7 +392,7 @@ export async function getTradingSummary(liveId) {
   if (!mongoose.isValidObjectId(liveId)) return null;
   const id = new mongoose.Types.ObjectId(liveId);
 
-  const [byStatus, closed, dry, daily] = await Promise.all([
+  const [byStatus, closed, dryLots, daily] = await Promise.all([
     LiveLot.aggregate([{ $match: { liveWalletId: id } }, { $group: { _id: { mode: "$mode", status: "$status" }, n: { $sum: 1 } } }]),
     LiveLot.aggregate([
       { $match: { liveWalletId: id, status: "closed", mode: "live" } },
@@ -393,10 +414,7 @@ export async function getTradingSummary(liveId) {
         },
       },
     ]),
-    LiveLot.aggregate([
-      { $match: { liveWalletId: id, mode: "dry", "dryExits.own": { $ne: null }, "dryExits.follow": { $ne: null } } },
-      { $group: { _id: null, trades: { $sum: 1 }, ownPnlUsd: { $sum: "$dryExits.own.realizedPnlUsd" }, followPnlUsd: { $sum: "$dryExits.follow.realizedPnlUsd" }, ownWins: { $sum: { $cond: [{ $gt: ["$dryExits.own.realizedPnlUsd", 0] }, 1, 0] } }, followWins: { $sum: { $cond: [{ $gt: ["$dryExits.follow.realizedPnlUsd", 0] }, 1, 0] } } } },
-    ]),
+    LiveLot.find({ liveWalletId: id, mode: "dry" }, { dryExits: 1, dryStyles: 1 }).lean(),
     LiveLot.aggregate([
       { $match: { liveWalletId: id, status: "closed", closedAt: { $ne: null } } },
       SIM_LOOKUP,
@@ -414,7 +432,11 @@ export async function getTradingSummary(liveId) {
 
   const count = (mode, status) => byStatus.find((r) => r._id.mode === mode && r._id.status === status)?.n ?? 0;
   const c = closed[0];
-  const d = dry[0];
+  // The dry-run comparison: only trades every style has decided, so each style is judged on exactly the same entries.
+  const decided = dryLots.filter((l) => lotStyleIds(l).every((sid) => l.dryExits?.[sid]));
+  const styleIds = decided.length ? lotStyleIds(decided[0]) : [];
+  const live = await LiveWallet.findById(id, { cooldownStyles: 1 }).lean();
+  const cooldowns = cooldownStylesOf(live ?? {});
   let liveRunning = 0;
   let simRunning = 0;
   const series = daily.map((row) => {
@@ -439,7 +461,15 @@ export async function getTradingSummary(liveId) {
           networkFeesPaidUsd: c.feeLamportsUsd,
         }
       : null,
-    dryComparison: d ? { trades: d.trades, ownPnlUsd: d.ownPnlUsd, followPnlUsd: d.followPnlUsd, ownWinRate: (d.ownWins / d.trades) * 100, followWinRate: (d.followWins / d.trades) * 100 } : null,
+    dryComparison: decided.length
+      ? {
+          trades: decided.length,
+          styles: styleIds.map((sid) => {
+            const pnls = decided.map((l) => l.dryExits[sid].realizedPnlUsd ?? 0);
+            return { id: sid, label: styleLabel(sid, cooldowns), pnlUsd: pnls.reduce((a, b) => a + b, 0), winRate: (pnls.filter((p) => p > 0).length / pnls.length) * 100 };
+          }),
+        }
+      : null,
     series,
   };
 }

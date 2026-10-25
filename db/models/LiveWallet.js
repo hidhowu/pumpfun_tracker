@@ -32,7 +32,11 @@ const LiveWalletSchema = new Schema({
   //   "own"    - the live position's own entry (what it really paid);
   //   "follow" - the simulated position's exits are copied (the simulation decides, the live wallet follows at once).
   // A dry run works both out side by side so the two can be compared.
-  exitMode: { type: String, enum: ["own", "follow"], default: "own" },
+  // A third kind: a cool-down style, "cd<seconds>", one of cooldownStyles below (db/live/trading/styles.js).
+  exitMode: { type: String, default: "own" },
+  // Cool-down exit styles, worked out side by side with "own" and "follow" in a dry run. Within `seconds` of the buy a position is only sold by a stop-loss of
+  // `stopLossPercent` (50 = -50%), a take-profit, the max hold time, or a trailing stop that is in profit; after that the profile's own rules apply.
+  cooldownStyles: { type: [new Schema({ seconds: { type: Number, required: true }, stopLossPercent: { type: Number, default: 50 } }, { _id: false })], default: [] },
   // How far the price may move against a trade between quote and fill before the program refuses it (percent).
   buySlippagePercent: { type: Number, default: 15 },
   sellSlippagePercent: { type: Number, default: 25 },

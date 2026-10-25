@@ -1,8 +1,9 @@
 import { Connection } from "@solana/web3.js";
 import { getTokenUsd, pickRpcUrl } from "../../onchainPrice.js";
 import { resolveMarket, TradeError } from "./market.js";
-import { big, buildDirectBuy, buildDirectSell } from "./directSwap.js";
-import { budgetInQuote, buildPaidBuy, buildPaidSell, estimateSellLamports, findSolRoutes, SOL_ROUTES } from "./solRoutes.js";
+import { buildDirectBuy, buildDirectSell } from "./directSwap.js";
+import { budgetInQuote, buildPaidBuy, findSolRoutes, SOL_ROUTES } from "./solRoutes.js";
+import { buildSellStage, describePlan, quoteSellPlan, resolveSellPlan } from "./sellChain.js";
 import { DEFAULT_COMPUTE_UNITS } from "./liveTx.js";
 
 /**
@@ -84,16 +85,22 @@ export async function prepareBuy({ owner, mint, budgetLamports, slippagePercent,
 }
 
 /**
- * @param {{ owner: PublicKey, mint: string, tokenRaw: bigint | number, slippagePercent: number, solUsd?: number, payWithSol?: boolean, quoteOnly?: boolean, conn?: Connection }} options
+ * @param {{ owner: PublicKey, mint: string, from?: string, tokenRaw: bigint | number, slippagePercent: number, solUsd?: number, payWithSol?: boolean, quoteOnly?: boolean,
+ *   fitTables?: Function, conn?: Connection }} options
  *   quoteOnly: only price the sale (a dry run holds no tokens and has no token account, so there is nothing to build instructions for).
- * @returns {Promise<{ venue: "curve"|"amm", route: string, instructions: TransactionInstruction[], expectedLamports: bigint, minLamports: bigint,
- *   tokenProgram: PublicKey, decimals: number, ata: PublicKey | null, computeUnits: number, lookupTables: AddressLookupTableAccount[], quoteMint: string | null, note: string | null, skipped: string[] }>}
- *   expectedLamports is what the sale should pay out after pump.fun's fees; minLamports is the least the program will accept.
+ *   from: for a token quoted in other tokens, the token this transaction starts from (default: `mint`). A sale is a chain of swaps down to SOL that can take
+ *   several transactions: the first sells `mint`, each next one sells what the one before paid out (a quote token) - see db/live/trading/sellChain.js.
+ *   fitTables: see buildSellStage (live sales of quoted tokens only).
+ * @returns {Promise<{ venue: "curve"|"amm", route: string, instructions: TransactionInstruction[], expectedLamports: bigint | null, minLamports: bigint | null,
+ *   tokenProgram: PublicKey, decimals: number, ata: PublicKey | null, computeUnits: number, lookupTables: AddressLookupTableAccount[], quoteMint: string | null, note: string | null,
+ *   skipped: string[], stage: { fromMint: string, toMint: string, final: boolean, nextIndex: number, expectedOutRaw: bigint, minOutRaw: bigint } | null }>}
+ *   expectedLamports is what the sale should pay out after pump.fun's fees; minLamports is the least the program will accept. A stage that does not end in SOL has neither:
+ *   its `stage` says what token it ends in and how much of it is expected.
  */
-export async function prepareSell({ owner, mint, tokenRaw, slippagePercent, solUsd, payWithSol = false, quoteOnly = false, conn: given }) {
+export async function prepareSell({ owner, mint, from, tokenRaw, slippagePercent, solUsd, payWithSol = false, quoteOnly = false, fitTables, conn: given }) {
   const conn = given ?? (await connection());
   const market = await resolveMarket(conn, mint);
-  const base = { tokenProgram: market.tokenProgram, decimals: market.decimals, quoteMint: market.quote?.mint.toBase58() ?? null, lookupTables: [], skipped: [], note: null };
+  const base = { tokenProgram: market.tokenProgram, decimals: market.decimals, quoteMint: market.quote?.mint.toBase58() ?? null, lookupTables: [], skipped: [], note: null, stage: null };
 
   if (!market.quote) {
     const sale = await buildDirectSell(market, owner, tokenRaw, slippagePercent, { quoteOnly });
@@ -102,27 +109,28 @@ export async function prepareSell({ owner, mint, tokenRaw, slippagePercent, solU
 
   if (!payWithSol) throw new TradeError("This token is quoted in something other than SOL.", "unsupported_quote");
   if (!(solUsd > 0)) throw new TradeError("The SOL price isn't available.", "no_price");
-  const routes = await findSolRoutes(conn, market.quote, { jupiter: false });
-  if (!routes.length) throw new TradeError(`This token is quoted in ${market.quote.mint.toBase58()} and there is no way to turn that back into SOL.`, "no_route");
+  const steps = await resolveSellPlan(conn, market);
 
   if (quoteOnly) {
-    const sale = await buildDirectSell(market, owner, tokenRaw, slippagePercent, { quoteOnly: true });
-    const expectedLamports = await estimateSellLamports(sale.expectedQuoteRaw, market.quote, solUsd);
-    return { ...base, venue: sale.venue, route: "estimate", instructions: [], expectedLamports, minLamports: big(expectedLamports), ata: null, computeUnits: SOL_ROUTES.COMPUTE_UNITS, note: `would be paid via ${routes[0].kind}` };
+    const expectedLamports = await quoteSellPlan({ conn, owner, steps, tokenRaw, slippagePercent });
+    return { ...base, venue: market.venue, route: "estimate", instructions: [], expectedLamports, minLamports: expectedLamports, ata: null, computeUnits: 150_000 + 220_000 * steps.length, note: `would be sold ${describePlan(steps)}` };
   }
 
-  const { sale, route, skipped } = await buildPaidSell({ conn, owner, market, tokenRaw, solUsd, slippagePercent, routes });
+  const fromIndex = steps.findIndex((s) => s.mint.toBase58() === (from ?? mint));
+  if (fromIndex < 0) throw new TradeError(`${from} isn't on the way from ${mint} down to SOL (${describePlan(steps)}).`, "no_route");
+  const stage = await buildSellStage({ conn, owner, steps, from: fromIndex, amountRaw: tokenRaw, slippagePercent, solUsd, fitTables });
   return {
     ...base,
-    venue: sale.venue,
-    route,
-    instructions: sale.instructions,
-    expectedLamports: sale.expectedLamports,
-    minLamports: sale.minLamports,
+    venue: stage.venue,
+    route: stage.route,
+    instructions: stage.instructions,
+    expectedLamports: stage.final ? stage.expectedOutRaw : null,
+    minLamports: stage.final ? stage.minOutRaw : null,
     ata: null,
-    computeUnits: SOL_ROUTES.COMPUTE_UNITS,
-    lookupTables: sale.lookupTables,
-    note: sale.note,
-    skipped,
+    computeUnits: stage.computeUnits,
+    lookupTables: stage.lookupTables,
+    note: stage.note,
+    skipped: stage.skipped,
+    stage: { fromMint: stage.fromMint.toBase58(), toMint: stage.toMint.toBase58(), final: stage.final, nextIndex: stage.nextIndex, expectedOutRaw: stage.expectedOutRaw, minOutRaw: stage.minOutRaw },
   };
 }

@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { updateTrading } from "@/lib/live-wallet-api";
 import { formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { styleLabel } from "@/lib/live-wallet-styles";
 import type { ExitMode, SendMode, TradingState } from "@/lib/live-wallet-types";
 
 const PLAIN_FOOTER = "mx-0 mb-0 border-0 bg-transparent p-0 pt-2";
@@ -132,7 +133,18 @@ export function TradingConnection({
   const [priority, setPriority] = useState(String(state.rawPriorityMicroLamports));
   const [ratioSim, setRatioSim] = useState(String(state.tradeRatioSim));
   const [ratioLive, setRatioLive] = useState(String(state.tradeRatioLive));
+  // Cool-down styles being edited: minutes and the stop-loss that applies inside the cool-down, as typed.
+  const [cooldowns, setCooldowns] = useState(state.cooldownStyles.map((c) => ({ minutes: String(c.seconds / 60), stop: String(c.stopLossPercent) })));
   const sim = state.simWallet;
+
+  function saveCooldowns() {
+    const next = cooldowns.map((c) => ({ seconds: Math.round(Number(c.minutes) * 60), stopLossPercent: Number(c.stop) }));
+    if (next.some((c) => !Number.isFinite(c.seconds) || c.seconds <= 0 || !Number.isFinite(c.stopLossPercent) || c.stopLossPercent <= 0)) {
+      toast.error("Give every cool-down a length in minutes and a stop-loss above 0.");
+      return;
+    }
+    void apply({ cooldownStyles: next }, "Cool-down styles saved - new dry-run trades work them out too");
+  }
 
   async function apply(patch: Parameters<typeof updateTrading>[1], success?: string) {
     if (busy) return;
@@ -275,14 +287,48 @@ export function TradingConnection({
             options={[
               { value: "own", label: "Its own entry" },
               { value: "follow", label: "Follow simulation" },
+              ...state.cooldownStyles.map((c) => ({ value: c.id, label: styleLabel(c.id) })),
             ]}
             onChange={(exitMode) => exitMode !== state.exitMode && void apply({ exitMode })}
           />
           <p className="text-xs leading-relaxed text-muted-foreground">
             {state.exitMode === "own"
               ? "The live position is judged by what it really paid. The trader's sells and blacklisting still sell it at once."
-              : "The live wallet sells whenever the simulated position exits. In a dry run both ways are worked out side by side, so you can compare them."}
+              : state.exitMode === "follow"
+                ? "The live wallet sells whenever the simulated position exits. In a dry run every way is worked out side by side, so you can compare them."
+                : "Like its own entry, but for the first minutes after the buy only a deep stop-loss, a take-profit, the max hold time or a positive trailing stop (one that exits above 0%) sells it - negative trailing stops wait until the cool-down is over. A dry run works every way out side by side."}
           </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-[13px] font-bold text-muted-foreground">Cool-down styles</Label>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            For the first minutes after a buy, ride out a dip: only the stop-loss set here (not the profile&apos;s), a take-profit, the max hold time or a positive trailing stop (exit level above 0%) can sell; negative trailing stops do not fire. When the cool-down is over the profile&apos;s stop-loss and all trailing stops apply at once: a position that is then below an armed trailing level sells, one that dipped under it and recovered keeps going. Each one
+            you add is worked out side by side with the other ways in a dry run.
+          </p>
+          {cooldowns.map((c, i) => (
+            <div key={i} className="flex flex-wrap items-end gap-2">
+              <div className="space-y-1">
+                <span className="text-[11px] font-semibold text-muted-foreground">Cool-down (minutes)</span>
+                <Input inputMode="decimal" value={c.minutes} onChange={(e) => setCooldowns(cooldowns.map((x, j) => (j === i ? { ...x, minutes: e.target.value.replace(/[^0-9.]/g, "") } : x)))} className="h-10 w-32" />
+              </div>
+              <div className="space-y-1">
+                <span className="text-[11px] font-semibold text-muted-foreground">Stop-loss inside it (%)</span>
+                <Input inputMode="decimal" value={c.stop} onChange={(e) => setCooldowns(cooldowns.map((x, j) => (j === i ? { ...x, stop: e.target.value.replace(/[^0-9.]/g, "") } : x)))} className="h-10 w-32" />
+              </div>
+              <Button variant="outline" className="h-10" disabled={busy} onClick={() => setCooldowns(cooldowns.filter((_, j) => j !== i))}>
+                Remove
+              </Button>
+            </div>
+          ))}
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" className="h-10" disabled={busy || cooldowns.length >= 6} onClick={() => setCooldowns([...cooldowns, { minutes: "3", stop: "50" }])}>
+              Add a cool-down
+            </Button>
+            <Button className="h-10" disabled={busy} onClick={saveCooldowns}>
+              {busy ? <Loader2 className="size-4 animate-spin" /> : null} Save cool-downs
+            </Button>
+          </div>
         </div>
       </div>
 

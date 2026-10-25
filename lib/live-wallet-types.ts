@@ -134,7 +134,11 @@ export type BurnResult = {
 // ---------------------------------------------------------------- copy trading (db/live/trading/*)
 
 export type TradingMode = "dry" | "live";
-export type ExitMode = "own" | "follow";
+/** "own", "follow", or a cool-down style "cd<seconds>" (see CooldownStyle). */
+export type ExitMode = string;
+
+/** Within `seconds` of the buy only a stop-loss of `stopLossPercent` (50 = -50%), a take-profit, the max hold time or a trailing stop in profit sells; then the profile's rules apply. */
+export type CooldownStyle = { id: string; seconds: number; stopLossPercent: number };
 
 export type TradingSimWallet = {
   _id: string;
@@ -163,6 +167,7 @@ export type TradingState = {
   connected: boolean;
   tradingMode: TradingMode;
   exitMode: ExitMode;
+  cooldownStyles: CooldownStyle[];
   buySlippagePercent: number;
   sellSlippagePercent: number;
   sendMode: SendMode;
@@ -192,6 +197,7 @@ export type TradingPatch = {
   connectedWalletId?: string | null;
   tradingMode?: TradingMode;
   exitMode?: ExitMode;
+  cooldownStyles?: Array<{ seconds: number; stopLossPercent?: number }>;
   buySlippagePercent?: number;
   sellSlippagePercent?: number;
   sendMode?: SendMode;
@@ -269,7 +275,8 @@ export type TradingLot = {
   /** Live trade size / simulation trade size: the simulation's dollars times this are comparable with the live ones. */
   scale: number;
   sellFailure: { at: string; reason: string; failures: number } | null;
-  dry: { own: LotDryExit | null; follow: LotDryExit | null } | null;
+  /** What each exit style did (null while it has not decided), by style id, in the wallet's order. */
+  dry: Record<string, LotDryExit | null> | null;
   differenceUsd: number | null;
   differencePercent: number | null;
 };
@@ -290,7 +297,7 @@ export type TradingSummary = {
     assumedTipsUsd: number;
     networkFeesPaidUsd: number;
   } | null;
-  dryComparison: { trades: number; ownPnlUsd: number; followPnlUsd: number; ownWinRate: number; followWinRate: number } | null;
+  dryComparison: { trades: number; styles: Array<{ id: string; label: string; pnlUsd: number; winRate: number }> } | null;
   series: Array<{ date: string; livePnlUsd: number; simPnlUsd: number; trades: number }>;
 };
 
