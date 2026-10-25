@@ -14,7 +14,13 @@ const LegSchema = new Schema(
     // SOL the swap itself moved: on a buy what it cost (pump.fun's fee included), on a sell what it paid out after pump.fun's fee.
     swapLamports: { type: Number, default: 0 },
     tipLamports: { type: Number, default: 0 }, // the Jito tip
-    feeLamports: { type: Number, default: 0 }, // the network's base fee
+    feeLamports: { type: Number, default: 0 }, // the network's fee: base fee plus any priority fee
+    // Raw mode only: the Jito tip the simulation would have paid. NOT spent (nothing was tipped), but counted in the lot's cost and proceeds so the
+    // live percentages line up with the simulation's.
+    assumedTipLamports: { type: Number, default: 0 },
+    sendMode: { type: String, enum: ["raw", "jito", null], default: null },
+    // How SOL reached the market's quote token: "direct" (SOL-quoted), "multihop", "pool" or "jupiter".
+    route: { type: String, default: null },
     // The deposit the chain holds for the token account this buy opened. It is NOT part of the cost: it comes back when the account is burned
     // (db/live/trading/burnEngine.js), so it stays in the wallet's balance and never shows as a loss.
     rentLamports: { type: Number, default: 0 },
@@ -33,6 +39,7 @@ const DryExitSchema = new Schema(
     at: { type: Date, default: null },
     priceUsd: { type: Number, default: null },
     netLamports: { type: Number, default: 0 },
+    swapLamports: { type: Number, default: null },
     proceedsUsd: { type: Number, default: null },
     realizedPnlUsd: { type: Number, default: null },
     realizedPnlPercent: { type: Number, default: null },
@@ -61,6 +68,8 @@ const LiveLotSchema = new Schema({
   // The simulation did not take this trade after the live wallet already had (e.g. the simulated balance ran out in between).
   unpaired: { type: Boolean, default: false },
   exitMode: { type: String, enum: ["own", "follow"], default: "own" }, // which exit rules it follows (live mode); a dry run follows both
+  // Live trade size / simulation trade size when the lot was bought (the wallet's trade ratio). The simulation's dollars are multiplied by it to compare like with like.
+  sizeScale: { type: Number, default: 1 },
 
   buy: { type: LegSchema, required: true },
   tokenRaw: { type: String, required: true }, // what this lot holds
@@ -72,6 +81,12 @@ const LiveLotSchema = new Schema({
   proceedsUsd: { type: Number, default: null },
   realizedPnlUsd: { type: Number, default: null },
   realizedPnlPercent: { type: Number, default: null },
+
+  // Set when a SELL of this open lot ran out of retries: the position is still held and needs attention (db/live/trading/alerts.js). Cleared when it closes.
+  sellFailure: {
+    type: new Schema({ at: Date, reason: String, closeReason: String, failures: Number }, { _id: false }),
+    default: null,
+  },
 
   // Trackers for the live wallet's OWN exit rules (peak / lowest value, which trailing stops are armed).
   maxValueUsd: { type: Number, default: null },

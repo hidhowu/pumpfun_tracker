@@ -13,6 +13,17 @@ import { getTokenMeta } from "../tokenMeta.js";
 import { getChainSnapshot } from "../chain.js";
 import { EMPTY_MAX_TOKENS, SWEEP_EVERY_MS, sweepWallet } from "./burnEngine.js";
 import { buyCostUsd, lotValueUsd } from "./lots.js";
+import { MAX_PRIORITY_MICRO_LAMPORTS, MAX_TIP_USD, RATIO_MAX, RATIO_MIN, tradingSettings } from "./settings.js";
+import { listStuckSells } from "./alerts.js";
+import { getTxStats } from "./txStats.js";
+import { createWalletTable, loadWalletTable } from "./lookupTable.js";
+import { resolveMarket } from "./market.js";
+import { prepareBuy } from "./pumpSwap.js";
+import { pumpSdks } from "./sdk.js";
+import { WalletPosition } from "../../models/WalletPosition.js";
+import { pickRpcUrl, rpc } from "../../onchainPrice.js";
+import { base58Decode, base58Encode, decryptWalletSecret } from "../walletKeys.js";
+import { Connection, Keypair } from "@solana/web3.js";
 
 /**
  * Everything the pages need about a live wallet's copy trading: the link to a simulation wallet and its switches (changed only with two-factor
@@ -64,17 +75,32 @@ export async function getTradingState(liveId) {
   ]);
   const taken = new Set((await LiveWallet.find({ connectedWalletId: { $ne: null }, _id: { $ne: live._id } }, { connectedWalletId: 1 }).lean()).map((w) => String(w.connectedWalletId)));
 
+  const cfg = tradingSettings(live, sim);
+  const stuck = await listStuckSells(live._id);
+
   const warnings = [];
-  if (sim && (sim.settings.jitoFeeUsd ?? 0) <= 0) warnings.push("The simulation wallet's Jito fee is $0, so transactions are tipped only Jito's minimum (about $0.0002) and will rarely land fast. Set a Jito fee on the simulation wallet.");
+  if (sim && cfg.sendMode === "jito" && cfg.tipUsd <= 0) warnings.push("The Jito tip is $0, so transactions are tipped only Jito's minimum (about $0.0002) and will rarely land fast. Set a Jito tip here, or a Jito fee on the simulation wallet.");
   if (paused) warnings.push("New buys are paused by the kill switch.");
+  if (cfg.paused) warnings.push("This wallet is paused: it takes no new trades. Positions already open are still sold when they exit.");
   if (!isWalletEncryptionConfigured()) warnings.push("WALLET_ENCRYPTION_KEY isn't set on the server, so the wallet's key can't be used to trade.");
 
   return {
     connected: !!sim,
     tradingMode: live.tradingMode,
     exitMode: live.exitMode,
-    buySlippagePercent: live.buySlippagePercent,
-    sellSlippagePercent: live.sellSlippagePercent,
+    buySlippagePercent: live.buySlippagePercent ?? 15,
+    sellSlippagePercent: live.sellSlippagePercent ?? 25,
+    sendMode: cfg.sendMode,
+    jitoTipUsd: live.jitoTipUsd ?? null,
+    scaleJitoFee: cfg.scaleJitoFee,
+    rawPriorityMicroLamports: cfg.priorityMicroLamports,
+    tradeRatioSim: cfg.ratioSim,
+    tradeRatioLive: cfg.ratioLive,
+    paused: cfg.paused,
+    lookupTable: live.lookupTable ?? null,
+    lookupTableAddresses: (await getTableInfo(live)).addresses,
+    effective: sim ? { tradeSizeUsd: cfg.tradeSizeUsd, tipUsd: cfg.tipUsd, assumedTipUsd: cfg.assumedTipUsd, scale: cfg.scale } : null,
+    stuckSells: stuck.map((l) => ({ lotId: String(l._id), mint: l.mint, traderAddress: l.traderAddress, at: l.sellFailure.at, reason: l.sellFailure.reason, failures: l.sellFailure.failures })),
     connectedAt: live.connectedAt,
     lastBurnSweepAt: live.lastBurnSweepAt,
     burnSweepEveryMinutes: SWEEP_EVERY_MS / 60000,
@@ -91,7 +117,8 @@ const SLIPPAGE_MAX = 90;
 
 /**
  * @param {string} liveId
- * @param {{ connectedWalletId?: string | null, tradingMode?: "dry" | "live", exitMode?: "own" | "follow", buySlippagePercent?: number, sellSlippagePercent?: number }} patch
+ * @param {{ connectedWalletId?: string | null, tradingMode?: "dry" | "live", exitMode?: "own" | "follow", buySlippagePercent?: number, sellSlippagePercent?: number,
+ *   sendMode?: "raw" | "jito", jitoTipUsd?: number | null, scaleJitoFee?: boolean, rawPriorityMicroLamports?: number, tradeRatioSim?: number, tradeRatioLive?: number, paused?: boolean }} patch
  * @param {{ userId: string, username: string, code?: string, ip?: string }} actor
  */
 export async function updateTrading(liveId, patch, { userId, username, code, ip }) {
@@ -134,6 +161,38 @@ export async function updateTrading(liveId, patch, { userId, username, code, ip 
     const value = Number(patch[key]);
     if (!Number.isFinite(value) || value < SLIPPAGE_MIN || value > SLIPPAGE_MAX) throw new TradingError(`Slippage must be between ${SLIPPAGE_MIN}% and ${SLIPPAGE_MAX}%.`);
     set[key] = value;
+  }
+
+  if (patch.sendMode !== undefined) {
+    if (patch.sendMode !== "raw" && patch.sendMode !== "jito") throw new TradingError("Send mode must be 'raw' or 'jito'.");
+    set.sendMode = patch.sendMode;
+  }
+  if (patch.jitoTipUsd !== undefined) {
+    if (patch.jitoTipUsd === null) set.jitoTipUsd = null;
+    else {
+      const tip = Number(patch.jitoTipUsd);
+      if (!Number.isFinite(tip) || tip < 0 || tip > MAX_TIP_USD) throw new TradingError(`The Jito tip must be between $0 and $${MAX_TIP_USD}.`);
+      set.jitoTipUsd = tip;
+    }
+  }
+  if (patch.rawPriorityMicroLamports !== undefined) {
+    const fee = Number(patch.rawPriorityMicroLamports);
+    if (!Number.isFinite(fee) || fee < 0 || fee > MAX_PRIORITY_MICRO_LAMPORTS) throw new TradingError(`The priority fee must be between 0 and ${MAX_PRIORITY_MICRO_LAMPORTS} micro-lamports per compute unit.`);
+    set.rawPriorityMicroLamports = Math.floor(fee);
+  }
+  for (const key of ["tradeRatioSim", "tradeRatioLive"]) {
+    if (patch[key] === undefined) continue;
+    const value = Number(patch[key]);
+    if (!Number.isFinite(value) || value < RATIO_MIN || value > RATIO_MAX) throw new TradingError(`The trade-size ratio numbers must be between ${RATIO_MIN} and ${RATIO_MAX}.`);
+    set[key] = value;
+  }
+  if (patch.scaleJitoFee !== undefined) {
+    if (typeof patch.scaleJitoFee !== "boolean") throw new TradingError("Scaling must be on or off.");
+    set.scaleJitoFee = patch.scaleJitoFee;
+  }
+  if (patch.paused !== undefined) {
+    if (typeof patch.paused !== "boolean") throw new TradingError("Paused must be true or false.");
+    set.paused = patch.paused;
   }
 
   if (patch.tradingMode !== undefined) {
@@ -218,6 +277,9 @@ function liveSide(lot) {
     costUsd: buyCostUsd(buy),
     buyPriceUsd: buy.priceUsd,
     swapSol: buy.swapLamports / LAMPORTS,
+    route: buy.route ?? null,
+    sendMode: buy.sendMode ?? null,
+    assumedTipUsd: (((buy.assumedTipLamports || 0) + (lot.sell?.assumedTipLamports || 0)) / LAMPORTS) * (buy.solUsd || 0),
     tipUsd: ((buy.tipLamports || 0) / LAMPORTS) * (buy.solUsd || 0),
     feeUsd: ((buy.feeLamports || 0) / LAMPORTS) * (buy.solUsd || 0),
     rentSol: (buy.rentLamports || 0) / LAMPORTS,
@@ -289,9 +351,13 @@ export async function listLots(liveId, { status = null, page = 1, limit = 25 } =
         live,
         sim,
         paired: !!sim,
+        // The simulation trades a different number of dollars when the wallet has a trade-size ratio: its dollars are multiplied by this to match.
+        scale: lot.sizeScale ?? 1,
+        sellFailure: lot.sellFailure ? { at: lot.sellFailure.at, reason: lot.sellFailure.reason, failures: lot.sellFailure.failures } : null,
         dry: lot.mode === "dry" ? { own: dryView(lot.dryExits?.own), follow: dryView(lot.dryExits?.follow) } : null,
-        // live minus simulation, on the same trade
-        differenceUsd: live.pnlUsd != null && sim?.pnlUsd != null ? live.pnlUsd - sim.pnlUsd : null,
+        // live minus simulation, on the same trade (the simulation's dollars scaled to the live trade size)
+        differenceUsd: live.pnlUsd != null && sim?.pnlUsd != null ? live.pnlUsd - sim.pnlUsd * (lot.sizeScale ?? 1) : null,
+        differencePercent: live.pnlPercent != null && sim?.pnlPercent != null ? live.pnlPercent - sim.pnlPercent : null,
       };
     })
   );
@@ -318,9 +384,11 @@ export async function getTradingSummary(liveId) {
           liveCostUsd: { $sum: "$costUsd" },
           liveWins: { $sum: { $cond: [{ $gt: ["$realizedPnlUsd", 0] }, 1, 0] } },
           tipLamportsUsd: { $sum: { $add: [{ $multiply: [{ $divide: [{ $add: ["$buy.tipLamports", { $ifNull: ["$sell.tipLamports", 0] }] }, LAMPORTS] }, { $ifNull: ["$buy.solUsd", 0] }] }] } },
+          assumedTipsUsd: { $sum: { $multiply: [{ $divide: [{ $add: [{ $ifNull: ["$buy.assumedTipLamports", 0] }, { $ifNull: ["$sell.assumedTipLamports", 0] }] }, LAMPORTS] }, { $ifNull: ["$buy.solUsd", 0] }] } },
           feeLamportsUsd: { $sum: { $multiply: [{ $divide: [{ $add: ["$buy.feeLamports", { $ifNull: ["$sell.feeLamports", 0] }] }, LAMPORTS] }, { $ifNull: ["$buy.solUsd", 0] }] } },
           paired: { $sum: { $cond: [{ $gt: [{ $size: "$sim" }, 0] }, 1, 0] } },
-          simPnlUsd: { $sum: { $ifNull: [{ $arrayElemAt: ["$sim.realizedPnlUsd", 0] }, 0] } },
+          // The simulation's profit scaled to the live trade size (the wallet's ratio), so it can be compared with the live profit.
+          simPnlUsd: { $sum: { $multiply: [{ $ifNull: [{ $arrayElemAt: ["$sim.realizedPnlUsd", 0] }, 0] }, { $ifNull: ["$sizeScale", 1] }] } },
           simWins: { $sum: { $cond: [{ $gt: [{ $ifNull: [{ $arrayElemAt: ["$sim.realizedPnlUsd", 0] }, 0] }, 0] }, 1, 0] } },
         },
       },
@@ -336,7 +404,7 @@ export async function getTradingSummary(liveId) {
         $group: {
           _id: { $dateToString: { format: "%Y-%m-%d", date: "$closedAt", timezone: "UTC" } },
           livePnlUsd: { $sum: "$realizedPnlUsd" },
-          simPnlUsd: { $sum: { $ifNull: [{ $arrayElemAt: ["$sim.realizedPnlUsd", 0] }, 0] } },
+          simPnlUsd: { $sum: { $multiply: [{ $ifNull: [{ $arrayElemAt: ["$sim.realizedPnlUsd", 0] }, 0] }, { $ifNull: ["$sizeScale", 1] }] } },
           trades: { $sum: 1 },
         },
       },
@@ -367,6 +435,7 @@ export async function getTradingSummary(liveId) {
           liveWinRate: c.trades ? (c.liveWins / c.trades) * 100 : null,
           simWinRate: c.paired ? (c.simWins / c.paired) * 100 : null,
           tipsPaidUsd: c.tipLamportsUsd,
+          assumedTipsUsd: c.assumedTipsUsd,
           networkFeesPaidUsd: c.feeLamportsUsd,
         }
       : null,
@@ -388,4 +457,101 @@ export async function getLinkedLive(simWalletId) {
     balance: chain ? { solBalance: chain.solBalance, totalValueUsd: chain.totalValueUsd } : null,
     summary,
   };
+}
+
+// ------------------------------------------------------------------ stats, and selling a stuck position by hand
+
+/** The transaction stats (speed, successes, failures, retries) of one live wallet. */
+export function getTradingStats(liveId, options) {
+  return getTxStats(liveId, options);
+}
+
+/**
+ * "Sell now": queues a sell of one open live position, for a sell that gave up (or any time). It is an ordinary sell - same route, same retries -
+ * so it can only ever sell this lot's own tokens.
+ */
+export async function sellLotNow(liveId, lotId) {
+  if (!mongoose.isValidObjectId(liveId) || !mongoose.isValidObjectId(lotId)) throw new TradingError("Position not found", 404);
+  const lot = await LiveLot.findOne({ _id: lotId, liveWalletId: liveId });
+  if (!lot) throw new TradingError("Position not found", 404);
+  if (lot.status !== "open") throw new TradingError("This position is already closed.", 409);
+  if (lot.mode !== "live") throw new TradingError("This is a dry-run position; there is nothing to sell.", 409);
+  try {
+    await LiveExecution.create({
+      liveWalletId: lot.liveWalletId,
+      walletId: lot.walletId,
+      traderAddress: lot.traderAddress,
+      mint: lot.mint,
+      action: "sell",
+      closeReason: "manual",
+      track: null,
+      triggerAt: new Date(),
+      sourceSignature: `manual:${lot._id}`,
+      idemKey: `manual:${lot._id}:${Date.now()}`,
+    });
+  } catch (err) {
+    if (err?.code === 11000) throw new TradingError("A sell of this position is already waiting.", 409);
+    throw err;
+  }
+  logEvent("trade", `[live] Manual sell queued for ${lot.mint} (trader ${lot.traderAddress})`, { meta: { liveWalletId: String(liveId), mint: lot.mint } });
+  return { queued: true };
+}
+
+/** Number of open live positions whose sell gave up, per live wallet - for the wallet list. */
+export async function stuckSellCounts() {
+  const rows = await LiveLot.aggregate([{ $match: { status: "open", mode: "live", sellFailure: { $ne: null } } }, { $group: { _id: "$liveWalletId", n: { $sum: 1 } } }]);
+  return new Map(rows.map((r) => [String(r._id), r.n]));
+}
+
+// ------------------------------------------------------------------ the lookup table
+
+const TABLE_MIN_SOL = 0.03; // rent for the table (~0.01-0.02 SOL) plus the network fees of creating and filling it
+let creatingTable = new Set();
+
+/** The wallet's lookup table: its address and how many accounts it holds, or nulls when it has none yet. */
+export async function getTableInfo(live) {
+  const table = live.lookupTable ? await loadWalletTable(live).catch(() => null) : null;
+  return { address: live.lookupTable ?? null, addresses: table ? table.state.addresses.length : null };
+}
+
+/**
+ * "Create lookup table": makes the wallet's table now (or tops it up) so the first trade doesn't have to. Spends about 0.01-0.02 SOL of rent from
+ * the wallet (refundable by closing the table later) plus a few network fees. Needs two-factor turned on, like every change to what a wallet trades.
+ */
+export async function createLookupTable(liveId, { userId, username }) {
+  if (!(await isTwoFactorEnabled(userId))) throw new TradingError("Two-factor sign-in must be turned on (Account page) before this wallet can spend on a lookup table.", 403);
+  if (!isWalletEncryptionConfigured()) throw new TradingError("WALLET_ENCRYPTION_KEY isn't set on the server.", 503);
+  const live = await LiveWallet.findById(liveId).select("+encryptedSecret");
+  if (!live) throw new TradingError("Wallet not found", 404);
+  if (creatingTable.has(String(live._id))) throw new TradingError("The lookup table is already being created.", 409);
+  const lamports = (await rpc("getBalance", [live.address, { commitment: "confirmed" }])).value;
+  if (lamports / LAMPORTS < TABLE_MIN_SOL) throw new TradingError(`The wallet needs at least ${TABLE_MIN_SOL} SOL to create the table (it has ${(lamports / LAMPORTS).toFixed(4)}).`, 409);
+
+  creatingTable.add(String(live._id));
+  const secret = base58Decode(decryptWalletSecret(live.address, live.encryptedSecret));
+  try {
+    if (secret.length !== 64 || base58Encode(secret.subarray(32)) !== live.address) throw new TradingError("The stored key doesn't match the live wallet.", 500);
+    const keypair = Keypair.fromSecretKey(Uint8Array.from(secret));
+    const conn = new Connection(await pickRpcUrl(), "confirmed");
+    const solUsd = await getSolUsd();
+    const budgetLamports = BigInt(Math.floor((1 / solUsd) * LAMPORTS)); // any small amount: only the accounts matter
+    // Recent tokens the simulation has traded are the samples (so they are tokens that really trade).
+    const recent = await WalletPosition.aggregate([{ $sort: { openedAt: -1 } }, { $limit: 600 }, { $group: { _id: "$mint", at: { $first: "$openedAt" } } }, { $sort: { at: -1 } }, { $limit: 80 }]);
+    const result = await createWalletTable({
+      keypair,
+      live,
+      pumpSdks,
+      sampleMints: recent.map((r) => r._id),
+      resolveKind: async (mint) => {
+        const m = await resolveMarket(conn, mint);
+        return m.quote ? `quote:${m.quote.mint.toBase58()}` : m.venue;
+      },
+      buildBuy: async (mint) => (await prepareBuy({ owner: keypair.publicKey, mint, budgetLamports, slippagePercent: 15, solUsd, payWithSol: true, conn })).instructions,
+    });
+    logEvent("tracker", `[live-wallet] "${live.name}": lookup table created/updated by ${username}: ${result.address} (${result.total} addresses, +${result.added})`, { meta: { walletId: String(live._id), ...result, samples: result.samples.join(",") } });
+    return result;
+  } finally {
+    secret.fill(0);
+    creatingTable.delete(String(live._id));
+  }
 }

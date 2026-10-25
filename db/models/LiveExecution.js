@@ -20,7 +20,7 @@ const LiveExecutionSchema = new Schema({
   attempts: { type: Number, default: 0 },
   closeReason: {
     type: String,
-    enum: ["trader_sell", "stop_loss", "take_profit", "trailing_stop", "max_hold_time", "blacklisted"],
+    enum: ["trader_sell", "stop_loss", "take_profit", "trailing_stop", "max_hold_time", "blacklisted", "manual"],
     default: "trader_sell",
   },
   // What made this exit happen (db/simulation/exitTrigger.js). Null for a copied trade.

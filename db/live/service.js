@@ -1,4 +1,5 @@
 import { LiveWallet } from "../models/LiveWallet.js";
+import { stuckSellCounts } from "./trading/service.js";
 import { LiveWalletTx } from "../models/LiveWalletTx.js";
 import { getSolUsd } from "../onchainPrice.js";
 import { isTwoFactorEnabled, verifyTwoFactorStepUp } from "../authService.js";
@@ -93,9 +94,10 @@ export async function renameLiveWallet(id, name) {
  */
 export async function listLiveWallets() {
   const wallets = await LiveWallet.find().sort({ createdAt: 1 }).lean();
+  const stuck = await stuckSellCounts();
   return Promise.all(
     wallets.map(async (w) => {
-      const view = walletView(w);
+      const view = { ...walletView(w), stuckSells: stuck.get(String(w._id)) ?? 0 };
       const { totals } = await loadLedger(w._id);
       const pnl = { realizedPnlUsd: totals.realizedPnlUsd, wins: totals.wins, losses: totals.losses, sells: totals.sells };
       try {

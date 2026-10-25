@@ -2,6 +2,9 @@
  * Money maths of a live lot, in one place. A lot's cost is what really left the wallet for the swap, the Jito tip and the network fee;
  * what it pays back is the swap's payout less the tip and the fee of the selling transaction. The token-account deposit is neither:
  * it is returned when the account is burned, so it stays in the wallet's balance and never shows up as profit or loss.
+ *
+ * A wallet sending RAW pays no Jito tip, but the simulation always does. So that the percentages can be compared, the leg carries an
+ * `assumedTipLamports` (the simulation's Jito fee at the live trade size): it counts as a cost like a real tip, though it never left the wallet.
  */
 
 const LAMPORTS = 1e9;
@@ -11,13 +14,13 @@ export const oneToken = (decimals) => 10n ** BigInt(decimals ?? 6);
 
 /** Dollars a buy leg cost in total. */
 export function buyCostUsd(buy) {
-  const lamports = (buy.swapLamports || 0) + (buy.tipLamports || 0) + (buy.feeLamports || 0);
+  const lamports = (buy.swapLamports || 0) + (buy.tipLamports || 0) + (buy.assumedTipLamports || 0) + (buy.feeLamports || 0);
   return (lamports / LAMPORTS) * (buy.solUsd || 0);
 }
 
 /** Dollars a sell leg paid back after its tip and network fee (can be below zero for a tiny sale). */
 export function sellNetUsd(sell) {
-  const lamports = (sell.swapLamports || 0) - (sell.tipLamports || 0) - (sell.feeLamports || 0);
+  const lamports = (sell.swapLamports || 0) - (sell.tipLamports || 0) - (sell.assumedTipLamports || 0) - (sell.feeLamports || 0);
   return (lamports / LAMPORTS) * (sell.solUsd || 0);
 }
 

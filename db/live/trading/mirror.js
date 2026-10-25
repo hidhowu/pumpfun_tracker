@@ -10,13 +10,14 @@ import { isTradingPaused } from "../../simulation/guards.js";
  * delay (that delay only imitates how long a transaction takes; a live wallet really sends it). Each call only queues work
  * (LiveExecution); db/live/trading/executor.js does it.
  *
- *  - a buy is mirrored only if the simulation would take it right now (its balance covers the trade and the fees), so the two stay paired;
+ *  - a buy is mirrored only if the simulation would take it right now (its balance covers the trade and the fees), so the two stay paired,
+ *    and never while the live wallet is paused (exits and sells are not affected by the pause);
  *  - a trader's sell, and a blacklisting, are mirrored to whatever the live wallet holds from that trader;
  *  - a stop-loss / take-profit / trailing-stop / max-hold exit is mirrored only when the live wallet is set to FOLLOW the simulation's exits
  *    (a dry run always records the followed outcome next to its own).
  */
 
-const liveFor = (simWalletId) => LiveWallet.findOne({ connectedWalletId: simWalletId }, { _id: 1, tradingMode: 1, exitMode: 1 }).lean();
+const liveFor = (simWalletId) => LiveWallet.findOne({ connectedWalletId: simWalletId }, { _id: 1, tradingMode: 1, exitMode: 1, paused: 1 }).lean();
 
 async function enqueue(fields) {
   try {
@@ -41,7 +42,7 @@ export async function liveHolds(simWalletId, traderAddress, mint) {
 /** @param {object} wallet the simulation wallet (with its current balance) @param {object} walletTrader @param {object} trade the trader's buy */
 export async function mirrorBuy(wallet, walletTrader, trade) {
   const live = await liveFor(wallet._id);
-  if (!live) return false;
+  if (!live || live.paused) return false;
   const settings = wallet.settings;
   const simCost = settings.tradeSizeUsd + computeTradeFees(settings.tradeSizeUsd, settings).totalFeeUsd;
   if (wallet.balanceUsd < simCost) return false; // the simulation can't take it, so the live wallet doesn't either

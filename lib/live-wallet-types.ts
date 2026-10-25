@@ -16,6 +16,8 @@ export type LiveWalletListItem = LiveWallet & {
   wins: number;
   losses: number;
   sells: number;
+  /** Open positions whose sell gave up and need attention. */
+  stuckSells: number;
 };
 
 export type LiveHolding = {
@@ -152,12 +154,30 @@ export type TradingSimWallet = {
   };
 };
 
+export type SendMode = "raw" | "jito";
+
+/** An open position whose sell gave up. */
+export type StuckSell = { lotId: string; mint: string; traderAddress: string; at: string; reason: string; failures: number };
+
 export type TradingState = {
   connected: boolean;
   tradingMode: TradingMode;
   exitMode: ExitMode;
   buySlippagePercent: number;
   sellSlippagePercent: number;
+  sendMode: SendMode;
+  jitoTipUsd: number | null;
+  scaleJitoFee: boolean;
+  rawPriorityMicroLamports: number;
+  tradeRatioSim: number;
+  tradeRatioLive: number;
+  paused: boolean;
+  lookupTable: string | null;
+  /** Accounts in the table (null when there is none, or it can't be read right now). */
+  lookupTableAddresses: number | null;
+  /** What the settings come to in practice (null while no simulation wallet is connected). */
+  effective: { tradeSizeUsd: number; tipUsd: number; assumedTipUsd: number; scale: number } | null;
+  stuckSells: StuckSell[];
   connectedAt: string | null;
   lastBurnSweepAt: string | null;
   burnSweepEveryMinutes: number;
@@ -174,6 +194,13 @@ export type TradingPatch = {
   exitMode?: ExitMode;
   buySlippagePercent?: number;
   sellSlippagePercent?: number;
+  sendMode?: SendMode;
+  jitoTipUsd?: number | null;
+  scaleJitoFee?: boolean;
+  rawPriorityMicroLamports?: number;
+  tradeRatioSim?: number;
+  tradeRatioLive?: number;
+  paused?: boolean;
   code?: string;
 };
 
@@ -185,6 +212,10 @@ export type LotLiveSide = {
   costUsd: number;
   buyPriceUsd: number | null;
   swapSol: number;
+  route: string | null;
+  sendMode: SendMode | null;
+  /** Jito fee counted as a cost though nothing was tipped (raw mode). */
+  assumedTipUsd: number;
   tipUsd: number;
   feeUsd: number;
   rentSol: number;
@@ -235,8 +266,12 @@ export type TradingLot = {
   live: LotLiveSide;
   sim: LotSimSide | null;
   paired: boolean;
+  /** Live trade size / simulation trade size: the simulation's dollars times this are comparable with the live ones. */
+  scale: number;
+  sellFailure: { at: string; reason: string; failures: number } | null;
   dry: { own: LotDryExit | null; follow: LotDryExit | null } | null;
   differenceUsd: number | null;
+  differencePercent: number | null;
 };
 
 export type TradingLotsPage = { lots: TradingLot[]; total: number; page: number; totalPages: number };
@@ -252,6 +287,7 @@ export type TradingSummary = {
     liveWinRate: number | null;
     simWinRate: number | null;
     tipsPaidUsd: number;
+    assumedTipsUsd: number;
     networkFeesPaidUsd: number;
   } | null;
   dryComparison: { trades: number; ownPnlUsd: number; followPnlUsd: number; ownWinRate: number; followWinRate: number } | null;
@@ -266,3 +302,22 @@ export type LinkedLive = {
   balance: { solBalance: number; totalValueUsd: number } | null;
   summary: TradingSummary;
 };
+
+export type Latency = { count: number; minMs: number | null; maxMs: number | null; avgMs: number | null; p10Ms: number | null; p50Ms: number | null; p90Ms: number | null; p95Ms: number | null; p99Ms: number | null };
+
+export type TxCounts = { attempts: number; success: number; reverted: number; expired: number; error: number; retries: number; trades: number; tradesSucceeded: number; tradesFailed: number; successRate: number | null };
+
+export type TxStats = {
+  hours: number | null;
+  total: TxCounts;
+  buy: TxCounts & { latency: Latency };
+  sell: TxCounts & { latency: Latency };
+  latency: Latency;
+  recentLatency: Latency;
+  recentWindow: number;
+  slowing: boolean;
+  byMode: Record<SendMode, TxCounts & { latency: Latency }>;
+  recentFailures: Array<{ at: string; action: "buy" | "sell"; mint: string; outcome: "reverted" | "expired" | "error"; attempt: number; error: string | null; sendMode: SendMode | null; signature: string | null }>;
+};
+
+export type LookupTableResult = { address: string; total: number; added: number; samples: string[] };

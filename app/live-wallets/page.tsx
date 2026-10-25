@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ChevronRight, Plus, ShieldCheck, ShieldAlert } from "lucide-react";
+import { AlertOctagon, ChevronRight, Plus, ShieldCheck, ShieldAlert } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreateLiveWalletDialog } from "@/components/live-wallets/create-wallet-dialog";
@@ -41,6 +41,13 @@ function WalletCard({ wallet }: { wallet: LiveWalletListItem }) {
         </div>
         <ChevronRight className="size-[18px] shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
       </div>
+
+      {wallet.stuckSells > 0 ? (
+        <div className="relative z-10 flex items-center gap-2 rounded-xl border border-negative/50 bg-negative/10 px-3 py-2 text-[13px] font-bold text-negative" role="alert">
+          <AlertOctagon className="size-4 shrink-0" />
+          {wallet.stuckSells === 1 ? "A sell failed - position still held" : `${wallet.stuckSells} sells failed - positions still held`}
+        </div>
+      ) : null}
 
       <div>
         <div className="text-xs font-semibold text-muted-foreground">Total value</div>

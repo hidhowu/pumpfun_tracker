@@ -22,7 +22,8 @@ export async function GET(_request: NextRequest, { params }: Params) {
 
 /**
  * Body (every field optional): { connectedWalletId: string | null, tradingMode: "dry" | "live", exitMode: "own" | "follow",
- * buySlippagePercent: number, sellSlippagePercent: number, code?: string }.
+ * buySlippagePercent: number, sellSlippagePercent: number, sendMode: "raw" | "jito", jitoTipUsd: number | null, scaleJitoFee: boolean, rawPriorityMicroLamports: number,
+ * tradeRatioSim: number, tradeRatioLive: number, paused: boolean, code?: string }.
  * Needs two-factor on. Switching to "live" also needs `code`, a fresh authenticator code. A new connection always starts as a dry run.
  */
 export async function PATCH(request: NextRequest, { params }: Params) {
@@ -36,7 +37,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   const body = await request.json().catch(() => null);
   if (!body || typeof body !== "object") return NextResponse.json({ error: "Send the settings to change." }, { status: 400 });
   const patch: Record<string, unknown> = {};
-  for (const key of ["connectedWalletId", "tradingMode", "exitMode", "buySlippagePercent", "sellSlippagePercent"]) {
+  for (const key of ["connectedWalletId", "tradingMode", "exitMode", "buySlippagePercent", "sellSlippagePercent", "sendMode", "jitoTipUsd", "scaleJitoFee", "rawPriorityMicroLamports", "tradeRatioSim", "tradeRatioLive", "paused"]) {
     if (key in body) patch[key] = body[key];
   }
 

@@ -34,8 +34,28 @@ const LiveWalletSchema = new Schema({
   // A dry run works both out side by side so the two can be compared.
   exitMode: { type: String, enum: ["own", "follow"], default: "own" },
   // How far the price may move against a trade between quote and fill before the program refuses it (percent).
-  buySlippagePercent: { type: Number, default: 25 },
+  buySlippagePercent: { type: Number, default: 15 },
   sellSlippagePercent: { type: Number, default: 25 },
+  // How transactions reach the chain (db/live/trading/liveTx.js):
+  //   "jito" - a one-transaction Jito bundle with a tip (a refused trade never lands, so it costs nothing);
+  //   "raw"  - a plain Solana transaction through the RPC with a small priority fee (cheaper; a refused trade still pays its network fee).
+  // Documents made before this setting existed have no value: read them through db/live/trading/settings.js, which supplies the defaults.
+  sendMode: { type: String, enum: ["raw", "jito"], default: "jito" },
+  // The wallet's own Jito fee per transaction in dollars, used exactly as entered: the real tip in Jito mode, the assumed (unspent) fee in raw mode.
+  // null = the connected simulation wallet's Jito fee.
+  jitoTipUsd: { type: Number, default: null },
+  // Raw mode, no own Jito fee: scale the simulation's fee down with a smaller trade size (never above the simulation's fee). Off = the full fee at any size.
+  scaleJitoFee: { type: Boolean, default: true },
+  // Raw mode: priority fee in micro-lamports per compute unit (1000 on a 300,000-unit limit is 300 lamports, about $0.00005).
+  rawPriorityMicroLamports: { type: Number, default: 1000 },
+  // Trade size relative to the simulation wallet: the live wallet spends  simulation trade size x tradeRatioLive / tradeRatioSim.
+  // 1 : 1 = the same dollars, 10 : 1 = a tenth of them.
+  tradeRatioSim: { type: Number, default: 1 },
+  tradeRatioLive: { type: Number, default: 1 },
+  // New buys are switched off (dry or live). Positions already open are still sold when they exit.
+  paused: { type: Boolean, default: false },
+  // The wallet's address lookup table (db/live/trading/lookupTable.js): makes the bigger swaps (paying with SOL, token-quoted markets) fit one transaction.
+  lookupTable: { type: String, default: null },
   connectedAt: { type: Date, default: null },
   // The empty-token-account burn engine (db/live/trading/burnEngine.js) last visited this wallet.
   lastBurnSweepAt: { type: Date, default: null },

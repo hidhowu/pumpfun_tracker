@@ -49,9 +49,12 @@ export async function readTradeOutcome({ signature, owner, mint, side, tipLampor
   const after = mine(meta.postTokenBalances, mint);
   const tokenDeltaRaw = sum(after) - sum(before);
 
-  // The deposit of a token account this transaction opened (it has no "before" entry).
-  const beforeAccounts = new Set(before.map((b) => b.accountIndex));
-  const rentLamports = after.filter((b) => !beforeAccounts.has(b.accountIndex)).reduce((total, b) => total + meta.postBalances[b.accountIndex], 0);
+  // The deposit of every token account this transaction opened for the wallet (it has no "before" entry): the traded token's, and the quote
+  // token's when SOL was turned into it on the way. A wrapped-SOL account is a temporary one, closed in the same transaction.
+  const ownedBefore = new Set((meta.preTokenBalances ?? []).filter((b) => b.owner === owner).map((b) => b.accountIndex));
+  const rentLamports = (meta.postTokenBalances ?? [])
+    .filter((b) => b.owner === owner && b.mint !== WSOL_MINT && !ownedBefore.has(b.accountIndex))
+    .reduce((total, b) => total + meta.postBalances[b.accountIndex], 0);
 
   // Wrapped SOL the wallet already held in a token account this transaction closed: it comes back as SOL but is not swap money.
   const unwrapped = mine(meta.preTokenBalances, WSOL_MINT)

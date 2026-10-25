@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Flame, Loader2 } from "lucide-react";
+import { Flame, Loader2, Table2 } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -10,7 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatBox, signedUsd, toneClass } from "./shared";
 import { TradingConnection } from "./trading-connection";
 import { TradingLots } from "./trading-lots";
-import { burnEmptyAccounts, getTradingState, getTradingSummary } from "@/lib/live-wallet-api";
+import { TradingStats } from "./trading-stats";
+import { burnEmptyAccounts, createLookupTable, getTradingState, getTradingSummary } from "@/lib/live-wallet-api";
 import { formatRelativeTime, formatSol, formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { TradingState, TradingSummary } from "@/lib/live-wallet-types";
@@ -123,6 +124,55 @@ function BurnEngineCard({ walletId, state, onDone }: { walletId: string; state: 
   );
 }
 
+function LookupTableCard({ walletId, state, onDone }: { walletId: string; state: TradingState; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const has = !!state.lookupTable;
+
+  async function run() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await createLookupTable(walletId);
+      toast.success(r.added > 0 ? `Lookup table ready: ${r.total} accounts (${r.added} added)` : "The lookup table already has everything it needs");
+      onDone();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't create the lookup table");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="gap-3 p-5">
+      <div className="flex items-start gap-3">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-brand-soft">
+          <Table2 className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <div className="text-[15px] font-extrabold">Lookup table</div>
+          <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
+            A table of the accounts pump.fun trades use, owned by this wallet. It lets the bigger swaps (paying with SOL for tokens quoted in USDC, PUMP and so on) fit in one transaction. Create it now so the first trade doesn&apos;t have to wait for it. It costs about 0.01-0.02 SOL of rent (refundable by closing the table) plus a few network fees, and takes up to a minute. Clicking again tops it up.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {has ? (
+              <>
+                Created: <span className="font-mono">{state.lookupTable!.slice(0, 6)}…{state.lookupTable!.slice(-4)}</span>
+                {state.lookupTableAddresses != null ? `, ${state.lookupTableAddresses} accounts` : ""}.
+              </>
+            ) : (
+              "Not created yet - it is made by the first trade that needs it."
+            )}
+          </p>
+        </div>
+      </div>
+      <Button variant="outline" className="w-fit gap-2" onClick={run} disabled={busy}>
+        {busy ? <Loader2 className="size-4 animate-spin" /> : <Table2 className="size-4" />}
+        {busy ? "Creating…" : has ? "Update lookup table" : "Create lookup table"}
+      </Button>
+    </Card>
+  );
+}
+
 /** The "Copy trading" tab of a live wallet: connection, switches, totals, the trades side by side, and the cleanup engine. */
 export function TradingPanel({ walletId, twoFactorEnabled, refreshKey }: { walletId: string; twoFactorEnabled: boolean; refreshKey: number }) {
   const [state, setState] = useState<TradingState | null>(null);
@@ -156,7 +206,7 @@ export function TradingPanel({ walletId, twoFactorEnabled, refreshKey }: { walle
   return (
     <div className="flex flex-col gap-4">
       <TradingConnection
-        key={`${state.connected}-${state.tradingMode}-${state.buySlippagePercent}-${state.sellSlippagePercent}`}
+        key={[state.connected, state.tradingMode, state.buySlippagePercent, state.sellSlippagePercent, state.sendMode, state.jitoTipUsd, state.scaleJitoFee, state.rawPriorityMicroLamports, state.tradeRatioSim, state.tradeRatioLive, state.paused].join("-")}
         walletId={walletId}
         state={state}
         twoFactorEnabled={twoFactorEnabled}
@@ -166,22 +216,25 @@ export function TradingPanel({ walletId, twoFactorEnabled, refreshKey }: { walle
         }}
       />
 
+      <LookupTableCard walletId={walletId} state={state} onDone={load} />
+
       {state.connected ? (
         <>
           <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
             <StatBox label="Live profit (finished)" value={s ? signedUsd(s.livePnlUsd) : "-"} className={toneClass(s?.livePnlUsd)} hint={s ? `${s.trades} trade${s.trades === 1 ? "" : "s"}${s.liveWinRate != null ? ` · ${s.liveWinRate.toFixed(0)}% winning` : ""}` : "no real trade finished yet"} />
-            <StatBox label="Simulation, same trades" value={s ? signedUsd(s.simPnlUsd) : "-"} className={toneClass(s?.simPnlUsd)} hint={s && s.pairedTrades < s.trades ? `${s.pairedTrades} of ${s.trades} have a simulated twin` : undefined} />
+            <StatBox label={state.tradeRatioLive === state.tradeRatioSim ? "Simulation, same trades" : "Simulation, same trades, at live size"} value={s ? signedUsd(s.simPnlUsd) : "-"} className={toneClass(s?.simPnlUsd)} hint={s && s.pairedTrades < s.trades ? `${s.pairedTrades} of ${s.trades} have a simulated twin` : undefined} />
             <StatBox label="Live minus simulation" value={difference != null ? signedUsd(difference) : "-"} className={toneClass(difference)} />
             <StatBox label="Open positions" value={String(open)} hint={summary ? `${summary.live.open} live · ${summary.dry.open} dry run` : undefined} />
           </div>
           {s ? (
             <p className="-mt-1 text-xs text-muted-foreground">
-              Costs already included in the live result: Jito tips {formatUsd(s.tipsPaidUsd)} and network fees {formatUsd(s.networkFeesPaidUsd)}. The deposit for a token account is not a cost - it stays in the wallet&apos;s balance until the account is burned.
+              Costs already included in the live result: Jito tips {formatUsd(s.tipsPaidUsd)}, network fees {formatUsd(s.networkFeesPaidUsd)}{s.assumedTipsUsd > 0 ? `, and ${formatUsd(s.assumedTipsUsd)} of assumed Jito fees (counted as the simulation does, but never spent because the wallet sends raw)` : ""}. The deposit for a token account is not a cost - it stays in the wallet&apos;s balance until the account is burned.
             </p>
           ) : null}
 
           {summary ? <Comparison summary={summary} /> : null}
           {summary ? <SeriesChart summary={summary} /> : null}
+          <TradingStats walletId={walletId} refreshKey={refreshKey} />
           <BurnEngineCard walletId={walletId} state={state} onDone={load} />
           <div className="text-[15px] font-extrabold">Trades side by side</div>
           <TradingLots walletId={walletId} exitMode={state.exitMode} refreshKey={refreshKey} />

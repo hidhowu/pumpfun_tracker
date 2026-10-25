@@ -72,10 +72,11 @@ async function skipWithReason(PendingModel, item, reason) {
  * entry goes back in the queue with a growing delay (sells get many more tries - dropping one would leave a position open
  * with no exit). Only after the retries are used up is it skipped, and then it is logged as an ERROR, not a quiet skip.
  * The raw exception text goes to the log only, never into the stored skip reason.
+ * `max` (retries) and `backoff` (attempt -> ms) override the defaults - the live wallets retry faster than the simulation does.
  */
-export async function failOrRetry(PendingModel, item, err) {
+export async function failOrRetry(PendingModel, item, err, { max: maxRetries, backoff = backoffMs } = {}) {
   const attempt = (item.errorAttempts || 0) + 1;
-  const max = MAX_ERROR_RETRIES[item.action] ?? 2;
+  const max = maxRetries ?? MAX_ERROR_RETRIES[item.action] ?? 2;
   const detail = err instanceof Error ? err.message : String(err);
   const meta = { traderAddress: item.traderAddress, mint: item.mint, action: item.action, attempt, error: detail };
 
@@ -83,7 +84,7 @@ export async function failOrRetry(PendingModel, item, err) {
     try {
       await PendingModel.updateOne(
         { _id: item._id },
-        { $set: { status: "pending", triggerAt: new Date(Date.now() + backoffMs(attempt)), leaseUntil: null }, $inc: { errorAttempts: 1 } }
+        { $set: { status: "pending", triggerAt: new Date(Date.now() + backoff(attempt)), leaseUntil: null }, $inc: { errorAttempts: 1 } }
       );
       logEvent("trade", `Retrying ${describe(item)} after an error (attempt ${attempt}/${max})`, { level: "warn", meta });
       return "retry";

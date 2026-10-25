@@ -203,6 +203,13 @@ export async function getSolUsd({ maxAgeMs = 10_000 } = {}) {
   return usdOf(WSOL_MINT);
 }
 
+/** USD price of any token Jupiter or DexScreener prices (a stablecoin is 1), or null. `maxAgeMs: 0` forces a fresh request. */
+export async function getTokenUsd(mint, { maxAgeMs = 10_000 } = {}) {
+  if (USD_STABLES.has(mint)) return 1;
+  await ensureUsd([mint], Date.now() - maxAgeMs);
+  return usdOf(mint);
+}
+
 /** Decimals of every quote mint not known yet, read off the mint accounts in one call (SPL Token and Token-2022 share the layout). */
 async function learnQuoteDecimals(quoteMints) {
   const unknown = [...new Set(quoteMints)].filter((m) => !quoteDecimals.has(m));

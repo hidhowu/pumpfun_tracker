@@ -16,6 +16,7 @@ import { SolSheet } from "@/components/live-wallets/sol-sheet";
 import { ReceiveDialog } from "@/components/live-wallets/receive-dialog";
 import { TokenSheet } from "@/components/live-wallets/token-sheet";
 import { TradingPanel } from "@/components/live-wallets/trading-panel";
+import { StuckSellsBanner } from "@/components/live-wallets/stuck-sells";
 import { ViewKeyDialog } from "@/components/live-wallets/view-key-dialog";
 import { PnlCard, PortfolioCard, SecurityNote } from "@/components/live-wallets/wallet-panels";
 import { AddressChip, PnlPill, signedUsd, toneClass, WalletAvatar } from "@/components/live-wallets/shared";
@@ -193,6 +194,8 @@ export default function LiveWalletDetailPage() {
               Couldn&apos;t read this wallet from the chain right now ({detail.chainError}). Retrying automatically.
             </div>
           ) : null}
+
+          <StuckSellsBanner walletId={wallet._id} refreshKey={refreshKey} />
 
           <div className="flex flex-col gap-6 xl:flex-row xl:items-start">
             <div className="flex min-w-0 flex-1 flex-col gap-6">

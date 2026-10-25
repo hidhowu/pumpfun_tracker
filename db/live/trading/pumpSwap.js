@@ -1,7 +1,9 @@
-import { Connection, PublicKey } from "@solana/web3.js";
-import BN from "bn.js";
-import { pickRpcUrl } from "../../onchainPrice.js";
-import { pumpSdks } from "./sdk.js";
+import { Connection } from "@solana/web3.js";
+import { getTokenUsd, pickRpcUrl } from "../../onchainPrice.js";
+import { resolveMarket, TradeError } from "./market.js";
+import { big, buildDirectBuy, buildDirectSell } from "./directSwap.js";
+import { budgetInQuote, buildPaidBuy, buildPaidSell, estimateSellLamports, findSolRoutes, SOL_ROUTES } from "./solRoutes.js";
+import { DEFAULT_COMPUTE_UNITS } from "./liveTx.js";
 
 /**
  * Builds the swap instructions for buying and selling a pump.fun token with SOL - on the bonding curve while the token is still on
@@ -9,218 +11,118 @@ import { pumpSdks } from "./sdk.js";
  * Nothing here sends anything: every function returns instructions plus what the trade is expected to give, and the caller
  * decides whether to sign and send them (live) or only record the expectation (dry run).
  *
+ * A token is not always quoted in SOL (USDC, PUMP, ... are quote tokens too). With `payWithSol` such a token is still traded with SOL alone:
+ * the SOL is turned into the quote token inside the same transaction and back again on a sale (db/live/trading/solRoutes.js). Without it a
+ * token-quoted market is refused with code "unsupported_quote" - which is what the simulation's price quotes rely on.
+ *
  * Amounts are in raw units (lamports for SOL, the token's smallest unit for tokens) and travel as BigInt.
  * `slippagePercent` is the price move the trade tolerates before the program refuses it (1 = 1%): a buy may cost up to that
  * much more than quoted, a sell may pay up to that much less. A refused trade costs nothing but the network fee.
  */
 
-const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
-const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
-
-export class TradeError extends Error {
-  /** @param {string} message @param {string} [code] short machine-readable reason, e.g. "no_market" */
-  constructor(message, code = "trade_failed") {
-    super(message);
-    this.code = code;
-  }
-}
+export { TradeError };
 
 async function connection() {
   return new Connection(await pickRpcUrl(), "confirmed");
 }
 
-const bn = (value) => new BN(value.toString());
-const big = (value) => BigInt(value.toString());
-
 /**
- * Where a token trades right now: "curve" (still on its bonding curve) or "amm" (graduated to its PumpSwap pool), with its
- * token program (classic or Token-2022) and decimals. A token pump.fun doesn't know is a TradeError.
+ * Where a token trades right now: "curve" or "amm", with its token program, decimals and the token it is quoted in.
+ * @deprecated kept for callers outside this folder; use resolveMarket for new code.
  */
 export async function getMarket(mint, conn) {
-  const { pump } = pumpSdks();
-  const connection_ = conn ?? (await connection());
-  const mintKey = new PublicKey(mint);
-  const [mintInfo, curve] = await Promise.all([
-    connection_.getAccountInfo(mintKey, "confirmed"),
-    new pump.OnlinePumpSdk(connection_).fetchBondingCurve(mintKey).catch(() => null),
-  ]);
-  if (!mintInfo) throw new TradeError("That token doesn't exist on the chain.", "no_market");
-  const owner = mintInfo.owner.toBase58();
-  if (owner !== TOKEN_PROGRAM && owner !== TOKEN_2022_PROGRAM) throw new TradeError("That isn't a token.", "no_market");
-  const base = { mint, tokenProgram: mintInfo.owner, decimals: mintInfo.data[44], conn: connection_ };
-  if (curve && !pump.isBondingCurveMigrated(curve) && !curve.complete) return { ...base, venue: "curve" };
-  return { ...base, venue: "amm" };
+  const market = await resolveMarket(conn ?? (await connection()), mint);
+  return { mint, tokenProgram: market.tokenProgram, decimals: market.decimals, conn: market.conn, venue: market.venue };
 }
 
 /**
- * @param {{ owner: PublicKey, mint: string, budgetLamports: bigint | number, slippagePercent: number, quoteOnly?: boolean }} options
+ * @param {{ owner: PublicKey, mint: string, budgetLamports: bigint | number, slippagePercent: number, solUsd?: number, payWithSol?: boolean, quoteOnly?: boolean, conn?: Connection }} options
  *   budgetLamports is what the swap may spend INCLUDING pump.fun's own fee.
- *   quoteOnly: only price the purchase (the simulation's API mode); no instructions are built, so `owner` can be any address.
- * @returns {Promise<{ venue: "curve"|"amm", instructions: import("@solana/web3.js").TransactionInstruction[], expectedTokenRaw: bigint,
- *   maxCostLamports: bigint, tokenProgram: PublicKey, decimals: number, ata: PublicKey, createsAta: boolean }>}
+ *   quoteOnly: only price the purchase; no instructions are built, so `owner` can be any address.
+ * @returns {Promise<{ venue: "curve"|"amm", route: "direct"|"multihop"|"pool"|"jupiter"|"estimate", instructions: TransactionInstruction[], expectedTokenRaw: bigint,
+ *   maxCostLamports: bigint, tokenProgram: PublicKey, decimals: number, ata: PublicKey, createsAta: boolean, computeUnits: number,
+ *   lookupTables: AddressLookupTableAccount[], quoteMint: string | null, note: string | null, skipped: string[] }>}
  */
-export async function prepareBuy({ owner, mint, budgetLamports, slippagePercent, quoteOnly = false }) {
-  const { pump, amm } = pumpSdks();
-  const market = await getMarket(mint);
-  const mintKey = new PublicKey(mint);
-  const budget = bn(budgetLamports);
-  if (budget.lten(0)) throw new TradeError("Nothing to spend.", "bad_amount");
+export async function prepareBuy({ owner, mint, budgetLamports, slippagePercent, solUsd, payWithSol = false, quoteOnly = false, conn: given }) {
+  const conn = given ?? (await connection());
+  const market = await resolveMarket(conn, mint);
+  const base = { tokenProgram: market.tokenProgram, decimals: market.decimals, quoteMint: market.quote?.mint.toBase58() ?? null, lookupTables: [], skipped: [], note: null };
 
-  if (market.venue === "curve") {
-    const online = new pump.OnlinePumpSdk(market.conn);
-    const [global, feeConfig, state] = await Promise.all([online.fetchGlobal(), online.fetchFeeConfig(), online.fetchBuyState(mintKey, owner, market.tokenProgram)]);
-    if (!pump.isSolLikeQuoteMint(state.quoteMint)) throw new TradeError("This token is quoted in something other than SOL.", "unsupported_quote");
-    const tokens = pump.getBuyTokenAmountFromSolAmount({
-      global,
-      feeConfig,
-      mintSupply: state.bondingCurve.tokenTotalSupply,
-      bondingCurve: state.bondingCurve,
-      amount: budget,
-      quoteMint: state.quoteMint,
-      quoteTransferFee: state.quoteTransferFee,
-    });
-    if (tokens.lten(0)) throw new TradeError("The amount is too small to buy any of this token.", "bad_amount");
-    const instructions = quoteOnly ? [] : await pump.PUMP_SDK.buyInstructions({
-      global,
-      bondingCurveAccountInfo: state.bondingCurveAccountInfo,
-      bondingCurve: state.bondingCurve,
-      associatedUserAccountInfo: state.associatedUserAccountInfo,
-      mint: mintKey,
-      user: owner,
-      amount: tokens,
-      solAmount: budget,
-      slippage: slippagePercent,
-      tokenProgram: market.tokenProgram,
-    });
-    return {
-      venue: "curve",
-      instructions,
-      expectedTokenRaw: big(tokens),
-      maxCostLamports: big(budget.add(budget.mul(new BN(Math.floor(slippagePercent * 10))).div(new BN(1000)))),
-      tokenProgram: market.tokenProgram,
-      decimals: market.decimals,
-      ata: ataOf(owner, mintKey, market.tokenProgram),
-      createsAta: !state.associatedUserAccountInfo,
-    };
+  if (!market.quote) {
+    const trade = await buildDirectBuy(market, owner, budgetLamports, slippagePercent, { quoteOnly });
+    return { ...base, venue: trade.venue, route: "direct", instructions: trade.instructions, expectedTokenRaw: trade.expectedTokenRaw, maxCostLamports: trade.maxCostRaw, ata: trade.ata, createsAta: trade.createsAta, computeUnits: DEFAULT_COMPUTE_UNITS };
   }
 
-  const online = new amm.OnlinePumpAmmSdk(market.conn);
-  const poolKey = pump.canonicalPumpPoolPda(mintKey);
-  const state = await online.swapSolanaState(poolKey, owner).catch(() => null);
-  if (!state) throw new TradeError("This token has no pool to trade in yet.", "no_market");
-  const quote = amm.buyQuoteInput({
-    quote: budget,
-    slippage: slippagePercent,
-    quoteTransferFee: state.quoteTransferFee,
-    baseReserve: state.poolBaseAmount,
-    quoteReserve: state.poolQuoteAmount,
-    virtualQuoteReserves: state.pool.virtualQuoteReserves,
-    baseMintAccount: state.baseMintAccount,
-    baseMint: state.baseMint,
-    coinCreator: state.pool.coinCreator,
-    creator: state.pool.creator,
-    feeConfig: state.feeConfig,
-    globalConfig: state.globalConfig,
-    quoteMint: state.pool.quoteMint,
-    isMayhemMode: state.pool.isMayhemMode,
-    creatorFeeBps: state.pool.creatorFeeBps,
-  });
-  const instructions = quoteOnly ? [] : await amm.PUMP_AMM_SDK.buyQuoteInput(state, budget, slippagePercent);
+  if (!payWithSol) throw new TradeError("This token is quoted in something other than SOL.", "unsupported_quote");
+  if (!(solUsd > 0)) throw new TradeError("The SOL price isn't available.", "no_price");
+  const routes = await findSolRoutes(conn, market.quote);
+  if (!routes.length) throw new TradeError(`This token is quoted in ${market.quote.mint.toBase58()} and there is no way to pay for that with SOL.`, "no_route");
+
+  if (quoteOnly) {
+    // Priced at the quote token's market price: the same dollars buy the same tokens, less the cost of turning SOL into the quote token (not modelled here).
+    const quoteUsd = await getTokenUsd(market.quote.mint.toBase58());
+    if (!(quoteUsd > 0)) throw new TradeError(`The quote token ${market.quote.mint.toBase58()} has no price.`, "no_price");
+    const trade = await buildDirectBuy(market, owner, budgetInQuote(budgetLamports, solUsd, quoteUsd, market.quote), slippagePercent, { quoteOnly: true });
+    return { ...base, venue: trade.venue, route: "estimate", instructions: [], expectedTokenRaw: trade.expectedTokenRaw, maxCostLamports: BigInt(budgetLamports), ata: trade.ata, createsAta: trade.createsAta, computeUnits: SOL_ROUTES.COMPUTE_UNITS, note: `would be paid via ${routes[0].kind}` };
+  }
+
+  const { trade, route, skipped } = await buildPaidBuy({ conn, owner, market, budgetLamports, solUsd, slippagePercent, routes });
   return {
-    venue: "amm",
-    instructions,
-    expectedTokenRaw: big(quote.base),
-    maxCostLamports: big(quote.maxQuote),
-    tokenProgram: market.tokenProgram,
-    decimals: market.decimals,
-    ata: state.userBaseTokenAccount,
-    createsAta: !state.userBaseAccountInfo,
+    ...base,
+    venue: trade.venue,
+    route,
+    instructions: trade.instructions,
+    expectedTokenRaw: trade.expectedTokenRaw,
+    maxCostLamports: trade.maxSpendLamports > 0n ? trade.maxSpendLamports : BigInt(budgetLamports),
+    ata: trade.ata,
+    createsAta: trade.createsAta,
+    computeUnits: SOL_ROUTES.COMPUTE_UNITS,
+    lookupTables: trade.lookupTables,
+    note: trade.note,
+    skipped,
   };
 }
 
 /**
- * @param {{ owner: PublicKey, mint: string, tokenRaw: bigint | number, slippagePercent: number, quoteOnly?: boolean }} options
+ * @param {{ owner: PublicKey, mint: string, tokenRaw: bigint | number, slippagePercent: number, solUsd?: number, payWithSol?: boolean, quoteOnly?: boolean, conn?: Connection }} options
  *   quoteOnly: only price the sale (a dry run holds no tokens and has no token account, so there is nothing to build instructions for).
- * @returns {Promise<{ venue: "curve"|"amm", instructions: import("@solana/web3.js").TransactionInstruction[], expectedLamports: bigint,
- *   minLamports: bigint, tokenProgram: PublicKey, decimals: number, ata: PublicKey }>}
+ * @returns {Promise<{ venue: "curve"|"amm", route: string, instructions: TransactionInstruction[], expectedLamports: bigint, minLamports: bigint,
+ *   tokenProgram: PublicKey, decimals: number, ata: PublicKey | null, computeUnits: number, lookupTables: AddressLookupTableAccount[], quoteMint: string | null, note: string | null, skipped: string[] }>}
  *   expectedLamports is what the sale should pay out after pump.fun's fees; minLamports is the least the program will accept.
  */
-export async function prepareSell({ owner, mint, tokenRaw, slippagePercent, quoteOnly = false }) {
-  const { pump, amm } = pumpSdks();
-  const market = await getMarket(mint);
-  const mintKey = new PublicKey(mint);
-  const amount = bn(tokenRaw);
-  if (amount.lten(0)) throw new TradeError("Nothing to sell.", "bad_amount");
+export async function prepareSell({ owner, mint, tokenRaw, slippagePercent, solUsd, payWithSol = false, quoteOnly = false, conn: given }) {
+  const conn = given ?? (await connection());
+  const market = await resolveMarket(conn, mint);
+  const base = { tokenProgram: market.tokenProgram, decimals: market.decimals, quoteMint: market.quote?.mint.toBase58() ?? null, lookupTables: [], skipped: [], note: null };
 
-  if (market.venue === "curve") {
-    const online = new pump.OnlinePumpSdk(market.conn);
-    const [global, feeConfig, state] = await Promise.all([
-      online.fetchGlobal(),
-      online.fetchFeeConfig(),
-      quoteOnly
-        ? online.fetchBondingCurve(mintKey).then((bondingCurve) => ({ bondingCurve, quoteMint: pump.normalizeQuoteMint(bondingCurve.quoteMint), quoteTransferFee: null, bondingCurveAccountInfo: null }))
-        : online.fetchSellState(mintKey, owner, market.tokenProgram),
-    ]);
-    if (!pump.isSolLikeQuoteMint(state.quoteMint)) throw new TradeError("This token is quoted in something other than SOL.", "unsupported_quote");
-    const solAmount = pump.getSellSolAmountFromTokenAmount({
-      global,
-      feeConfig,
-      mintSupply: state.bondingCurve.tokenTotalSupply,
-      bondingCurve: state.bondingCurve,
-      amount,
-      quoteTransferFee: state.quoteTransferFee,
-    });
-    const instructions = quoteOnly ? [] : await pump.PUMP_SDK.sellInstructions({
-      global,
-      bondingCurveAccountInfo: state.bondingCurveAccountInfo,
-      bondingCurve: state.bondingCurve,
-      mint: mintKey,
-      user: owner,
-      amount,
-      solAmount,
-      slippage: slippagePercent,
-      tokenProgram: market.tokenProgram,
-      mayhemMode: state.bondingCurve.isMayhemMode,
-      cashback: state.bondingCurve.isCashbackCoin,
-    });
-    const min = solAmount.sub(solAmount.mul(new BN(Math.floor(slippagePercent * 10))).div(new BN(1000)));
-    return { venue: "curve", instructions, expectedLamports: big(solAmount), minLamports: big(min), tokenProgram: market.tokenProgram, decimals: market.decimals, ata: ataOf(owner, mintKey, market.tokenProgram) };
+  if (!market.quote) {
+    const sale = await buildDirectSell(market, owner, tokenRaw, slippagePercent, { quoteOnly });
+    return { ...base, venue: sale.venue, route: "direct", instructions: sale.instructions, expectedLamports: sale.expectedQuoteRaw, minLamports: sale.minQuoteRaw, ata: sale.ata, computeUnits: DEFAULT_COMPUTE_UNITS };
   }
 
-  const online = new amm.OnlinePumpAmmSdk(market.conn);
-  const poolKey = pump.canonicalPumpPoolPda(mintKey);
-  const state = await online.swapSolanaState(poolKey, owner).catch(() => null);
-  if (!state) throw new TradeError("This token has no pool to trade in.", "no_market");
-  const quote = amm.sellBaseInput({
-    base: amount,
-    slippage: slippagePercent,
-    quoteTransferFee: state.quoteTransferFee,
-    baseReserve: state.poolBaseAmount,
-    quoteReserve: state.poolQuoteAmount,
-    virtualQuoteReserves: state.pool.virtualQuoteReserves,
-    feeBucketsTotal: state.pool.protocolFees.add(state.pool.creatorFees),
-    baseMintAccount: state.baseMintAccount,
-    baseMint: state.baseMint,
-    coinCreator: state.pool.coinCreator,
-    creator: state.pool.creator,
-    feeConfig: state.feeConfig,
-    globalConfig: state.globalConfig,
-    quoteMint: state.pool.quoteMint,
-    isMayhemMode: state.pool.isMayhemMode,
-    creatorFeeBps: state.pool.creatorFeeBps,
-  });
-  const instructions = quoteOnly ? [] : await amm.PUMP_AMM_SDK.sellBaseInput(state, amount, slippagePercent);
-  return {
-    venue: "amm",
-    instructions,
-    expectedLamports: big(quote.uiQuote),
-    minLamports: big(quote.minQuote),
-    tokenProgram: market.tokenProgram,
-    decimals: market.decimals,
-    ata: state.userBaseTokenAccount,
-  };
-}
+  if (!payWithSol) throw new TradeError("This token is quoted in something other than SOL.", "unsupported_quote");
+  if (!(solUsd > 0)) throw new TradeError("The SOL price isn't available.", "no_price");
+  const routes = await findSolRoutes(conn, market.quote, { jupiter: false });
+  if (!routes.length) throw new TradeError(`This token is quoted in ${market.quote.mint.toBase58()} and there is no way to turn that back into SOL.`, "no_route");
 
-function ataOf(owner, mint, tokenProgram) {
-  return PublicKey.findProgramAddressSync([owner.toBuffer(), tokenProgram.toBuffer(), mint.toBuffer()], new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"))[0];
+  if (quoteOnly) {
+    const sale = await buildDirectSell(market, owner, tokenRaw, slippagePercent, { quoteOnly: true });
+    const expectedLamports = await estimateSellLamports(sale.expectedQuoteRaw, market.quote, solUsd);
+    return { ...base, venue: sale.venue, route: "estimate", instructions: [], expectedLamports, minLamports: big(expectedLamports), ata: null, computeUnits: SOL_ROUTES.COMPUTE_UNITS, note: `would be paid via ${routes[0].kind}` };
+  }
+
+  const { sale, route, skipped } = await buildPaidSell({ conn, owner, market, tokenRaw, solUsd, slippagePercent, routes });
+  return {
+    ...base,
+    venue: sale.venue,
+    route,
+    instructions: sale.instructions,
+    expectedLamports: sale.expectedLamports,
+    minLamports: sale.minLamports,
+    ata: null,
+    computeUnits: SOL_ROUTES.COMPUTE_UNITS,
+    lookupTables: sale.lookupTables,
+    note: sale.note,
+    skipped,
+  };
 }

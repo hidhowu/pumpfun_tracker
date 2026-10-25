@@ -1,5 +1,5 @@
 import { request } from "./api";
-import type { BurnEmptyResult, BurnResult, EncryptedKey, LiveTransactionsPage, LiveWallet, LiveWalletDetail, LinkedLive, LiveWalletListItem, TradingLotsPage, TradingPatch, TradingState, TradingSummary } from "./live-wallet-types";
+import type { BurnEmptyResult, BurnResult, EncryptedKey, LiveTransactionsPage, LiveWallet, LiveWalletDetail, LinkedLive, LiveWalletListItem, TradingLotsPage, TradingPatch, TradingState, TradingSummary, TxStats, LookupTableResult } from "./live-wallet-types";
 
 export function listLiveWallets(): Promise<{ wallets: LiveWalletListItem[]; twoFactorEnabled: boolean }> {
   return request("/api/live-wallets");
@@ -70,4 +70,19 @@ export function burnEmptyAccounts(walletId: string): Promise<BurnEmptyResult> {
 /** The live wallet connected to a simulation wallet, or null. */
 export async function getLinkedLive(simWalletId: string): Promise<LinkedLive | null> {
   return (await request<{ link: LinkedLive | null }>(`/api/wallets/${simWalletId}/live`)).link;
+}
+
+/** Transaction stats: speed percentiles, successes, failures, retries. `hours` limits them to recent attempts. */
+export function getTradingStats(walletId: string, hours?: number): Promise<TxStats> {
+  return request(`/api/live-wallets/${walletId}/trading/stats${hours ? `?hours=${hours}` : ""}`);
+}
+
+/** Queues a sell of one open live position (for a sell that gave up). */
+export function sellLotNow(walletId: string, lotId: string): Promise<{ queued: boolean }> {
+  return request(`/api/live-wallets/${walletId}/trading/lots/${lotId}/sell`, { method: "POST" });
+}
+
+/** Creates the wallet's lookup table now (or tops it up) so its first trade is fast. Spends about 0.01-0.02 SOL of rent. Can take up to a minute. */
+export function createLookupTable(walletId: string): Promise<LookupTableResult> {
+  return request(`/api/live-wallets/${walletId}/trading/lookup-table`, { method: "POST" });
 }
