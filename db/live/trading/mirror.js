@@ -3,11 +3,13 @@ import { LiveLot } from "../../models/LiveLot.js";
 import { LiveExecution } from "../../models/LiveExecution.js";
 import { computeTradeFees } from "../../fees.js";
 import { isTradingPaused } from "../../simulation/guards.js";
+import { tradeDelaySeconds } from "./settings.js";
 
 /**
  * The link between a simulation wallet and the live wallet connected to it. The simulation calls these from the places where it makes its own
  * decisions, so the live wallet acts on the SAME decision at the same moment - except that it does not wait out the simulated execution
- * delay (that delay only imitates how long a transaction takes; a live wallet really sends it). Each call only queues work
+ * delay (that delay only imitates how long a transaction takes; a live wallet really sends it) - unless the live wallet is given a wait of its own
+ * (tradeDelaySeconds, 0 by default): then every buy and sell is queued for that long after the decision, before it is priced or built. Each call only queues work
  * (LiveExecution); db/live/trading/executor.js does it.
  *
  *  - a buy is mirrored only if the simulation would take it right now (its balance covers the trade and the fees), so the two stay paired,
@@ -21,11 +23,12 @@ import { isTradingPaused } from "../../simulation/guards.js";
 /** A lot the exits still matter to: an open position, or a dry one whose styles have not all decided yet. */
 const stillWorkedOn = { $or: [{ status: "open" }, { mode: "dry", dryDone: false }] };
 
-const liveFor = (simWalletId) => LiveWallet.findOne({ connectedWalletId: simWalletId }, { _id: 1, tradingMode: 1, exitMode: 1, paused: 1 }).lean();
+const liveFor = (simWalletId) => LiveWallet.findOne({ connectedWalletId: simWalletId }, { _id: 1, tradingMode: 1, exitMode: 1, paused: 1, tradeDelaySeconds: 1 }).lean();
 
-async function enqueue(fields) {
+async function enqueue(live, fields) {
+  const delaySeconds = tradeDelaySeconds(live);
   try {
-    await LiveExecution.create({ triggerAt: new Date(), ...fields });
+    await LiveExecution.create({ triggerAt: new Date(Date.now() + delaySeconds * 1000), delaySeconds, ...fields });
     return true;
   } catch (err) {
     if (err?.code === 11000) return false; // the same thing is already queued
@@ -52,7 +55,7 @@ export async function mirrorBuy(wallet, walletTrader, trade) {
   if (wallet.balanceUsd < simCost) return false; // the simulation can't take it, so the live wallet doesn't either
   if (await isTradingPaused()) return false;
   if (await LiveLot.exists({ liveWalletId: live._id, traderAddress: walletTrader.traderAddress, mint: trade.mint })) return false;
-  return enqueue({
+  return enqueue(live, {
     liveWalletId: live._id,
     walletId: wallet._id,
     traderAddress: walletTrader.traderAddress,
@@ -67,7 +70,7 @@ export async function mirrorBuy(wallet, walletTrader, trade) {
 export async function mirrorSell(wallet, traderAddress, trade) {
   const live = await liveHolds(wallet._id, traderAddress, trade.mint);
   if (!live) return false;
-  return enqueue({
+  return enqueue(live, {
     liveWalletId: live._id,
     walletId: wallet._id,
     traderAddress,
@@ -97,7 +100,7 @@ export async function mirrorExit(position, closeReason) {
     if (lot.dryExits?.follow) return false; // already recorded
     track = "follow"; // a dry run records what following the simulation would have done
   }
-  return enqueue({
+  return enqueue(live, {
     liveWalletId: live._id,
     walletId: position.walletId,
     traderAddress: position.traderAddress,

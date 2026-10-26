@@ -39,7 +39,8 @@ const LIVE_LEASE_MS = 240_000; // longer than the slowest landing (about 100 s) 
 const TOKEN_ACCOUNT_RENT_ESTIMATE = 2_100_000; // what opening a token account holds (a bit above the usual 0.00204 SOL)
 const BATCH = 8;
 const MAX_WAIT_FOR_BUY_MS = 60_000;
-// A failed trade is retried quickly, or not at all: a buy more than this long after the trader's is no longer the trade the simulation took.
+// A failed trade is retried quickly, or not at all: a buy more than this long after the trader's is no longer the trade the simulation took
+// (the wallet's own wait before building, tradeDelaySeconds, is not counted).
 const MAX_BUY_AGE_MS = 45_000;
 // Retries after the first try. A buy gives up sooner than a sell: a position left open without an exit is the worse of the two.
 const RETRIES = { buy: 3, sell: 10 };
@@ -239,7 +240,7 @@ async function insertLot(item, live, fill, { buy, tokenRaw, decimals, tokenProgr
 
 async function executeBuy(item, live, sim) {
   const fill = item.fill ?? (item.fill = await planBuy(item, live, sim));
-  if (Date.now() - item.createdAt.getTime() > MAX_BUY_AGE_MS && !fill.tx) throw new Skip("too late to take this buy (it was not completed within 45 seconds)");
+  if (Date.now() - item.createdAt.getTime() - (item.delaySeconds ?? 0) * 1000 > MAX_BUY_AGE_MS && !fill.tx) throw new Skip("too late to take this buy (it was not completed within 45 seconds)");
 
   if (fill.mode === "dry") {
     // Priced against the real chain right now, nothing sent. The owner is the live wallet, so the quote is exactly the one a real buy would get.
@@ -362,7 +363,7 @@ async function executeSell(item, live, sim) {
   if (!lot) {
     // The buy may still be on its way (it is queued or being sent): wait for it, a while.
     const buying = await LiveExecution.exists({ liveWalletId: live._id, traderAddress: item.traderAddress, mint: item.mint, action: "buy", status: { $in: ["pending", "processing"] } });
-    if (buying && Date.now() - item.createdAt.getTime() < MAX_WAIT_FOR_BUY_MS) return later(item, 1);
+    if (buying && Date.now() - item.createdAt.getTime() - (item.delaySeconds ?? 0) * 1000 < MAX_WAIT_FOR_BUY_MS) return later(item, 1);
     throw new Skip("no live position for this trader and token");
   }
   // A closed dry lot is still worked on while its other styles have not decided (db/live/trading/styles.js); nothing else is, once closed.

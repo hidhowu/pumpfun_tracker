@@ -20,12 +20,21 @@ export const DEFAULT_PRIORITY_MICRO_LAMPORTS = 1000;
 
 export const BASE_FEE_LAMPORTS = 5000;
 
+/** The longest wait before a trade is built: a buy is given up 45 seconds after the trader's (db/live/trading/executor.js), so the wait must leave room for it. */
+export const MAX_TRADE_DELAY_SECONDS = 30;
+
 const finite = (value, fallback) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
 
 /** The Jito fee assumed per transaction in raw mode (see the top of this file). Also used for a sell, with the scale its lot was bought at. */
 export function assumedJitoFeeUsd({ ownFeeUsd, simFeeUsd, scale, scaling }) {
   if (ownFeeUsd != null) return ownFeeUsd;
   return scaling ? simFeeUsd * Math.min(1, scale) : simFeeUsd;
+}
+
+/** The wallet's wait before a trade, in seconds (0 for a wallet made before the setting existed). */
+export function tradeDelaySeconds(live) {
+  const value = finite(live?.tradeDelaySeconds, 0);
+  return Math.min(MAX_TRADE_DELAY_SECONDS, Math.max(0, value));
 }
 
 /** @param {object} live a LiveWallet (lean or not) @param {object} sim the connected simulation Wallet */
@@ -42,6 +51,8 @@ export function tradingSettings(live, sim) {
     ratioLive,
     scale,
     paused: !!live.paused,
+    /** Seconds to wait after the simulation's decision before the trade is priced and built. */
+    delaySeconds: tradeDelaySeconds(live),
     priorityMicroLamports: Math.max(0, Math.floor(finite(live.rawPriorityMicroLamports, DEFAULT_PRIORITY_MICRO_LAMPORTS))),
     /** Dollars of Jito tip actually paid per transaction (0 in raw mode). */
     tipUsd: sendMode === "jito" ? (configuredTip ?? simJitoUsd) : 0,

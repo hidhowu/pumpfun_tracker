@@ -56,6 +56,9 @@ const LiveWalletSchema = new Schema({
   // 1 : 1 = the same dollars, 10 : 1 = a tenth of them.
   tradeRatioSim: { type: Number, default: 1 },
   tradeRatioLive: { type: Number, default: 1 },
+  // Seconds the wallet waits, after the simulation decides to buy or sell, before it prices and builds the trade (dry or live). 0 = at once.
+  // The simulation waits its own execution delay; setting the same here makes both fill at the same moment.
+  tradeDelaySeconds: { type: Number, default: 0 },
   // New buys are switched off (dry or live). Positions already open are still sold when they exit.
   paused: { type: Boolean, default: false },
   // The wallet's address lookup table (db/live/trading/lookupTable.js): makes the bigger swaps (paying with SOL, token-quoted markets) fit one transaction.

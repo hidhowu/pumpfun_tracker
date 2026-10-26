@@ -10,6 +10,7 @@ import { logEvent } from "../../systemLog.js";
 import { buyCostUsd, lotValueUsd } from "./lots.js";
 import { buildTrigger, confirmExit } from "../../simulation/exitTrigger.js";
 import { cooldownStylesOf, lotStyleIds, selectedStyleId } from "./styles.js";
+import { tradeDelaySeconds } from "./settings.js";
 
 /**
  * The live wallet's OWN exit rules: stop-loss, take-profit, max hold time and trailing stops, judged against what each live position really
@@ -30,7 +31,8 @@ import { cooldownStylesOf, lotStyleIds, selectedStyleId } from "./styles.js";
 
 const TRACK_GRACE_MS = 5 * 60_000;
 
-async function queueSell(lot, closeReason, track, trigger = null) {
+/** @param {number} [delaySeconds] the live wallet's wait before a trade (settings.js tradeDelaySeconds); a sell that is queued late anyway passes none */
+async function queueSell(lot, closeReason, track, trigger = null, delaySeconds = 0) {
   try {
     await LiveExecution.create({
       liveWalletId: lot.liveWalletId,
@@ -41,7 +43,8 @@ async function queueSell(lot, closeReason, track, trigger = null) {
       closeReason,
       track,
       trigger,
-      triggerAt: new Date(),
+      triggerAt: new Date(Date.now() + delaySeconds * 1000),
+      delaySeconds,
       sourceSignature: `exit:${closeReason}:${lot._id}`,
     });
     return true;
@@ -109,7 +112,7 @@ export async function checkLiveRiskExits() {
   if (all.length === 0) return 0;
 
   const liveIds = [...new Set(all.map((l) => String(l.liveWalletId)))];
-  const lives = new Map((await LiveWallet.find({ _id: { $in: liveIds } }, { connectedWalletId: 1, exitMode: 1, cooldownStyles: 1 }).lean()).map((w) => [String(w._id), w]));
+  const lives = new Map((await LiveWallet.find({ _id: { $in: liveIds } }, { connectedWalletId: 1, exitMode: 1, cooldownStyles: 1, tradeDelaySeconds: 1 }).lean()).map((w) => [String(w._id), w]));
   const sims = new Map();
   for (const live of lives.values()) {
     if (live.connectedWalletId) sims.set(String(live._id), await Wallet.findById(live.connectedWalletId, { settings: 1 }).lean());
@@ -145,7 +148,7 @@ export async function checkLiveRiskExits() {
 
       if (blacklisted.has(lot.traderAddress)) {
         // Settles every way at once. A dry lot that has already decided every style has nothing left to settle.
-        if (!dry || lotStyleIds(lot).some((id) => !lot.dryExits?.[id])) if (await queueSell(lot, "blacklisted", null)) queued += 1;
+        if (!dry || lotStyleIds(lot).some((id) => !lot.dryExits?.[id])) if (await queueSell(lot, "blacklisted", null, null, tradeDelaySeconds(live))) queued += 1;
         return;
       }
       if (styles.length === 0) return;
@@ -208,7 +211,7 @@ export async function checkLiveRiskExits() {
 
       for (const style of styles) {
         const exit = await judge(style);
-        if (exit && (await queueSell(lot, exit.reason, dry ? style.id : null, exit.trigger))) queued += 1;
+        if (exit && (await queueSell(lot, exit.reason, dry ? style.id : null, exit.trigger, tradeDelaySeconds(live)))) queued += 1;
       }
     })
   );

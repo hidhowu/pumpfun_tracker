@@ -18,10 +18,12 @@ import { getPrice, PRICE_MAX_AGE } from "../pumpFunApi.js";
  * Returned amounts are plain numbers in UI units (tokens) and USD. A quote that can't be made throws (TradeError for "this
  * token can't be priced" - no market, not quoted in SOL; any other error is a network problem worth retrying).
  *
- * A few tokens can't be quoted by the SDK's SOL functions at all (a curve quoted in another pump token, say). Rather than quietly
- * skipping them - which would make an API wallet trade a different set of tokens than a logs wallet - priceBuy / priceSell /
- * valueMany fall back to the spot price (db/pumpFunApi.js getPrice) for exactly those, and say so in `method`: "spot" fills have no
- * fee in the number and still pay the wallet's pump-fee setting, "sdk" fills already have pump.fun's fee inside the quote.
+ * A token quoted in something other than SOL (USDC, another pump token, ...) is quoted the way a live wallet's dry run quotes it
+ * (`payWithSol`, db/live/trading/pumpSwap.js): the SDK's maths in the quote token, priced in dollars at the quote token's market price. The
+ * simulation and the dry run therefore see the same price for the same token. Only a token that really can't be quoted (no market, no way to pay for
+ * its quote token, a quote token with no price) falls back to the spot price (db/pumpFunApi.js getPrice) in priceBuy / priceSell / valueMany, and
+ * says so in `method`: "spot" fills have no fee in the number and still pay the wallet's pump-fee setting, "sdk" fills already have pump.fun's fee
+ * inside the quote.
  */
 
 /** Every pump.fun token has 6 decimals (the program creates the mint). */
@@ -40,13 +42,16 @@ async function freshSolUsd() {
 }
 
 /**
- * What spending `spendUsd` buys right now (the SDK takes the budget INCLUDING pump.fun's fee).
- * @returns {Promise<{ tokenAmount: number, priceUsd: number, solUsd: number, venue: "curve"|"amm" }>} priceUsd is the effective price paid per token, fee and price impact included
+ * What spending `spendUsd` buys right now. pump.fun charges its fee ON TOP of what goes into the curve, out of the wallet: the program takes the
+ * SDK's budget, puts budget / (1 + fee) into the curve and keeps the rest as the fee. So to put `spendUsd` into the curve the budget is
+ * `spendUsd x (1 + feePercent / 100)` - the same sizing a live wallet's dry run uses (db/live/trading/executor.js planBuy). The caller books that fee.
+ * @param {{ feePercent?: number }} [options] pump.fun's fee as a percentage of `spendUsd` (0 = `spendUsd` is the whole budget, fee inside it)
+ * @returns {Promise<{ tokenAmount: number, priceUsd: number, solUsd: number, venue: "curve"|"amm" }>} priceUsd is what `spendUsd` paid per token, price impact included, the fee not
  */
-export async function quoteBuy(mint, spendUsd) {
+export async function quoteBuy(mint, spendUsd, { feePercent = 0 } = {}) {
   const solUsd = await freshSolUsd();
-  const budgetLamports = BigInt(Math.floor((spendUsd / solUsd) * LAMPORTS_PER_SOL));
-  const quote = await prepareBuy({ owner: QUOTE_OWNER, mint, budgetLamports, slippagePercent: 0, quoteOnly: true });
+  const budgetLamports = BigInt(Math.floor(((spendUsd * (1 + feePercent / 100)) / solUsd) * LAMPORTS_PER_SOL));
+  const quote = await prepareBuy({ owner: QUOTE_OWNER, mint, budgetLamports, slippagePercent: 0, solUsd, payWithSol: true, quoteOnly: true });
   if (quote.decimals !== PUMP_DECIMALS) throw new TradeError("Unexpected token decimals.", "no_market");
   const tokenAmount = Number(quote.expectedTokenRaw) / 10 ** PUMP_DECIMALS;
   if (!(tokenAmount > 0)) throw new TradeError("The amount is too small to buy any of this token.", "bad_amount");
@@ -61,22 +66,22 @@ const rawOf = (tokenAmount) => BigInt(Math.round(tokenAmount * 10 ** PUMP_DECIMA
  */
 export async function quoteSell(mint, tokenAmount, { solUsd } = {}) {
   const sol = solUsd ?? (await freshSolUsd());
-  const quote = await prepareSell({ owner: QUOTE_OWNER, mint, tokenRaw: rawOf(tokenAmount), slippagePercent: 0, quoteOnly: true });
+  const quote = await prepareSell({ owner: QUOTE_OWNER, mint, tokenRaw: rawOf(tokenAmount), slippagePercent: 0, solUsd: sol, payWithSol: true, quoteOnly: true });
   if (quote.decimals !== PUMP_DECIMALS) throw new TradeError("Unexpected token decimals.", "no_market");
   const proceedsUsd = usdOf(quote.expectedLamports, sol);
   return { proceedsUsd, priceUsd: proceedsUsd / tokenAmount, solUsd: sol, venue: quote.venue };
 }
 
 /** A token the SDK can't quote (as opposed to a network error, which should be retried). */
-const isUnquotable = (err) => err instanceof TradeError && (err.code === "unsupported_quote" || err.code === "no_market");
+const isUnquotable = (err) => err instanceof TradeError && ["unsupported_quote", "no_market", "no_route", "no_price"].includes(err.code);
 
 /**
- * The price a simulated BUY of `spendUsd` fills at. null = no price could be read right now (retry later).
+ * The price a simulated BUY of `spendUsd` fills at (see quoteBuy for `feePercent`). null = no price could be read right now (retry later).
  * @returns {Promise<{ tokenAmount: number, priceUsd: number, method: "sdk"|"spot" } | null>}
  */
-export async function priceBuy(mint, spendUsd) {
+export async function priceBuy(mint, spendUsd, { feePercent = 0 } = {}) {
   try {
-    const q = await quoteBuy(mint, spendUsd);
+    const q = await quoteBuy(mint, spendUsd, { feePercent });
     return { tokenAmount: q.tokenAmount, priceUsd: q.priceUsd, method: "sdk" };
   } catch (err) {
     if (!isUnquotable(err)) throw err;
@@ -166,8 +171,10 @@ export async function valueMany(items) {
   await Promise.all(
     items.map(async (item) => {
       const curve = curveOf.get(item.mint);
+      let onCurve = false;
       try {
         if (curve) {
+          onCurve = true;
           const lamports = pump.getSellSolAmountFromTokenAmount({
             global: params.global,
             feeConfig: params.feeConfig,
@@ -182,7 +189,9 @@ export async function valueMany(items) {
           result.set(item.id, { valueUsd: quote.proceedsUsd, method: "sdk" });
         }
       } catch (err) {
-        if (!isUnquotable(err)) return; // network trouble: left null, not checked this sweep
+        // Network trouble on a SOL curve: left null, not checked this sweep. Anything else is sold through more than the curve
+        // (a pool, Jupiter, ...), so when that is what failed it is valued at the spot price instead - a stop-loss must not go unchecked over it.
+        if (onCurve && !isUnquotable(err)) return;
         const spot = await getPrice(item.mint, { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP }).catch(() => null);
         if (spot?.priceUsd) result.set(item.id, { valueUsd: item.tokenAmount * spot.priceUsd, method: "spot" });
       }

@@ -13,7 +13,7 @@ import { getTokenMeta } from "../tokenMeta.js";
 import { getChainSnapshot } from "../chain.js";
 import { EMPTY_MAX_TOKENS, SWEEP_EVERY_MS, sweepWallet } from "./burnEngine.js";
 import { buyCostUsd, lotValueUsd } from "./lots.js";
-import { MAX_PRIORITY_MICRO_LAMPORTS, MAX_TIP_USD, RATIO_MAX, RATIO_MIN, tradingSettings } from "./settings.js";
+import { MAX_PRIORITY_MICRO_LAMPORTS, MAX_TIP_USD, MAX_TRADE_DELAY_SECONDS, RATIO_MAX, RATIO_MIN, tradingSettings } from "./settings.js";
 import { listStuckSells } from "./alerts.js";
 import { getTxStats } from "./txStats.js";
 import { COOLDOWN_DEFAULT_STOP_PERCENT, COOLDOWN_MAX_SECONDS, COOLDOWN_MAX_STYLES, COOLDOWN_MIN_SECONDS, cooldownStylesOf, lotStyleIds, styleLabel } from "./styles.js";
@@ -92,6 +92,8 @@ export async function getTradingState(liveId) {
     cooldownStyles: cooldownStylesOf(live).map(({ id, seconds, stopLossPercent }) => ({ id, seconds, stopLossPercent })),
     buySlippagePercent: live.buySlippagePercent ?? 15,
     sellSlippagePercent: live.sellSlippagePercent ?? 25,
+    tradeDelaySeconds: cfg.delaySeconds,
+    maxTradeDelaySeconds: MAX_TRADE_DELAY_SECONDS,
     sendMode: cfg.sendMode,
     jitoTipUsd: live.jitoTipUsd ?? null,
     scaleJitoFee: cfg.scaleJitoFee,
@@ -119,7 +121,7 @@ const SLIPPAGE_MAX = 90;
 
 /**
  * @param {string} liveId
- * @param {{ connectedWalletId?: string | null, tradingMode?: "dry" | "live", exitMode?: "own" | "follow" | string, cooldownStyles?: { seconds: number, stopLossPercent?: number }[], buySlippagePercent?: number, sellSlippagePercent?: number,
+ * @param {{ connectedWalletId?: string | null, tradingMode?: "dry" | "live", exitMode?: "own" | "follow" | string, cooldownStyles?: { seconds: number, stopLossPercent?: number }[], buySlippagePercent?: number, sellSlippagePercent?: number, tradeDelaySeconds?: number,
  *   sendMode?: "raw" | "jito", jitoTipUsd?: number | null, scaleJitoFee?: boolean, rawPriorityMicroLamports?: number, tradeRatioSim?: number, tradeRatioLive?: number, paused?: boolean }} patch
  * @param {{ userId: string, username: string, code?: string, ip?: string }} actor
  */
@@ -179,6 +181,12 @@ export async function updateTrading(liveId, patch, { userId, username, code, ip 
     const value = Number(patch[key]);
     if (!Number.isFinite(value) || value < SLIPPAGE_MIN || value > SLIPPAGE_MAX) throw new TradingError(`Slippage must be between ${SLIPPAGE_MIN}% and ${SLIPPAGE_MAX}%.`);
     set[key] = value;
+  }
+
+  if (patch.tradeDelaySeconds !== undefined) {
+    const seconds = Number(patch.tradeDelaySeconds);
+    if (!Number.isFinite(seconds) || seconds < 0 || seconds > MAX_TRADE_DELAY_SECONDS) throw new TradingError(`The wait before a trade must be between 0 and ${MAX_TRADE_DELAY_SECONDS} seconds.`);
+    set.tradeDelaySeconds = Math.round(seconds * 10) / 10;
   }
 
   if (patch.sendMode !== undefined) {

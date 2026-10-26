@@ -129,6 +129,7 @@ export function TradingConnection({
   const [goLive, setGoLive] = useState(false);
   const [buySlip, setBuySlip] = useState(String(state.buySlippagePercent));
   const [sellSlip, setSellSlip] = useState(String(state.sellSlippagePercent));
+  const [delay, setDelay] = useState(String(state.tradeDelaySeconds));
   const [tip, setTip] = useState(state.jitoTipUsd == null ? "" : String(state.jitoTipUsd));
   const [priority, setPriority] = useState(String(state.rawPriorityMicroLamports));
   const [ratioSim, setRatioSim] = useState(String(state.tradeRatioSim));
@@ -351,6 +352,27 @@ export function TradingConnection({
       </div>
       <p className="-mt-2 text-xs leading-relaxed text-muted-foreground">
         The price may move this far against a trade before the program refuses it. With Jito a refused trade never lands, so no fee and no tip are paid; sent raw it still pays its small network fee.
+      </p>
+
+      <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+        <div className="space-y-1.5">
+          <Label htmlFor="trade-delay" className="text-[13px] font-bold text-muted-foreground">
+            Wait before a trade is built (seconds)
+          </Label>
+          <Input id="trade-delay" inputMode="decimal" value={delay} onChange={(e) => setDelay(e.target.value.replace(/[^0-9.]/g, ""))} className="h-10" />
+        </div>
+        <Button
+          variant="outline"
+          className="h-10"
+          disabled={busy || !(Number(delay) >= 0) || Number(delay) === state.tradeDelaySeconds}
+          onClick={() => apply({ tradeDelaySeconds: Number(delay) }, "Wait saved")}
+        >
+          Save
+        </Button>
+      </div>
+      <p className="-mt-2 text-xs leading-relaxed text-muted-foreground">
+        After the simulation decides to buy or sell, the wallet waits this long before it prices and builds the trade (0 = at once, up to {state.maxTradeDelaySeconds}). It applies to a dry run and to live trading, to buys and to sells. The simulation waits its own execution delay
+        ({sim.settings.executionDelaySeconds}s on this wallet) - set the same number here and both fill at the same moment.
       </p>
 
       <div className="grid gap-5 border-t border-border pt-5 md:grid-cols-2">

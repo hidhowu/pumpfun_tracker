@@ -170,6 +170,9 @@ export type TradingState = {
   cooldownStyles: CooldownStyle[];
   buySlippagePercent: number;
   sellSlippagePercent: number;
+  /** Seconds the wallet waits after the simulation's decision before a trade is priced and built (0 = at once). */
+  tradeDelaySeconds: number;
+  maxTradeDelaySeconds: number;
   sendMode: SendMode;
   jitoTipUsd: number | null;
   scaleJitoFee: boolean;
@@ -200,6 +203,7 @@ export type TradingPatch = {
   cooldownStyles?: Array<{ seconds: number; stopLossPercent?: number }>;
   buySlippagePercent?: number;
   sellSlippagePercent?: number;
+  tradeDelaySeconds?: number;
   sendMode?: SendMode;
   jitoTipUsd?: number | null;
   scaleJitoFee?: boolean;

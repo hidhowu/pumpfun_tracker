@@ -14,6 +14,8 @@ const LiveExecutionSchema = new Schema({
   mint: { type: String, required: true },
   action: { type: String, enum: ["buy", "sell"], required: true },
   triggerAt: { type: Date, required: true, index: true },
+  // The wait the wallet's tradeDelaySeconds put between the decision and triggerAt (retries move triggerAt, so the age of a trade is measured without it).
+  delaySeconds: { type: Number, default: 0 },
   sourceSignature: { type: String, required: true },
   status: { type: String, enum: ["pending", "processing", "done", "skipped"], default: "pending", index: true },
   skipReason: { type: String, default: null },

@@ -204,7 +204,7 @@ export function TradingPanel({ walletId, twoFactorEnabled, refreshKey }: { walle
   return (
     <div className="flex flex-col gap-4">
       <TradingConnection
-        key={[state.connected, state.tradingMode, state.buySlippagePercent, state.sellSlippagePercent, state.sendMode, state.jitoTipUsd, state.scaleJitoFee, state.rawPriorityMicroLamports, state.tradeRatioSim, state.tradeRatioLive, state.paused].join("-")}
+        key={[state.connected, state.tradingMode, state.buySlippagePercent, state.sellSlippagePercent, state.tradeDelaySeconds, state.sendMode, state.jitoTipUsd, state.scaleJitoFee, state.rawPriorityMicroLamports, state.tradeRatioSim, state.tradeRatioLive, state.paused].join("-")}
         walletId={walletId}
         state={state}
         twoFactorEnabled={twoFactorEnabled}

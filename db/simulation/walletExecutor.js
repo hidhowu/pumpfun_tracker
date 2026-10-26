@@ -6,7 +6,7 @@ import { WalletPosition } from "../models/WalletPosition.js";
 import { WalletPendingExecution } from "../models/WalletPendingExecution.js";
 import { getPrice, prefetchPrices, PRICE_MAX_AGE } from "../pumpFunApi.js";
 import { logEvent } from "../systemLog.js";
-import { computeTradeFees, realizedCounterDeltaOnClose } from "../fees.js";
+import { computeTradeFees, DEFAULT_PUMP_FEE_PERCENT, realizedCounterDeltaOnClose } from "../fees.js";
 import { applyOnce, wasApplied, savePlan, leaseExpiry, failOrRetry, reapStale } from "./atomic.js";
 import { isTradingPaused } from "./guards.js";
 import { mirrorExit } from "../live/trading/mirror.js";
@@ -19,11 +19,15 @@ import { CONFIRMED_EXITS, buildTrigger, confirmExit, recoveryLevel, triggerHolds
 const isApiWallet = (wallet) => wallet?.settings?.trackingMethod === "api";
 
 /**
- * The fee settings a fill is charged with. An SDK quote already has pump.fun's fee inside it (the budget is spent INCLUDING the
- * fee, a sale pays out AFTER it), so charging the pump-fee percentage on top would take it twice; only the Jito fee is added.
- * A "spot" price (a token the SDK can't quote, or any logs-wallet fill) has no fee in it, so the setting applies as usual.
+ * The fee settings a fill is charged with. pump.fun takes its fee ON TOP of a buy, out of the wallet (the program puts budget / (1 + fee) into the
+ * curve and keeps the rest), and OUT OF a sale's payout:
+ *  - a BUY always pays the pump-fee percentage on top of the trade size, whatever priced it: an SDK quote is sized to put exactly the trade size into
+ *    the curve (db/simulation/sdkQuote.js quoteBuy), a spot price has no fee in it;
+ *  - a SELL quoted by the SDK already has the fee taken out of its payout, so the percentage is not charged again (only the Jito fee is added);
+ *    a sale at a "spot" price (a token the SDK can't quote, or any logs-wallet fill) has no fee in it, so the setting applies as usual.
  */
 const feeSettings = (wallet, method) => ({ pumpFeePercent: method === "sdk" ? 0 : wallet.settings.pumpFeePercent, jitoFeeUsd: wallet.settings.jitoFeeUsd });
+const buyFeeSettings = (wallet) => ({ pumpFeePercent: wallet.settings.pumpFeePercent, jitoFeeUsd: wallet.settings.jitoFeeUsd });
 
 async function markSkipped(pending, reason) {
   pending.status = "skipped";
@@ -105,8 +109,8 @@ async function executeWalletBuy(pending) {
       // Last check before an API wallet buys: the token must have real trades on pump.fun. An empty answer skips the buy; a failed
       // request throws (and is retried) rather than being mistaken for an empty token.
       if (!(await tokenHasTrades(pending.mint))) return markSkipped(pending, "no trades on this token (pump.fun's trades API returned none)");
-      // The fill is what pump.fun's SDK says spending the trade size buys right now.
-      const quote = await priceBuy(pending.mint, spendUsd).catch((err) => {
+      // The fill is what pump.fun's SDK says buying the trade size's worth of tokens costs right now; its fee is booked on top, below.
+      const quote = await priceBuy(pending.mint, spendUsd, { feePercent: walletDoc.settings.pumpFeePercent ?? DEFAULT_PUMP_FEE_PERCENT }).catch((err) => {
         if (err instanceof TradeError) return err;
         throw err;
       });
@@ -119,7 +123,7 @@ async function executeWalletBuy(pending) {
       priceUsd = price.priceUsd;
       tokenAmount = spendUsd / priceUsd;
     }
-    const buyFees = computeTradeFees(spendUsd, feeSettings(walletDoc, method));
+    const buyFees = computeTradeFees(spendUsd, buyFeeSettings(walletDoc));
     const totalCost = spendUsd + buyFees.totalFeeUsd;
 
     fill = await savePlan(WalletPendingExecution, pending, {
