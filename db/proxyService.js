@@ -1,8 +1,5 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execCurl } from "./curlBinary.js";
 import { Proxy } from "./models/Proxy.js";
-
-const execFileAsync = promisify(execFile);
 
 const FAILURE_THRESHOLD = 3;
 const POOL_CACHE_TTL_MS = 30_000;
@@ -183,7 +180,7 @@ export async function testProxy(proxyId, { enableOnSuccess = false } = {}) {
     // one JSON/error body) works identically on both. -w appends the HTTP
     // status, which is what actually decides pass/fail: curl exits 0 for
     // ANY HTTP response, including a 403 from pump.fun blocking this IP.
-    const { stdout } = await execFileAsync("curl", ["-s", "-m", "10", "-A", randomPumpUserAgent(), "-w", "\n%{http_code}", "--proxy", proxy.url, TEST_URL]);
+    const { stdout } = await execCurl(["-s", "-m", "10", "-w", "\n%{http_code}", "--proxy", proxy.url, TEST_URL], { fallbackUserAgent: randomPumpUserAgent() });
     const status = Number(stdout.slice(stdout.lastIndexOf("\n") + 1).trim());
     if (!status) error = "No HTTP response through proxy";
     else if (PROXY_BROKEN_HTTP_STATUSES.has(status)) error = `HTTP ${status} through proxy (${status === 407 ? "proxy auth rejected" : "blocked by pump.fun"})`;

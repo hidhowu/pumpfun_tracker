@@ -1,8 +1,10 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { getActiveProxyPool, recordProxyResult, PROXY_BROKEN_HTTP_STATUSES, randomPumpUserAgent } from "./proxyService.js";
-
-const execFileAsync = promisify(execFile);
+import { execCurl } from "./curlBinary.js";
+import {
+  getActiveProxyPool,
+  recordProxyResult,
+  PROXY_BROKEN_HTTP_STATUSES,
+  randomPumpUserAgent,
+} from "./proxyService.js";
 
 const STATUS_MARKER = "\n__HTTP_STATUS__";
 // How many different proxies to try (round-robin) before giving up on the
@@ -15,13 +17,16 @@ const MAX_PROXY_ATTEMPTS_PER_CALL = 2;
 let proxyRoundRobinIndex = 0;
 
 async function runCurl(url, proxyUrl, timeoutSec) {
-  const args = ["-s", "-m", String(timeoutSec), "-A", randomPumpUserAgent(), "-w", `${STATUS_MARKER}%{http_code}`];
+  const args = ["-s", "-m", String(timeoutSec), "-w", `${STATUS_MARKER}%{http_code}`];
   if (proxyUrl) args.push("--proxy", proxyUrl);
   args.push(url);
-  const { stdout } = await execFileAsync("curl", args);
+  const { stdout } = await execCurl(args, { fallbackUserAgent: randomPumpUserAgent() });
   const markerIndex = stdout.lastIndexOf(STATUS_MARKER);
   const body = markerIndex >= 0 ? stdout.slice(0, markerIndex) : stdout;
-  const status = markerIndex >= 0 ? Number(stdout.slice(markerIndex + STATUS_MARKER.length).trim()) : 0;
+  const status =
+    markerIndex >= 0
+      ? Number(stdout.slice(markerIndex + STATUS_MARKER.length).trim())
+      : 0;
   return { status, body };
 }
 
@@ -72,7 +77,11 @@ export async function curlGetJson(url, { timeoutSec = 10 } = {}) {
       if (!result.status || PROXY_BROKEN_HTTP_STATUSES.has(result.status)) {
         // Connected to the proxy, but it relayed no usable answer
         // (auth rejected / IP blocked) - that's this proxy failing, not the server.
-        recordProxyResult(proxy._id, false, `HTTP ${result.status || "no response"} through proxy`).catch(() => {});
+        recordProxyResult(
+          proxy._id,
+          false,
+          `HTTP ${result.status || "no response"} through proxy`,
+        ).catch(() => {});
         continue;
       }
       recordProxyResult(proxy._id, true).catch(() => {}); // fire-and-forget - never let bookkeeping slow down the actual response

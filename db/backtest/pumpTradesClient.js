@@ -1,10 +1,7 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execCurl } from "../curlBinary.js";
 import { getActiveProxyPool, recordProxyResult, redactCredentials, PROXY_BROKEN_HTTP_STATUSES, randomPumpUserAgent } from "../proxyService.js";
 import { resolveBacktestSettings } from "./settings.js";
 import { SlotPool, Semaphore, sleep } from "./slotPool.js";
-
-const execFileAsync = promisify(execFile);
 
 const BASE = () => process.env.PUMP_SWAP_API_BASE || "https://swap-api.pump.fun";
 const FRONTEND_BASE = () => process.env.PUMP_FRONTEND_API_BASE || "https://frontend-api-v3.pump.fun";
@@ -124,10 +121,10 @@ export class PumpTradesClient {
   }
 
   async #curl(url, proxyUrl) {
-    const args = ["-s", "-m", "20", "--compressed", "-A", randomPumpUserAgent(), "-H", "accept: application/json", "-w", `${MARKER}%{http_code}|%header{retry-after}`];
+    const args = ["-s", "-m", "20", "--compressed", "-H", "accept: application/json", "-w", `${MARKER}%{http_code}|%header{retry-after}`];
     if (proxyUrl) args.push("--proxy", proxyUrl);
     args.push(url);
-    const { stdout } = await execFileAsync("curl", args, { maxBuffer: 16 * 1024 * 1024 });
+    const { stdout } = await execCurl(args, { fallbackUserAgent: randomPumpUserAgent(), maxBuffer: 16 * 1024 * 1024 });
     const at = stdout.lastIndexOf(MARKER);
     const body = at >= 0 ? stdout.slice(0, at) : stdout;
     const [status, retryAfter] = at >= 0 ? stdout.slice(at + MARKER.length).split("|") : ["0", ""];
