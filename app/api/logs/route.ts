@@ -6,7 +6,7 @@ import { SystemLog } from "@/db/models/SystemLog";
 /**
  * Recent entries for the Logs UI section. ?category=rpc|tracker|trade
  * (omit for all), ?limit=N (default 100, capped 500). Entries older than
- * 24h are already gone by the time this runs - see SystemLog's TTL index.
+ * 2 days are already gone by the time this runs - see SystemLog's TTL index.
  */
 export async function GET(request: NextRequest) {
   const denied = await requireApiSession();

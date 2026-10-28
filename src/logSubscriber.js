@@ -20,6 +20,14 @@ const RESUBSCRIBE_STAGGER_MS = 500;
 // A request that gets no answer (or waits on a connection that never comes
 // back) must fail rather than hang forever and block callers like the sync loop.
 const REQUEST_TIMEOUT_MS = 20000;
+// Public/shared RPC nodes close WebSocket connections that go quiet, and
+// the browser-style WebSocket API has no ping frame - so send a tiny
+// JSON-RPC request on a timer purely to generate traffic in both
+// directions (the reply, even an error, counts). If nothing at all has
+// arrived for HEARTBEAT_DEAD_AFTER_MS the socket is half-open/dead and gets
+// replaced instead of waiting for a close event that may never come.
+const HEARTBEAT_INTERVAL_MS = 20000;
+const HEARTBEAT_DEAD_AFTER_MS = 60000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -63,6 +71,8 @@ export class LogSubscriber extends EventEmitter {
     // follows error, but that guarantee didn't hold here) - without this,
     // the only way out was a manual restart of the whole daemon.
     this._watchdogTimer = setInterval(() => this._watchdogCheck(), WATCHDOG_INTERVAL_MS);
+    this._lastMessageAt = Date.now(); // last time ANY data arrived on the current socket
+    this._heartbeatTimer = setInterval(() => this._heartbeat(), HEARTBEAT_INTERVAL_MS);
     this._connect();
   }
 
@@ -75,12 +85,12 @@ export class LogSubscriber extends EventEmitter {
     const url = this.wsUrls[this.urlIndex % this.wsUrls.length];
     const socket = new WebSocket(url);
     this.ws = socket;
-    let settled = false; // true once this socket's outcome (open, or disconnected) has been handled
+    let disconnectHandled = false; // true once this socket's disconnect has been handled - NOT set by "open", or a drop after a successful connect would be ignored
     const isCurrent = () => this.ws === socket; // ignore late events from a socket we've since moved on from (e.g. forceReconnect)
 
     socket.addEventListener("open", () => {
       if (!isCurrent()) return;
-      settled = true;
+      this._lastMessageAt = Date.now();
       this.reconnectDelayMs = MIN_RECONNECT_DELAY_MS;
       this.emit("connected", url);
       const previouslyWatched = [...this.subscriptions.keys()];
@@ -93,11 +103,12 @@ export class LogSubscriber extends EventEmitter {
     });
     socket.addEventListener("message", (event) => {
       if (!isCurrent()) return;
+      this._lastMessageAt = Date.now();
       this._onMessage(event.data);
     });
     socket.addEventListener("close", () => {
-      if (settled || !isCurrent()) return;
-      settled = true;
+      if (disconnectHandled || !isCurrent()) return;
+      disconnectHandled = true;
       this._handleDisconnect(url);
     });
     socket.addEventListener("error", (err) => {
@@ -107,8 +118,13 @@ export class LogSubscriber extends EventEmitter {
       // there. If it doesn't show up within a couple seconds, don't wait
       // forever - treat this attempt as failed and reconnect anyway.
       setTimeout(() => {
-        if (settled || !isCurrent()) return;
-        settled = true;
+        if (disconnectHandled || !isCurrent()) return;
+        disconnectHandled = true;
+        try {
+          socket.close();
+        } catch {
+          // best-effort - already closing or closed
+        }
         this._handleDisconnect(url);
       }, ERROR_WITHOUT_CLOSE_GRACE_MS);
     });
@@ -162,6 +178,27 @@ export class LogSubscriber extends EventEmitter {
     if (Date.now() - this._connectingSince < WATCHDOG_STALL_THRESHOLD_MS) return; // still within a normal connection attempt's budget
     this.emit("error", new Error("Watchdog: connection stalled with no reconnect scheduled - forcing a fresh attempt"));
     this._connect();
+  }
+
+  /**
+   * Keepalive + dead-socket detection, see HEARTBEAT_* above. The request
+   * id isn't registered in `pending`, so _onMessage simply ignores the reply.
+   */
+  _heartbeat() {
+    if (this.closedByUser) return;
+    const socket = this.ws;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    const silentMs = Date.now() - this._lastMessageAt;
+    if (silentMs > HEARTBEAT_DEAD_AFTER_MS) {
+      this.emit("error", new Error(`Heartbeat: no data for ${Math.round(silentMs / 1000)}s - replacing the connection`));
+      this.forceReconnect();
+      return;
+    }
+    try {
+      socket.send(JSON.stringify({ jsonrpc: "2.0", id: this.nextRequestId++, method: "logsUnsubscribe", params: [0] }));
+    } catch {
+      // a failed send means the socket is already going down - its close/error handlers take it from here
+    }
   }
 
   _ensureOpen() {
@@ -264,6 +301,7 @@ export class LogSubscriber extends EventEmitter {
     this.closedByUser = true;
     if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
     if (this._watchdogTimer) clearInterval(this._watchdogTimer);
+    if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
     this.ws?.close();
   }
 

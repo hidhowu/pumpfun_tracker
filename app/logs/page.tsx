@@ -81,7 +81,7 @@ export default function LogsPage() {
           <div>
             <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Logs</h1>
             <p className="text-sm text-muted-foreground">
-              Live tracker activity - no need to check the terminal or PM2. Entries older than 24h are cleaned up automatically.
+              Live tracker activity - no need to check the terminal or PM2. Entries older than 2 days are cleaned up automatically.
             </p>
           </div>
         </div>
@@ -114,7 +114,7 @@ export default function LogsPage() {
         </div>
       ) : !logs || logs.length === 0 ? (
         <div className="flex min-h-[240px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-card/40 text-center">
-          <p className="text-sm text-muted-foreground">No {category} activity in the last 24 hours.</p>
+          <p className="text-sm text-muted-foreground">No {category} activity in the last 2 days.</p>
         </div>
       ) : (
         <Card className="border-border/60">
