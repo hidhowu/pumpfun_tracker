@@ -85,7 +85,7 @@ const r = (n) => (Number.isFinite(n) ? n : null);
  * check after a fill comes somewhere between 1 and `interval` seconds later; derived from the
  * trade so the same backtest always gives the same answer.
  */
-function sweepPhase(key, interval) {
+export function sweepPhase(key, interval) {
   let h = 0;
   for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
   return 1 + (h % interval);

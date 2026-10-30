@@ -29,6 +29,10 @@ const WalletPositionSchema = new Schema({
 
   armedTrailingStopIds: { type: [String], default: [] },
 
+  // "api_plus" wallets only (db/simulation/apiPlus.js): when the position filled and the schedule of its price checks, all in epoch seconds.
+  // Null on every other position, which the ordinary sweep checks instead.
+  apiPlus: { type: Schema.Types.Mixed, default: null },
+
   maxValueUsd: { type: Number, required: true },
   maxUnrealizedPnlUsd: { type: Number, required: true },
   maxUnrealizedPnlPercent: { type: Number, required: true },

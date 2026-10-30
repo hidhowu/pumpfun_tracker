@@ -61,6 +61,8 @@ const LiveWalletSchema = new Schema({
   tradeDelaySeconds: { type: Number, default: 0 },
   // New buys are switched off (dry or live). Positions already open are still sold when they exit.
   paused: { type: Boolean, default: false },
+  // "Reset dry run": the dry-run comparison and the day-by-day exit-style results count only the dry trades opened after this moment (nothing is deleted).
+  dryResetAt: { type: Date, default: null },
   // The wallet's address lookup table (db/live/trading/lookupTable.js): makes the bigger swaps (paying with SOL, token-quoted markets) fit one transaction.
   lookupTable: { type: String, default: null },
   connectedAt: { type: Date, default: null },

@@ -10,8 +10,9 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getWalletPositions } from "@/lib/api";
-import { formatAddress, formatRelativeTime, formatUsd } from "@/lib/format";
+import { formatAddress, formatExactTime, formatRelativeTime, formatUsd } from "@/lib/format";
 import type { WalletPositionView } from "@/lib/types";
+import { TradeDetailDialog } from "@/components/traders/trade-history-list";
 
 type Props = { walletId: string };
 
@@ -29,6 +30,7 @@ export function WalletTradeHistory({ walletId }: Props) {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<WalletPositionView | null>(null);
 
   const load = useCallback(
     async (targetPage: number) => {
@@ -86,7 +88,7 @@ export function WalletTradeHistory({ walletId }: Props) {
                   <TableHead className="text-right">Peak</TableHead>
                   <TableHead className="text-right">Lowest</TableHead>
                   <TableHead>Closed by</TableHead>
-                  <TableHead className="text-right">Closed</TableHead>
+                  <TableHead className="text-right">Sold</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -96,10 +98,11 @@ export function WalletTradeHistory({ walletId }: Props) {
                   const peakPercent = position.maxUnrealizedPnlPercent;
                   const lowestPercent = position.minUnrealizedPnlPercent;
                   return (
-                    <TableRow key={position._id}>
+                    <TableRow key={position._id} className="cursor-pointer hover:bg-muted/40" onClick={() => setSelected(position)}>
                       <TableCell>
                         <span className="inline-flex min-w-0 items-center gap-1"><a
                           href={`/traders/${position.traderAddress}`}
+                          onClick={(e) => e.stopPropagation()}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-primary"
@@ -161,7 +164,12 @@ export function WalletTradeHistory({ walletId }: Props) {
                           {position.closeReason ? CLOSE_REASON_LABEL[position.closeReason] ?? position.closeReason : "—"}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right text-xs text-muted-foreground">{formatRelativeTime(position.closedAt)}</TableCell>
+                      <TableCell className="text-right text-xs whitespace-nowrap text-muted-foreground">
+                        <span className="inline-flex flex-col items-end">
+                          <span>{formatExactTime(position.closedAt)}</span>
+                          <span className="text-[11px] opacity-80">{formatRelativeTime(position.closedAt)}</span>
+                        </span>
+                      </TableCell>
                     </TableRow>
                   );
                 })}
@@ -170,6 +178,8 @@ export function WalletTradeHistory({ walletId }: Props) {
           </div>
         )}
       </CardContent>
+
+      <TradeDetailDialog position={selected} onClose={() => setSelected(null)} />
     </Card>
   );
 }

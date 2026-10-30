@@ -148,7 +148,8 @@ export async function evaluateWalletTrade(trade, { trackingMethod = "logs" } = {
   for (const walletTrader of walletTraders) {
     const wallet = await Wallet.findById(walletTrader.walletId);
     if (!wallet) continue; // stale membership row (wallet deleted) - db/walletService.js's deleteWallet cascades this away, but skip defensively either way
-    if ((wallet.settings?.trackingMethod || "logs") !== trackingMethod) continue; // this wallet follows its traders the other way
+    const method = wallet.settings?.trackingMethod || "logs";
+    if ((method === "api_plus" ? "api" : method) !== trackingMethod) continue; // this wallet follows its traders the other way ("api_plus" detects like "api")
 
     try {
       const actioned =

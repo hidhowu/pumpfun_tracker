@@ -14,6 +14,7 @@ import { getBacktestPositions } from "@/lib/backtest-api";
 import { formatAddress, formatUsd } from "@/lib/format";
 import type { BacktestPositionView } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
+import { TradeDetailDialog } from "./address-trade-history";
 import { CLOSE_REASON_LABEL, SKIP_REASON_LABEL, formatDateTime, formatDuration, formatSignedPercent, pnlTone } from "./shared";
 
 type StatusFilter = "default" | "closed" | "open" | "skipped";
@@ -26,17 +27,18 @@ function formatPrice(price: number | null): string {
   return `$${price < 0.01 ? price.toExponential(3) : price.toPrecision(4)}`;
 }
 
-function PositionRow({ p, showAddress }: { p: BacktestPositionView; showAddress: boolean }) {
+function PositionRow({ p, showAddress, onSelect }: { p: BacktestPositionView; showAddress: boolean; onSelect: () => void }) {
   const held = p.openedAt && p.closedAt ? new Date(p.closedAt).getTime() - new Date(p.openedAt).getTime() : null;
   const pnlUsd = p.status === "open" ? p.unrealizedPnlUsd : p.realizedPnlUsd;
   const pnlPct = p.status === "open" ? p.unrealizedPnlPercent : p.realizedPnlPercent;
 
   return (
-    <TableRow className="border-border/60">
+    <TableRow className="cursor-pointer border-border/60 hover:bg-muted/40" onClick={onSelect}>
       <TableCell className="max-w-40">
         <div className="flex min-w-0 flex-col gap-0.5">
           <span className="inline-flex min-w-0 items-center gap-1"><a
             href={`https://pump.fun/coin/${p.mint}`}
+            onClick={(e) => e.stopPropagation()}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex min-w-0 items-center gap-1 font-mono text-xs hover:text-primary"
@@ -111,6 +113,7 @@ export function PositionsTable({ runId, address, refreshKey = 0 }: { runId: stri
   const [status, setStatus] = useState<StatusFilter>("default");
   const [page, setPage] = useState(1);
   const [data, setData] = useState<{ positions: BacktestPositionView[]; total: number; totalPages: number } | null>(null);
+  const [selected, setSelected] = useState<BacktestPositionView | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -171,7 +174,7 @@ export function PositionsTable({ runId, address, refreshKey = 0 }: { runId: stri
               </TableHeader>
               <TableBody>
                 {data.positions.map((p) => (
-                  <PositionRow key={p._id} p={p} showAddress={!address} />
+                  <PositionRow key={p._id} p={p} showAddress={!address} onSelect={() => setSelected(p)} />
                 ))}
               </TableBody>
             </Table>
@@ -191,6 +194,7 @@ export function PositionsTable({ runId, address, refreshKey = 0 }: { runId: stri
           )}
         </>
       )}
+      <TradeDetailDialog position={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }

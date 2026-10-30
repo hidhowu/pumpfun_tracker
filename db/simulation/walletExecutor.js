@@ -14,6 +14,7 @@ import { TradeError } from "../live/trading/pumpSwap.js";
 import { priceBuy, priceSell, valueMany } from "./sdkQuote.js";
 import { tokenHasTrades } from "./apiClients.js";
 import { CONFIRMED_EXITS, buildTrigger, confirmExit, recoveryLevel, triggerHolds } from "./exitTrigger.js";
+import { INDEX_LAG_SEC, apiPlusIntervalSeconds, apiPlusSchedule, isApiPlusWallet, poolPriceAt } from "./apiPlus.js";
 
 /** Wallets that follow their traders through pump.fun's API (Wallet.settings.trackingMethod) fill and are checked at SDK quotes, not spot prices. */
 const isApiWallet = (wallet) => wallet?.settings?.trackingMethod === "api";
@@ -57,6 +58,28 @@ async function retryWithoutPrice(pending) {
   pending.leaseUntil = null;
   pending.triggerAt = new Date(Date.now() + 1000 * pending.attempts);
   await pending.save();
+}
+
+/** How long an "api_plus" fill waits for the trade list to show its price before it takes the best answer there is (buy / sell). */
+const API_PLUS_MAX_WAIT_SEC = { buy: 25, sell: 60 };
+
+/**
+ * The pool price an "api_plus" fill takes (db/simulation/apiPlus.js): at the moment the fill was due, from the token's trade list. Not listed yet = the fill
+ * is put back for a second without using a retry, until it has waited long enough; null then means there is no price at all (the caller retries/skips).
+ * @returns {Promise<{ priceUsd: number, source: string } | "wait" | null>}
+ */
+async function apiPlusFillPrice(pending) {
+  pending.priceAtSec ??= pending.triggerAt.getTime() / 1000;
+  const waitedSec = Date.now() / 1000 - pending.priceAtSec;
+  const force = waitedSec >= API_PLUS_MAX_WAIT_SEC[pending.action];
+  const price = await poolPriceAt(pending.mint, pending.priceAtSec, { force });
+  if (price) return { ...price, atSec: pending.priceAtSec };
+  if (force) return null;
+  pending.status = "pending";
+  pending.leaseUntil = null;
+  pending.triggerAt = new Date(Date.now() + 1000);
+  await pending.save();
+  return "wait";
 }
 
 async function markDone(pending) {
@@ -105,7 +128,18 @@ async function executeWalletBuy(pending) {
     let priceUsd;
     let tokenAmount;
     let method = "spot";
-    if (isApiWallet(walletDoc)) {
+    let apiPlus = null;
+    if (isApiPlusWallet(walletDoc)) {
+      // Same last check as an API wallet, then the fill is the pool price at the moment the buy was due - what the backtest fills at.
+      if (!(await tokenHasTrades(pending.mint))) return markSkipped(pending, "no trades on this token (pump.fun's trades API returned none)");
+      const price = await apiPlusFillPrice(pending);
+      if (price === "wait") return;
+      if (!price) return retryWithoutPrice(pending);
+      priceUsd = price.priceUsd;
+      tokenAmount = spendUsd / priceUsd;
+      method = "api_plus";
+      apiPlus = apiPlusSchedule({ mint: pending.mint, signature: pending.sourceSignature, fillAtSec: price.atSec, intervalSec: await apiPlusIntervalSeconds() });
+    } else if (isApiWallet(walletDoc)) {
       // Last check before an API wallet buys: the token must have real trades on pump.fun. An empty answer skips the buy; a failed
       // request throws (and is retried) rather than being mistaken for an empty token.
       if (!(await tokenHasTrades(pending.mint))) return markSkipped(pending, "no trades on this token (pump.fun's trades API returned none)");
@@ -136,6 +170,7 @@ async function executeWalletBuy(pending) {
       jitoFeeUsd: buyFees.jitoFeeUsd,
       totalCost,
       tokenAmount,
+      apiPlus,
     });
   }
 
@@ -170,6 +205,7 @@ async function executeWalletBuy(pending) {
       buyJitoFeeUsd: fill.jitoFeeUsd,
       buyFeeRealizedAtOpen: true,
       buyPriceUsd: fill.priceUsd,
+      apiPlus: fill.apiPlus ?? null,
       openTriggerSignature: pending.sourceSignature,
       maxValueUsd: spendUsd,
       maxUnrealizedPnlUsd: initialUnrealized.unrealizedUsd,
@@ -335,7 +371,14 @@ async function executeWalletSell(pending) {
   if (!plan) {
     let priceUsd;
     let method = "spot";
-    if (isApiWallet(walletDoc)) {
+    if (position.apiPlus) {
+      // Opened by an "api_plus" wallet: sold at the pool price at the moment the exit was due (a decided exit: the check moment + the execution delay).
+      const price = await apiPlusFillPrice(pending);
+      if (price === "wait") return;
+      if (!price) return retryWithoutPrice(pending);
+      priceUsd = price.priceUsd;
+      method = "api_plus";
+    } else if (isApiWallet(walletDoc)) {
       // What pump.fun's SDK says selling the whole position pays out right now (the sale's fee is already in it).
       const quote = await priceSell(pending.mint, position.tokenAmount).catch((err) => {
         if (err instanceof TradeError) return null; // can't be priced at all: retried like a missing price, then skipped
@@ -350,7 +393,8 @@ async function executeWalletSell(pending) {
     }
 
     // A stop-loss / trailing stop is only carried out while the price at the fill still breaches its level (db/simulation/exitTrigger.js).
-    if (pending.trigger && CONFIRMED_EXITS.has(pending.closeReason)) {
+    // (not for an api_plus position: the backtest acts on the sampled price alone, and so does this.)
+    if (pending.trigger && CONFIRMED_EXITS.has(pending.closeReason) && method !== "api_plus") {
       const { unrealizedPercent } = computeUnrealized(position.tokenAmount * priceUsd, position.costBasisUsd + position.buyFeeUsd);
       if (!triggerHolds(pending.trigger, unrealizedPercent)) {
         return markSkipped(
@@ -392,7 +436,7 @@ async function executeWalletSell(pending) {
  * already queued - the trader's own sell, or an exit from an earlier sweep -
  * this is a no-op. Returns true if a new exit was queued.
  */
-async function queueExit(position, executionDelaySeconds, closeReason, trigger = null) {
+async function queueExit(position, executionDelaySeconds, closeReason, trigger = null, decidedAtSec = null) {
   // A live wallet connected to this wallet follows the exit at once, with no execution delay (db/live/trading/mirror.js).
   mirrorExit(position, closeReason).catch((err) =>
     logEvent("trade", `Failed to queue the live ${closeReason} exit of ${position.mint} for wallet ${position.walletId}: ${err.message}`, {
@@ -408,7 +452,8 @@ async function queueExit(position, executionDelaySeconds, closeReason, trigger =
       action: "sell",
       closeReason,
       trigger,
-      triggerAt: new Date(Date.now() + (executionDelaySeconds || 0) * 1000),
+      // An api_plus exit is decided at a check moment that is already a little in the past: it fills the delay after THAT moment, not after now.
+      triggerAt: decidedAtSec != null ? new Date((decidedAtSec + (executionDelaySeconds || 0)) * 1000) : new Date(Date.now() + (executionDelaySeconds || 0) * 1000),
       sourceSignature: `exit:${closeReason}:${position._id}`,
     });
     return true;
@@ -475,7 +520,7 @@ export async function processDueWalletExecutions() {
  * intra-trade peak/dip gets missed between checks.
  */
 export async function checkWalletRiskExits() {
-  const openPositions = await WalletPosition.find({ status: "open" });
+  const openPositions = await WalletPosition.find({ status: "open", apiPlus: null }); // api_plus positions have their own schedule: checkApiPlusExits
 
   // Same reasoning as checkRiskExits: warm the cache for every distinct
   // mint in bounded batches before the per-position fan-out below, instead
@@ -620,4 +665,119 @@ export async function checkWalletRiskExits() {
   );
 
   return results.filter(Boolean).length;
+}
+
+const API_PLUS_MAX_CATCH_UP = 12; // check moments judged per position per call, if the daemon was away for a while
+const API_PLUS_PARALLEL = 8;
+
+/**
+ * The risk sweep of "api_plus" positions: the backtest's sampling (db/backtest/simulator.js) run live. Each position has its own schedule of
+ * check moments (Te + phase + k x interval, see db/simulation/apiPlus.js); a moment is judged on the pool price AT that moment, read from the token's
+ * trade list once it is old enough to be listed. Same rules in the same order as the backtest - stop-loss, take-profit, max hold time, trailing
+ * stops - with no re-check of a low reading. An exit is decided at its moment and fills the execution delay after it.
+ *
+ * Meant to be called about once a second: the schedule, not the call, decides when a position is looked at. Returns how many exits were queued.
+ */
+export async function checkApiPlusExits() {
+  const positions = await WalletPosition.find({ status: "open", "apiPlus.nextSweepAtSec": { $ne: null } });
+  if (positions.length === 0) return 0;
+
+  const wallets = new Map();
+  for (const walletId of new Set(positions.map((p) => String(p.walletId)))) wallets.set(walletId, (await Wallet.findById(walletId)) ?? null);
+  const blacklisted = new Set(
+    (await Trader.find({ address: { $in: [...new Set(positions.map((p) => p.traderAddress))] }, status: "blacklisted" }, { address: 1 }).lean()).map((t) => t.address)
+  );
+
+  let queued = 0;
+  for (let i = 0; i < positions.length; i += API_PLUS_PARALLEL) {
+    const results = await Promise.all(
+      positions.slice(i, i + API_PLUS_PARALLEL).map((position) =>
+        sweepApiPlusPosition(position, wallets.get(String(position.walletId)), blacklisted.has(position.traderAddress)).catch((err) => {
+          logEvent("trade", `[wallet] API+ check of ${position.mint} failed: ${err.message}`, { level: "warn", meta: { walletId: String(position.walletId), mint: position.mint } });
+          return false;
+        })
+      )
+    );
+    queued += results.filter(Boolean).length;
+  }
+  return queued;
+}
+
+async function sweepApiPlusPosition(position, wallet, isBlacklisted) {
+  if (!wallet) return false;
+  const settings = wallet.settings;
+  if (isBlacklisted) return !!(await queueExit(position, settings.executionDelaySeconds, "blacklisted"));
+
+  const stopLoss = settings.stopLossPercent;
+  const takeProfit = settings.takeProfitPercent;
+  const maxHold = settings.maxTradeTimeSeconds > 0 ? settings.maxTradeTimeSeconds : 0;
+  const trailingStops = settings.trailingStops || [];
+  if ((stopLoss == null) && (takeProfit == null) && maxHold === 0 && trailingStops.length === 0) return false; // nothing to judge, as in the backtest
+
+  const { fillAtSec, intervalSec } = position.apiPlus;
+  const totalCost = position.costBasisUsd + position.buyFeeUsd;
+  const armed = new Set(position.armedTrailingStopIds.map(String));
+  let nextAt = position.apiPlus.nextSweepAtSec;
+
+  for (let n = 0; n < API_PLUS_MAX_CATCH_UP; n++) {
+    const nowSec = Date.now() / 1000;
+    if (nowSec < nextAt + INDEX_LAG_SEC) return false;
+    const sample = await poolPriceAt(position.mint, nextAt, { nowSec });
+    if (!sample) return false; // not listed yet - looked at again on the next call
+    const at = nextAt;
+    nextAt = at + intervalSec;
+
+    const currentValue = position.tokenAmount * sample.priceUsd;
+    const { unrealizedUsd, unrealizedPercent } = computeUnrealized(currentValue, totalCost);
+
+    // Same decision order as the backtest's evaluate().
+    let reason = null;
+    let threshold = null;
+    let rule = null;
+    if (stopLoss != null && unrealizedPercent <= -Math.abs(stopLoss)) {
+      reason = "stop_loss";
+      threshold = -Math.abs(stopLoss);
+    } else if (takeProfit != null && unrealizedPercent >= Math.abs(takeProfit)) {
+      reason = "take_profit";
+      threshold = Math.abs(takeProfit);
+    } else if (maxHold > 0 && at >= fillAtSec + maxHold) {
+      reason = "max_hold_time";
+    } else {
+      for (const r of trailingStops) {
+        const id = String(r._id);
+        if (!armed.has(id)) {
+          if (unrealizedPercent >= r.armPercent) armed.add(id);
+        } else if (unrealizedPercent <= r.exitPercent) {
+          reason = "trailing_stop";
+          threshold = r.exitPercent;
+          rule = r;
+          break;
+        }
+      }
+    }
+
+    // This moment is judged: move the schedule on, record the peak / trough and which trailing stops are armed - in one guarded write.
+    const set = { "apiPlus.nextSweepAtSec": nextAt };
+    if (currentValue > position.maxValueUsd) Object.assign(set, { maxValueUsd: currentValue, maxUnrealizedPnlUsd: unrealizedUsd, maxUnrealizedPnlPercent: unrealizedPercent });
+    if (position.minValueUsd === null || currentValue < position.minValueUsd) Object.assign(set, { minValueUsd: currentValue, minUnrealizedPnlUsd: unrealizedUsd, minUnrealizedPnlPercent: unrealizedPercent });
+    const advanced = await WalletPosition.updateOne(
+      { _id: position._id, status: "open", "apiPlus.nextSweepAtSec": at },
+      { $set: { ...set, armedTrailingStopIds: [...armed] } }
+    );
+    if (advanced.modifiedCount === 0) return false; // another pass judged this moment (or the position closed)
+    Object.assign(position, { maxValueUsd: set.maxValueUsd ?? position.maxValueUsd, minValueUsd: set.minValueUsd ?? position.minValueUsd });
+
+    if (reason) {
+      const trigger = buildTrigger(reason, {
+        thresholdPercent: threshold,
+        unrealizedPercent,
+        valueUsd: currentValue,
+        priceUsd: sample.priceUsd,
+        priceSource: `api_plus_${sample.source}`,
+        rule,
+      });
+      return !!(await queueExit(position, settings.executionDelaySeconds, reason, trigger, at));
+    }
+  }
+  return false;
 }

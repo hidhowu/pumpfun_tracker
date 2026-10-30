@@ -84,6 +84,8 @@ const LiveLotSchema = new Schema({
   maxValueUsd: { type: Number, default: null },
   minValueUsd: { type: Number, default: null },
   armedTrailingStopIds: { type: [String], default: [] },
+  // Connected to an "api_plus" simulation wallet: the last price-check moment (epoch seconds) this lot was judged at (db/simulation/apiPlus.js).
+  apiPlusLastAtSec: { type: Number, default: null },
 
   // Dry run only: what each exit style would have done (key = style id: "own", "follow", "cd180", ... each a DryExit), so they can be compared.
   // The lot closes when the style the wallet is set to has decided; the others go on being worked out in the background until they have decided too

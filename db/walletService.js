@@ -46,7 +46,7 @@ const NUMBER_FIELDS = [
 // null = disabled
 const NULLABLE_NUMBER_FIELDS = ["stopLossPercent", "takeProfitPercent", "panicLossUsd"];
 const BOOLEAN_FIELDS = ["autoResetBalanceDaily"];
-export const TRACKING_METHODS = ["logs", "api"];
+export const TRACKING_METHODS = ["logs", "api", "api_plus"];
 
 /** Validates a settings object (or partial patch) and returns only the accepted keys. THROWS an Error naming the first bad setting - callers turn that into a 400. */
 export function validateWalletSettings(patch) {

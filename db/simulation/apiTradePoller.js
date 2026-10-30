@@ -74,7 +74,7 @@ export class ApiTradePoller {
       this.intervalMs = 1000 / Math.max(0.2, perSecond);
       this.targetPerSecond = perSecond;
 
-      const wallets = await Wallet.find({ "settings.trackingMethod": "api" }, { _id: 1 }).lean();
+      const wallets = await Wallet.find({ "settings.trackingMethod": { $in: ["api", "api_plus"] } }, { _id: 1 }).lean();
       const addresses = wallets.length
         ? await WalletTrader.distinct("traderAddress", { walletId: { $in: wallets.map((w) => w._id) } })
         : [];

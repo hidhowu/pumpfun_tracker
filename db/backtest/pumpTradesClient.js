@@ -3,14 +3,20 @@ import { getActiveProxyPool, recordProxyResult, redactCredentials, PROXY_BROKEN_
 import { resolveBacktestSettings } from "./settings.js";
 import { SlotPool, Semaphore, sleep } from "./slotPool.js";
 
-const BASE = () => process.env.PUMP_SWAP_API_BASE || "https://swap-api.pump.fun";
 const FRONTEND_BASE = () => process.env.PUMP_FRONTEND_API_BASE || "https://frontend-api-v3.pump.fun";
+// CAIP-2 id of Solana mainnet, as the /trades/<chain>/<mint> path wants it (colon percent-encoded).
+const SOLANA_CHAIN_ID = "solana%3A5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 const MARKER = "\n__PUMPCLIENT__";
 const REFRESH_MS = 15_000;
 const MAX_ATTEMPTS = 10;
 const PAGE_LIMIT = 100; // the API's maximum
-// Tuple (timestamp, slotIndexId) is the keyset: a huge id with timestamp T means "everything up to and including second T".
-const MAX_ID = "9".repeat(22);
+// A page of a token's trades is asked for with `before=<ordinalKey>` (blockId-txIndex-eventIndex-blockTimeMs): trades strictly older than it, newest
+// first, time first - so MAX_KEY plus a time T means "everything up to and including second T". The next page starts from the oldest row's key.
+const MAX_KEY = "999999999999-999999-999999"; // above any real block/tx/event index, so only the time part decides (a 20-digit block id is rejected: overflow)
+const WSOL = "So11111111111111111111111111111111111111112";
+// The server-side USD floor is kept this far under the exact SOL floor (applied to each row below), so a SOL price that moved since the
+// last page never hides a trade that is above the floor.
+const MIN_USD_SAFETY = 0.9;
 const DIRECT_ID = "direct";
 // The user-trades endpoint now and then answers 200 with an empty page in the middle of a history (same cursor handed back);
 // asking again gets the real page, so an empty page with an unchanged cursor is retried this many times before giving up.
@@ -30,23 +36,37 @@ export class EmptyPageError extends Error {
   }
 }
 
-/** Normalises one API trade: numbers instead of decimal strings, seconds instead of ISO. */
+const pad = (n, width) => String(n).padStart(width, "0");
+
+/**
+ * Normalises one row of /trades/<chain>/<mint>: numbers instead of decimal strings, seconds instead of ms.
+ * `valueNative` is the trade's worth in SOL whatever the pool is quoted in, so valueUsd / valueNative is the SOL price even for a
+ * pool quoted in another token (where priceQuote is not a SOL price); priceSol is derived from it.
+ */
 function normalizeTrade(t) {
+  const [block, txIndex, eventIndex] = t.ordinalKey.split("-");
+  const tokens = Number(t.baseAmount.raw) / 10 ** t.baseAmount.decimals;
+  const amountUsd = Number(t.valueUsd);
+  const amountSol = Number(t.valueNative);
+  const usdPerSol = amountSol > 0 ? amountUsd / amountSol : t.quote?.id === WSOL ? Number(t.quotePriceUsd) : NaN;
+  const priceUsd = Number(t.priceUsd);
   return {
-    id: t.slotIndexId,
-    sig: t.tx,
-    ts: Math.floor(Date.parse(t.timestamp) / 1000),
-    user: t.userAddress,
-    type: t.type,
-    program: t.program,
+    // zero-padded so that comparing ids as strings (see byTime) orders them like the numbers they are
+    id: `${pad(block, 12)}-${pad(txIndex, 6)}-${pad(eventIndex, 6)}`,
+    key: t.ordinalKey,
+    sig: t.txId,
+    ts: Math.floor(t.blockTimeMs / 1000),
+    user: t.trader?.address,
+    type: t.side,
+    program: t.venue,
     // Pool price immediately BEFORE this trade - i.e. the pool state at that moment.
-    priceUsd: Number(t.priceUsd),
-    priceSol: Number(t.priceSol),
+    priceUsd,
+    priceSol: priceUsd / usdPerSol,
     // This trade's own average execution price.
-    fillPriceUsd: Number(t.fillPriceUsd),
-    amountSol: Number(t.amountSol),
-    amountUsd: Number(t.amountUsd),
-    baseAmount: Number(t.baseAmount),
+    fillPriceUsd: tokens > 0 ? amountUsd / tokens : NaN,
+    amountSol,
+    amountUsd,
+    baseAmount: tokens,
   };
 }
 
@@ -110,14 +130,6 @@ export class PumpTradesClient {
   /** How many requests can usefully run at once: one per proxy (1 when going direct). Valid after refresh(). */
   get lanes() {
     return Math.max(1, this.slots.size);
-  }
-
-  #url(mint, cursor) {
-    const s = this.settings;
-    const qs = new URLSearchParams({ limit: String(PAGE_LIMIT), cursor });
-    if (s.minSolAmount > 0) qs.set("minSolAmount", String(s.minSolAmount));
-    if (s.program) qs.set("program", s.program);
-    return `${BASE()}/v2/coins/${mint}/trades?${qs}`;
   }
 
   async #curl(url, proxyUrl) {
@@ -199,29 +211,41 @@ export class PumpTradesClient {
     throw lastError || new Error("pump.fun request failed");
   }
 
-  /** One page of history: trades strictly before `cursor`, newest first. */
-  async fetchPage(mint, cursor) {
+  /**
+   * One page of history: trades strictly before `before` (an ordinalKey), newest first. `nextCursor` is the key to pass as `before` for the next page
+   * (the oldest row the API returned); `hasMore` is true while pages come back full - the API says nothing about the end of the history itself.
+   * The dust floor (settings.minSolAmount, in SOL) is applied here exactly; the server is also asked for a slightly lower USD floor so most dust never
+   * travels, once a SOL price is known from an earlier page.
+   */
+  async fetchPage(mint, before) {
     await this.refresh();
-    const { status, body } = await this.#send(this.#url(mint, cursor));
+    const s = this.settings;
+    const qs = new URLSearchParams({ limit: String(PAGE_LIMIT), before });
+    if (s.program === "pump") qs.set("venue", "pump"); // the API knows only "pump" and "all" (omitted)
+    if (s.minSolAmount > 0 && this.usdPerSol > 0) qs.set("minUsd", String(s.minSolAmount * this.usdPerSol * MIN_USD_SAFETY));
+    const { status, body } = await this.#send(`${FRONTEND_BASE()}/trades/${SOLANA_CHAIN_ID}/${mint}?${qs}`);
     if (status === 404) return { trades: [], nextCursor: null, hasMore: false };
-    const json = JSON.parse(body);
-    const trades = (json.trades || []).map(normalizeTrade);
-    return { trades, nextCursor: json.pagination?.nextCursor ?? null, hasMore: !!json.pagination?.hasMore };
+    const rows = JSON.parse(body).trades || [];
+    const all = rows.map(normalizeTrade);
+    const known = all.find((t) => t.priceSol > 0);
+    if (known) this.usdPerSol = known.priceUsd / known.priceSol;
+    const trades = s.minSolAmount > 0 ? all.filter((t) => t.amountSol >= s.minSolAmount) : all;
+    return { trades, nextCursor: all.at(-1)?.key ?? null, hasMore: rows.length >= PAGE_LIMIT };
   }
 
   /**
-   * The newest trades of a token, newest first - no cursor, no range. `program` ("pump" = the bonding curve, "pump_amm" = the pool) and
-   * `minSolAmount` filter them the way the API's own query parameters do. An unknown token answers 404, which is an empty list here.
+   * The newest trades of a token, newest first - no cursor, no range. `minUsd` filters out smaller trades the way the API's own query
+   * parameter does. An unknown token answers 404, which is an empty list here. Rows are in the new /trades/<chain>/<mint> shape
+   * (txId, side, valueUsd, ...), not the one normalizeTrade reads.
    * @returns {Promise<object[]>}
    */
-  async fetchRecentTokenTrades(mint, { limit = 1, program = "", minSolAmount = 0 } = {}) {
+  async fetchRecentTokenTrades(mint, { limit = 1, minUsd = 0 } = {}) {
     await this.refresh();
     const qs = new URLSearchParams({ limit: String(limit) });
-    if (minSolAmount > 0) qs.set("minSolAmount", String(minSolAmount));
-    if (program) qs.set("program", program);
-    const { status, body } = await this.#send(`${BASE()}/v2/coins/${mint}/trades?${qs}`);
+    if (minUsd > 0) qs.set("minUsd", String(minUsd));
+    const { status, body } = await this.#send(`${FRONTEND_BASE()}/trades/${SOLANA_CHAIN_ID}/${mint}?${qs}`);
     if (status === 404) return [];
-    return (JSON.parse(body).trades || []).map(normalizeTrade);
+    return JSON.parse(body).trades || [];
   }
 
   /**
@@ -294,7 +318,7 @@ export class PumpTradesClient {
    * @returns {Promise<{trades: object[], prior: object|null, pages: number, exhausted: boolean, truncated: boolean}>}
    */
   async fetchRange(mint, fromSec, toSec, { maxPages = 400 } = {}) {
-    let cursor = `${MAX_ID}-${toSec * 1000}`;
+    let cursor = `${MAX_KEY}-${toSec * 1000}`;
     const seen = new Set();
     const inside = [];
     let prior = null;
@@ -321,7 +345,8 @@ export class PumpTradesClient {
         inside.push(t);
       }
       if (reachedBefore) break;
-      if (!page.hasMore || !page.nextCursor || page.trades.length === 0) {
+      // (a page can come back empty after the dust filter and still have history behind it - only a short page or no cursor ends it)
+      if (!page.hasMore || !page.nextCursor) {
         exhausted = true;
         break;
       }

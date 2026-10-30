@@ -33,6 +33,26 @@ export function formatAddress(address: string, chars = 4): string {
   return `${address.slice(0, chars)}…${address.slice(-chars)}`;
 }
 
+/** The exact moment, to the second, in UTC (the same clock the backtest and the logs use): "Oct 31, 14:05:09". */
+export function formatExactTime(input: string | number | Date | null | undefined): string {
+  if (!input) return "—";
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "UTC" });
+}
+
+/** "12s", "4m 05s", "2h 10m": how long something lasted. */
+export function formatHeld(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m ${String(total % 60).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
 export function formatRelativeTime(input: string | number | Date | null | undefined): string {
   if (!input) return "never";
   const date = new Date(input);

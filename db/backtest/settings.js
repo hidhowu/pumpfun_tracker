@@ -2,7 +2,7 @@ import { BacktestSettings } from "../models/BacktestSettings.js";
 import { HttpRpcEndpoint } from "../models/HttpRpcEndpoint.js";
 import { Proxy } from "../models/Proxy.js";
 
-// Measured against swap-api.pump.fun: about 1 request per second per IP is
+// Measured against pump.fun's trades API: about 1 request per second per IP is
 // sustained without 429s; faster bursts get blocked with a growing penalty.
 const DEFAULT_PROXY_RPS = 0.8;
 // Typical paid-tier Solana RPC; the user lowers this per their provider if needed.

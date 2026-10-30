@@ -37,7 +37,7 @@ const FIXED_FIELDS: Array<{ key: FixedField; label: string; help: string; step?:
   { key: "userTradesRps", label: "Trade-history requests / second, per proxy", help: "Reading an address's own trades (the fast source) goes through the same proxies. pump.fun allows about 10/s per IP on that endpoint.", step: "0.5" },
   { key: "fillLatencySeconds", label: "Extra reaction time on every copied trade (seconds)", help: "Default for new backtests: how long live takes, on top of the profile's delay, to notice a trader's trade and act on it (about 3s measured). It can be changed per backtest when creating one. 0 = react instantly.", step: "0.5" },
   { key: "directRps", label: "Requests / second with no proxies", help: "Used only when no proxy is configured - direct requests from this machine's own IP.", step: "0.1" },
-  { key: "minSolAmount", label: "Ignore pool trades under (SOL)", help: "pump.fun's minSolAmount filter. Smaller trades barely move the price and make histories much longer.", step: "0.01" },
+  { key: "minSolAmount", label: "Ignore pool trades under (SOL)", help: "Smaller trades barely move the price and make histories much longer. Applied exactly here, and passed to pump.fun as a USD floor so most of them are never downloaded.", step: "0.01" },
   { key: "initialWindowSeconds", label: "First look-ahead window (seconds)", help: "Trade history is read in windows of this size, then resized to how busy the token is." },
   { key: "maxPagesPerPosition", label: "Give up on a trade after (pages of 100)", help: "Safety cap for tokens with an extreme number of trades while held." },
 ];
@@ -194,9 +194,9 @@ export function BacktestSettingsDialog() {
             ))}
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="bt-program">pump.fun &quot;program&quot; filter</Label>
+              <Label htmlFor="bt-program">pump.fun venue filter</Label>
               <Input id="bt-program" value={form.program} onChange={(e) => setForm({ ...form, program: e.target.value })} className="w-32" placeholder="pump" />
-              <p className="text-xs text-muted-foreground">Sent as the program parameter of the trades query. Leave empty to omit it.</p>
+              <p className="text-xs text-muted-foreground">&quot;pump&quot; asks only for bonding-curve-program trades (the venue parameter); anything else, or empty, asks for all venues.</p>
             </div>
           </div>
         )}

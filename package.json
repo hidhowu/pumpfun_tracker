@@ -12,7 +12,8 @@
     "parse": "node src/parseTransaction.js",
     "track": "node src/tracker.js",
     "backtest": "node src/backtestWorker.js",
-    "user": "node extras/manageUsers.mjs"
+    "user": "node extras/manageUsers.mjs",
+    "set-user": "node extras/setUser.mjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.30.1",

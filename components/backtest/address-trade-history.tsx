@@ -73,7 +73,7 @@ function TxLink({ label, signature, hint }: { label: string; signature: string |
 }
 
 /** Full detail of one simulated trade - the same rows as a live trader's trade dialog, plus the real trader's own legs. */
-function TradeDetailDialog({ position, onClose }: { position: BacktestPositionView | null; onClose: () => void }) {
+export function TradeDetailDialog({ position, onClose }: { position: BacktestPositionView | null; onClose: () => void }) {
   if (!position) return null;
   const p = position;
   const spent = (p.costBasisUsd ?? 0) + (p.buyFeeUsd ?? 0);
@@ -200,8 +200,11 @@ function TradeDetailDialog({ position, onClose }: { position: BacktestPositionVi
 
             <Separator />
 
-            <DetailRow label="Opened" value={formatDateTime(p.openedAt)} />
-            <DetailRow label={p.status === "open" ? "Window ended" : "Closed"} value={p.status === "open" ? "still held" : formatDateTime(p.closedAt)} />
+            <DetailRow label="Trader bought" value={p.traderBuyTime ? `${formatDateTime(p.traderBuyTime * 1000)} UTC` : "—"} />
+            <DetailRow label="Bought at (our fill)" value={p.openedAt ? `${formatDateTime(p.openedAt)} UTC` : "—"} />
+            {p.status === "closed" && <DetailRow label="Exit decided" value={p.closeSignalAt ? `${formatDateTime(p.closeSignalAt)} UTC` : "—"} />}
+            {p.status === "closed" && p.closeReason === "trader_sell" && <DetailRow label="Trader sold" value={p.traderSellTime ? `${formatDateTime(p.traderSellTime * 1000)} UTC` : "—"} />}
+            <DetailRow label={p.status === "open" ? "Window ended" : "Sold at (our fill)"} value={p.status === "open" ? "still held" : p.closedAt ? `${formatDateTime(p.closedAt)} UTC` : "—"} />
             {held != null && <DetailRow label="Held for" value={formatDuration(held)} />}
 
             <Separator />

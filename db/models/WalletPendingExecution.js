@@ -16,6 +16,8 @@ const WalletPendingExecutionSchema = new Schema({
   action: { type: String, enum: ["buy", "sell"], required: true },
   triggerAt: { type: Date, required: true, index: true },
   sourceSignature: { type: String, required: true },
+  // "api_plus" fills: the moment (epoch seconds) whose pool price this fill takes. Set when the fill first runs; triggerAt moves on while waiting for that price.
+  priceAtSec: { type: Number, default: null },
   status: { type: String, enum: ["pending", "processing", "done", "skipped"], default: "pending", index: true },
   skipReason: { type: String, default: null },
   // How many times this fill was put back in the queue because no price

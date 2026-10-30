@@ -229,6 +229,9 @@ export type LotLiveSide = {
   tipUsd: number;
   feeUsd: number;
   rentSol: number;
+  /** When the buy / the sell happened (the sell is null while the lot is open). */
+  boughtAt: string | null;
+  soldAt: string | null;
   buySignature: string | null;
   sellSignature: string | null;
   sellPriceUsd: number | null;
@@ -301,6 +304,8 @@ export type TradingSummary = {
     assumedTipsUsd: number;
     networkFeesPaidUsd: number;
   } | null;
+  /** When the dry run was last reset (only dry trades opened after it are counted in the comparison), or null. */
+  dryResetAt: string | null;
   dryComparison: { trades: number; styles: Array<{ id: string; label: string; pnlUsd: number; winRate: number }> } | null;
   series: Array<{ date: string; livePnlUsd: number; simPnlUsd: number; trades: number }>;
 };
@@ -332,3 +337,7 @@ export type TxStats = {
 };
 
 export type LookupTableResult = { address: string; total: number; added: number; samples: string[] };
+
+export type DryDailyStyle = { id: string; label: string; days: Array<{ date: string; pnlUsd: number; trades: number; wins: number }>; totalUsd: number; trades: number };
+/** What each dry-run exit style made per day (UTC) over the last 7 days, oldest day first. */
+export type DryDaily = { days: string[]; styles: DryDailyStyle[]; dryResetAt: string | null };

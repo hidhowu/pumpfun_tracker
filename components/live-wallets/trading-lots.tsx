@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AddressChip, formatAmount, formatPrice, PnlPill, signedUsd, TokenAvatar, toneClass, tokenLabel, TypePill } from "./shared";
 import { getTradingLots, sellLotNow } from "@/lib/live-wallet-api";
-import { formatRelativeTime, formatUsd } from "@/lib/format";
+import { formatExactTime, formatHeld, formatRelativeTime, formatUsd } from "@/lib/format";
 import { styleLabel } from "@/lib/live-wallet-styles";
 import { cn } from "@/lib/utils";
 import type { LotDryExit, TradingLot, TradingLotsPage } from "@/lib/live-wallet-types";
@@ -54,7 +54,10 @@ function ExitLine({ label, exit, chosen }: { label: string; exit: LotDryExit | n
       </span>
       {exit ? (
         <span className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">{reasonLabel(exit.reason)}</span>
+          <span className="text-xs text-muted-foreground">
+            {reasonLabel(exit.reason)}
+            {exit.at ? <span className="ml-1.5 tabular-nums">sold {formatExactTime(exit.at)}</span> : null}
+          </span>
           <PnlPill usd={exit.pnlUsd} pct={exit.pnlPercent} />
         </span>
       ) : (
@@ -105,8 +108,13 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
           <TokenAvatar icon={lot.icon} symbol={lot.symbol} className="size-9" />
           <div className="min-w-0">
             <div className="truncate text-[15px] font-extrabold">{tokenLabel(lot.symbol, lot.mint)}</div>
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span>trader</span> <AddressChip value={lot.traderAddress} label="trader address" chars={4} />
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span>token</span> <AddressChip value={lot.mint} label="token address" kind="token" chars={6} />
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span>trader</span> <AddressChip value={lot.traderAddress} label="trader address" chars={4} />
+              </span>
             </div>
           </div>
         </div>
@@ -126,6 +134,8 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
         <Side title={dry ? "Live (dry run)" : "Live"} tag={!live.verified && !dry ? <span className="text-[11px] text-muted-foreground">estimated</span> : undefined}>
           <Row label="Bought at">{formatPrice(live.buyPriceUsd)}</Row>
           <Row label={open ? "Value now" : "Sold at"}>{open ? (live.valueUsd != null ? formatUsd(live.valueUsd) : "-") : formatPrice(live.sellPriceUsd)}</Row>
+          <Row label="Bought (UTC)">{formatExactTime(live.boughtAt)}</Row>
+          <Row label="Sold (UTC)">{open ? "holding" : formatExactTime(live.soldAt)}</Row>
           <Row label="Cost">{formatUsd(live.costUsd)}</Row>
           <Row label="Fees (tip + network)">{formatUsd(live.tipUsd + live.feeUsd + (live.sellTipUsd ?? 0) + (live.sellFeeUsd ?? 0))}</Row>
           {live.assumedTipUsd > 0 ? <Row label="Assumed Jito fee (not spent)">{formatUsd(live.assumedTipUsd)}</Row> : null}
@@ -136,6 +146,8 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
             <>
               <Row label="Bought at">{formatPrice(sim.buyPriceUsd)}</Row>
               <Row label={sim.status === "open" ? "Value now" : "Sold at"}>{sim.status === "open" ? (sim.valueUsd != null ? formatUsd(sim.valueUsd) : "-") : formatPrice(sim.sellPriceUsd)}</Row>
+              <Row label="Bought (UTC)">{formatExactTime(sim.openedAt)}</Row>
+              <Row label="Sold (UTC)">{sim.status === "open" ? "holding" : formatExactTime(sim.closedAt)}</Row>
               <Row label="Cost">{formatUsd(sim.costUsd)}</Row>
               <Row label="Exit">{sim.status === "open" ? "holding" : reasonLabel(sim.closeReason)}</Row>
               <Row label="Result">{sim.status === "open" ? result(sim.unrealizedUsd, sim.unrealizedPercent, true) : result(sim.pnlUsd, sim.pnlPercent, false)}</Row>
@@ -145,6 +157,13 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
           )}
         </Side>
       </div>
+
+      {live.soldAt && sim?.closedAt ? (
+        <div className="flex items-center justify-between rounded-xl bg-secondary/40 px-3 py-1.5 text-[13px]">
+          <span className="font-semibold text-muted-foreground">Live sold {new Date(live.soldAt) >= new Date(sim.closedAt) ? "after" : "before"} the simulation by</span>
+          <span className="font-extrabold tabular-nums">{formatHeld(Math.abs(new Date(live.soldAt).getTime() - new Date(sim.closedAt).getTime()))}</span>
+        </div>
+      ) : null}
 
       {lot.differenceUsd != null ? (
         <div className="flex items-center justify-between rounded-xl bg-secondary/60 px-3 py-2 text-[13px]">

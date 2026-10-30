@@ -11,17 +11,16 @@ import { PumpTradesClient } from "../backtest/pumpTradesClient.js";
 export const userTradesClient = new PumpTradesClient({ rpsSetting: "userTradesRps" });
 export const tokenTradesClient = new PumpTradesClient({ rpsSetting: "proxyRps" });
 
-// The last check before a buy: https://swap-api.pump.fun/v2/coins/<mint>/trades?limit=100&program=pump&minSolAmount=0.05 must return
-// at least one trade. Only existence matters, so one row is asked for instead of a hundred. "pump" is the bonding curve program
-// (the token's curve trades stay in that list after it graduates), and a trade under 0.05 SOL doesn't count as a market.
-const TOKEN_TRADES_PROGRAM = "pump";
-const TOKEN_TRADES_MIN_SOL = 0.05;
+// The last check before a buy: https://frontend-api-v3.pump.fun/trades/solana%3A5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/<mint>?limit=1&minUsd=1 must
+// return at least one trade. Only existence matters, so one row is asked for instead of a hundred, and a trade under $1 doesn't count as a market.
+// (The old swap-api.pump.fun/v2/coins/<mint>/trades answers 410 Gone since 2026-10-28, which skipped every API-wallet buy.)
+const TOKEN_TRADES_MIN_USD = 1;
 
 /**
  * Does this token have at least one real trade on pump.fun? false means the API answered with an empty list (the buy is skipped);
  * a network or API failure THROWS instead, so the caller retries rather than mistaking an outage for an empty token.
  */
 export async function tokenHasTrades(mint) {
-  const trades = await tokenTradesClient.fetchRecentTokenTrades(mint, { limit: 1, program: TOKEN_TRADES_PROGRAM, minSolAmount: TOKEN_TRADES_MIN_SOL });
+  const trades = await tokenTradesClient.fetchRecentTokenTrades(mint, { limit: 1, minUsd: TOKEN_TRADES_MIN_USD });
   return trades.length > 0;
 }

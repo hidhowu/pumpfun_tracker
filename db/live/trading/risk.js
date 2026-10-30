@@ -11,6 +11,7 @@ import { buyCostUsd, lotValueUsd } from "./lots.js";
 import { buildTrigger, confirmExit } from "../../simulation/exitTrigger.js";
 import { cooldownStylesOf, lotStyleIds, selectedStyleId } from "./styles.js";
 import { tradeDelaySeconds } from "./settings.js";
+import { apiPlusIntervalSeconds, latestSampleAt, poolPriceAt } from "../../simulation/apiPlus.js";
 
 /**
  * The live wallet's OWN exit rules: stop-loss, take-profit, max hold time and trailing stops, judged against what each live position really
@@ -30,6 +31,14 @@ import { tradeDelaySeconds } from "./settings.js";
  */
 
 const TRACK_GRACE_MS = 5 * 60_000;
+
+/*
+ * A live wallet connected to an "api_plus" simulation wallet (Wallet.settings.trackingMethod) judges its own exit rules the way that wallet does
+ * (db/simulation/apiPlus.js): not on the price right now but on the pool price, from the token's trade list, at the lot's check moments (the
+ * lot's open + a fixed phase + k x the risk-check interval). Each sweep judges the newest moment that is old enough to be listed and has not been
+ * judged yet, so a spike between two moments is never seen; there is no fresh re-check of a low reading, as in the backtest. The simulation wallet's
+ * own positions are judged moment by moment (checkApiPlusExits); this sweep runs once per interval, so it follows the same moments without catching up on a missed one.
+ */
 
 /** @param {number} [delaySeconds] the live wallet's wait before a trade (settings.js tradeDelaySeconds); a sell that is queued late anyway passes none */
 async function queueSell(lot, closeReason, track, trigger = null, delaySeconds = 0) {
@@ -126,6 +135,7 @@ export async function checkLiveRiskExits() {
   const blacklisted = new Set((await Trader.find({ address: { $in: [...new Set(lots.map((l) => l.traderAddress))] }, status: "blacklisted" }, { address: 1 }).lean()).map((t) => t.address));
 
   await prefetchPrices(lots.map((l) => l.mint), { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
+  const apiPlusInterval = [...sims.values()].some((s) => s?.settings?.trackingMethod === "api_plus") ? await apiPlusIntervalSeconds() : 0;
 
   let queued = await requeueMissedFollowExits(lots).catch((err) => {
     logEvent("trade", `[live] Couldn't re-queue missed dry-run exits: ${err instanceof Error ? err.message : err}`, { level: "warn" });
@@ -153,13 +163,26 @@ export async function checkLiveRiskExits() {
       }
       if (styles.length === 0) return;
 
-      const price = await getPrice(lot.mint, { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
+      const apiPlus = sim.settings?.trackingMethod === "api_plus" && apiPlusInterval > 0;
+      const openedAtSec = lot.openedAt.getTime() / 1000;
+      let price;
+      let sampleAt = null;
+      if (apiPlus) {
+        sampleAt = latestSampleAt({ key: `${lot.mint}:${lot._id}`, startSec: openedAtSec, intervalSec: apiPlusInterval, nowSec: Date.now() / 1000 });
+        if (sampleAt == null || sampleAt <= (lot.apiPlusLastAtSec ?? 0)) return; // no new check moment since the last sweep
+        const sample = await poolPriceAt(lot.mint, sampleAt);
+        if (!sample) return; // not listed yet - the next sweep judges the newest moment then
+        price = { priceUsd: sample.priceUsd, source: `api_plus_${sample.source}` };
+        await LiveLot.updateOne({ _id: lot._id }, { $set: { apiPlusLastAtSec: sampleAt } });
+      } else {
+        price = await getPrice(lot.mint, { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
+      }
       if (!price?.priceUsd) return;
       const value = lotValueUsd(lot, price.priceUsd);
       const cost = buyCostUsd(lot.buy);
       if (!(cost > 0)) return;
       const percent = ((value - cost) / cost) * 100;
-      const ageSeconds = (Date.now() - lot.openedAt.getTime()) / 1000;
+      const ageSeconds = apiPlus ? sampleAt - openedAtSec : (Date.now() - lot.openedAt.getTime()) / 1000;
 
       const peak = value > (lot.maxValueUsd ?? 0) ? { maxValueUsd: value } : null;
       const trough = lot.minValueUsd == null || value < lot.minValueUsd ? { minValueUsd: value } : null;
@@ -173,7 +196,7 @@ export async function checkLiveRiskExits() {
       let fresh = null;
       const freshValue = () =>
         (fresh ??= getPrice(lot.mint, { fresh: true }).then((now) => (now?.priceUsd ? lotValueUsd(lot, now.priceUsd) : null)));
-      const confirmed = (trigger) => confirmExit(trigger, { totalCost: cost, valueNow: freshValue, meta: { liveWalletId: String(lot.liveWalletId), traderAddress: lot.traderAddress, mint: lot.mint } });
+      const confirmed = (trigger) => (apiPlus ? trigger : confirmExit(trigger, { totalCost: cost, valueNow: freshValue, meta: { liveWalletId: String(lot.liveWalletId), traderAddress: lot.traderAddress, mint: lot.mint } }));
 
       // Trailing stops arm at the same price for every style, so it is done once. A rule that arms on this sweep is first judged on the next.
       const rules = s.trailingStops || [];

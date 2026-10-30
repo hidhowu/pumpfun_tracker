@@ -25,7 +25,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { getPositions } from "@/lib/api";
 import { useProfile } from "@/lib/profile-context";
-import { formatAddress, formatRelativeTime, formatTokenAmount, formatUsd } from "@/lib/format";
+import { formatAddress, formatExactTime, formatHeld, formatRelativeTime, formatTokenAmount, formatUsd } from "@/lib/format";
 import type { SimPosition } from "@/lib/types";
 
 type Props = { address: string };
@@ -104,7 +104,8 @@ function FeeBreakdown({ total, pump, jito }: { total: number; pump?: number | nu
   );
 }
 
-function TradeDetailDialog({ position, onClose }: { position: SimPosition | null; onClose: () => void }) {
+/** Full detail of one closed simulated trade (a trader's, or a wallet's): prices, fees, P&L, peak / lowest and the exact times it was bought and sold. */
+export function TradeDetailDialog({ position, onClose }: { position: SimPosition | null; onClose: () => void }) {
   if (!position) return null;
   const pnlPositive = (position.realizedPnlUsd || 0) > 0;
   const pnlNegative = (position.realizedPnlUsd || 0) < 0;
@@ -230,8 +231,28 @@ function TradeDetailDialog({ position, onClose }: { position: SimPosition | null
 
           <Separator />
 
-          <DetailRow label="Opened" value={formatRelativeTime(position.openedAt)} />
-          <DetailRow label="Closed" value={formatRelativeTime(position.closedAt)} />
+          <DetailRow
+            label="Bought at"
+            value={
+              <span className="inline-flex flex-col items-end">
+                <span>{formatExactTime(position.openedAt)} UTC</span>
+                <span className="text-[11px] opacity-80">{formatRelativeTime(position.openedAt)}</span>
+              </span>
+            }
+          />
+          <DetailRow
+            label="Sold at"
+            value={
+              <span className="inline-flex flex-col items-end">
+                <span>{position.closedAt ? `${formatExactTime(position.closedAt)} UTC` : "—"}</span>
+                <span className="text-[11px] opacity-80">{position.closedAt ? formatRelativeTime(position.closedAt) : ""}</span>
+              </span>
+            }
+          />
+          <DetailRow
+            label="Held for"
+            value={position.closedAt ? formatHeld(new Date(position.closedAt).getTime() - new Date(position.openedAt).getTime()) : "—"}
+          />
 
           <Separator />
 

@@ -35,7 +35,7 @@ import {
 import { ensureTodaySnapshotsForAllActiveTraders } from "../db/simulation/snapshot.js";
 import { evaluateWalletTrade } from "../db/simulation/walletEngine.js";
 import { ApiTradePoller } from "../db/simulation/apiTradePoller.js";
-import { processDueWalletExecutions, checkWalletRiskExits } from "../db/simulation/walletExecutor.js";
+import { processDueWalletExecutions, checkWalletRiskExits, checkApiPlusExits } from "../db/simulation/walletExecutor.js";
 import { ensureTodaySnapshotsForAllWallets, applyDailyBalanceResets, recordHourlyWalletSnapshots } from "../db/simulation/walletSnapshot.js";
 import { startLiveTradingLoops } from "../db/live/trading/loops.js";
 import { getSystemSettings } from "../db/models/SystemSettings.js";
@@ -561,6 +561,20 @@ export class TrackerService extends EventEmitter {
     this._walletRiskLoopActive = true;
     this._runWalletRiskCheckLoop();
 
+    // "api_plus" positions follow their own schedule of check moments (db/simulation/apiPlus.js), so this runs every second; each position decides by itself whether a moment is due.
+    this._walletApiPlusTimer = setInterval(async () => {
+      if (this._walletApiPlusRunning) return;
+      this._walletApiPlusRunning = true;
+      try {
+        const count = await checkApiPlusExits();
+        if (count > 0) this.emit("walletRiskExitTriggered", count);
+      } catch (err) {
+        this.emit("error", err);
+      } finally {
+        this._walletApiPlusRunning = false;
+      }
+    }, 1000);
+
     this._walletRolloverTimer = setInterval(() => {
       this._runWalletDayRollover().catch((err) => this.emit("error", err));
     }, rolloverIntervalMs);
@@ -595,12 +609,13 @@ export class TrackerService extends EventEmitter {
     this._walletRiskLoopActive = false;
     if (this._walletRiskTimer) clearTimeout(this._walletRiskTimer);
     this._walletRiskTimer = null;
-    for (const timer of [this._walletExecutionTimer, this._walletSnapshotTimer, this._walletRolloverTimer]) {
+    for (const timer of [this._walletExecutionTimer, this._walletSnapshotTimer, this._walletRolloverTimer, this._walletApiPlusTimer]) {
       if (timer) clearInterval(timer);
     }
     this._walletExecutionTimer = null;
     this._walletSnapshotTimer = null;
     this._walletRolloverTimer = null;
+    this._walletApiPlusTimer = null;
   }
 
   async _handleSignature({ address, signature, err, logs }) {

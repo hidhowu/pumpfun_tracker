@@ -8,44 +8,15 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatBox, signedUsd, toneClass } from "./shared";
+import { DryRunComparison } from "./dry-run-comparison";
 import { TradingConnection } from "./trading-connection";
 import { TradingLots } from "./trading-lots";
 import { TradingStats } from "./trading-stats";
 import { burnEmptyAccounts, createLookupTable, getTradingState, getTradingSummary } from "@/lib/live-wallet-api";
 import { formatRelativeTime, formatSol, formatUsd } from "@/lib/format";
-import { cn } from "@/lib/utils";
 import type { TradingState, TradingSummary } from "@/lib/live-wallet-types";
 
 const POLL_MS = 10_000;
-
-function Comparison({ summary }: { summary: TradingSummary }) {
-  const d = summary.dryComparison;
-  if (!d) return null;
-  const best = Math.max(...d.styles.map((x) => x.pnlUsd));
-  const tied = d.styles.filter((x) => x.pnlUsd === best).length > 1;
-  return (
-    <Card className="gap-3 p-5">
-      <div>
-        <div className="text-[15px] font-extrabold">Dry run: which exit way is better?</div>
-        <p className="mt-1 text-[13px] text-muted-foreground">
-          Over {d.trades} dry-run trade{d.trades === 1 ? "" : "s"} that every way has finished, the same entries exited {d.styles.length} ways.
-        </p>
-      </div>
-      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
-        {d.styles.map((x) => (
-          <div key={x.id} className={cn("rounded-xl border p-3", !tied && x.pnlUsd === best ? "border-positive/40 bg-positive/5" : "border-border bg-secondary/40")}>
-            <div className="flex items-center justify-between gap-2 text-xs font-bold text-muted-foreground">
-              {x.label}
-              {!tied && x.pnlUsd === best ? <span className="text-positive">better</span> : null}
-            </div>
-            <div className={cn("mt-1 text-xl font-extrabold tabular-nums", toneClass(x.pnlUsd))}>{signedUsd(x.pnlUsd)}</div>
-            <div className="text-xs text-muted-foreground">{x.winRate.toFixed(0)}% winning</div>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
 
 function SeriesChart({ summary }: { summary: TradingSummary }) {
   if (summary.series.length < 2) return null;
@@ -230,7 +201,7 @@ export function TradingPanel({ walletId, twoFactorEnabled, refreshKey }: { walle
             </p>
           ) : null}
 
-          {summary ? <Comparison summary={summary} /> : null}
+          {summary ? <DryRunComparison walletId={walletId} summary={summary} onReset={load} /> : null}
           {summary ? <SeriesChart summary={summary} /> : null}
           <TradingStats walletId={walletId} refreshKey={refreshKey} />
           <BurnEngineCard walletId={walletId} state={state} onDone={load} />

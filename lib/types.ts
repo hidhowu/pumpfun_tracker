@@ -380,7 +380,7 @@ export type WalletSettings = {
   // - trade history/realizedPnlUsd are untouched. See db/simulation/walletSnapshot.js's applyDailyBalanceResets.
   autoResetBalanceDaily: boolean;
   /** How the wallet learns about its traders' trades: the tracker's RPC logs (default) or pump.fun's user-trades API. See db/models/Wallet.js. */
-  trackingMethod?: "logs" | "api";
+  trackingMethod?: "logs" | "api" | "api_plus";
   /** Panic level in dollars (a positive loss amount); null/absent = off. See db/walletPanic.js. */
   panicLossUsd?: number | null;
 };

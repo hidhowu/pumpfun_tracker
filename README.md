@@ -155,7 +155,7 @@ Per address, in two stages (both resumable, progress and partial P&L visible liv
      **extra reaction time** (`fillLatencySeconds`, default 3s - what live loses
      noticing a trade and queueing the order; Backtest -> Backtest settings). Our
      buy fills that long after the trader's buy, at the pool price then (`priceUsd`
-     of the first trade at or after that second, from `swap-api.pump.fun`).
+     of the first trade at or after that second, from pump.fun's `/trades/<chain>/<mint>` API).
    - **Price checks** (`riskCheckIntervalSeconds`, from the live Settings page):
      open trades are looked at only every N seconds, at the pool price of that
      moment, exactly like the live risk sweep - stop-loss, take-profit, max hold

@@ -1,5 +1,5 @@
 import { request } from "./api";
-import type { BurnEmptyResult, BurnResult, EncryptedKey, LiveTransactionsPage, LiveWallet, LiveWalletDetail, LinkedLive, LiveWalletListItem, TradingLotsPage, TradingPatch, TradingState, TradingSummary, TxStats, LookupTableResult } from "./live-wallet-types";
+import type { BurnEmptyResult, BurnResult, EncryptedKey, LiveTransactionsPage, LiveWallet, LiveWalletDetail, LinkedLive, LiveWalletListItem, TradingLotsPage, TradingPatch, TradingState, TradingSummary, TxStats, LookupTableResult, DryDaily } from "./live-wallet-types";
 
 export function listLiveWallets(): Promise<{ wallets: LiveWalletListItem[]; twoFactorEnabled: boolean }> {
   return request("/api/live-wallets");
@@ -60,6 +60,16 @@ export function getTradingLots(walletId: string, opts: { status?: "open" | "clos
 
 export function getTradingSummary(walletId: string): Promise<TradingSummary> {
   return request(`/api/live-wallets/${walletId}/trading/summary`);
+}
+
+/** What each dry-run exit style made per day over the last 7 days. */
+export function getDryDaily(walletId: string): Promise<DryDaily> {
+  return request(`/api/live-wallets/${walletId}/trading/dry-daily`);
+}
+
+/** Resets the dry run: every exit style starts again from zero on the dry trades opened from now on. Nothing is deleted. */
+export function resetDryRun(walletId: string): Promise<{ dryResetAt: string }> {
+  return request(`/api/live-wallets/${walletId}/trading/dry-reset`, { method: "POST" });
 }
 
 /** Runs the burn engine now: closes every nearly-empty token account of the wallet and returns their deposits. */

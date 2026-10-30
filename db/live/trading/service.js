@@ -310,6 +310,9 @@ function liveSide(lot) {
     tipUsd: ((buy.tipLamports || 0) / LAMPORTS) * (buy.solUsd || 0),
     feeUsd: ((buy.feeLamports || 0) / LAMPORTS) * (buy.solUsd || 0),
     rentSol: (buy.rentLamports || 0) / LAMPORTS,
+    // The exact moments of the two legs (a dry run's are when it priced them), for comparing with the simulation's.
+    boughtAt: buy.at ?? lot.openedAt,
+    soldAt: closed ? (lot.sell?.at ?? lot.closedAt) : null,
     buySignature: buy.signature,
     sellSignature: lot.sell?.signature ?? null,
     sellPriceUsd: lot.sell?.priceUsd ?? null,
@@ -399,6 +402,7 @@ export async function listLots(liveId, { status = null, page = 1, limit = 25 } =
 export async function getTradingSummary(liveId) {
   if (!mongoose.isValidObjectId(liveId)) return null;
   const id = new mongoose.Types.ObjectId(liveId);
+  const dryResetAt = (await LiveWallet.findById(id, { dryResetAt: 1 }).lean())?.dryResetAt ?? null;
 
   const [byStatus, closed, dryLots, daily] = await Promise.all([
     LiveLot.aggregate([{ $match: { liveWalletId: id } }, { $group: { _id: { mode: "$mode", status: "$status" }, n: { $sum: 1 } } }]),
@@ -422,7 +426,7 @@ export async function getTradingSummary(liveId) {
         },
       },
     ]),
-    LiveLot.find({ liveWalletId: id, mode: "dry" }, { dryExits: 1, dryStyles: 1 }).lean(),
+    LiveLot.find({ liveWalletId: id, mode: "dry", ...(dryResetAt ? { openedAt: { $gte: dryResetAt } } : {}) }, { dryExits: 1, dryStyles: 1 }).lean(),
     LiveLot.aggregate([
       { $match: { liveWalletId: id, status: "closed", closedAt: { $ne: null } } },
       SIM_LOOKUP,
@@ -456,6 +460,7 @@ export async function getTradingSummary(liveId) {
   return {
     live: { open: count("live", "open"), closed: count("live", "closed") },
     dry: { open: count("dry", "open"), closed: count("dry", "closed") },
+    dryResetAt,
     settled: c
       ? {
           trades: c.trades,
@@ -480,6 +485,58 @@ export async function getTradingSummary(liveId) {
       : null,
     series,
   };
+}
+
+/**
+ * "Reset dry run": from now on the exit-style comparison and the day-by-day results count only the dry trades opened after this moment, so every
+ * style starts again from zero on the same fresh entries. Nothing is deleted - the trades stay in the list, and positions still open keep being worked.
+ */
+export async function resetDryRun(liveId) {
+  if (!mongoose.isValidObjectId(liveId)) throw new TradingError("Wallet not found", 404);
+  const live = await LiveWallet.findByIdAndUpdate(liveId, { $set: { dryResetAt: new Date() } }, { returnDocument: "after", projection: { dryResetAt: 1 } }).lean();
+  if (!live) throw new TradingError("Wallet not found", 404);
+  logEvent("trade", `[live] Dry run reset for live wallet ${liveId}: the exit styles start again from zero`, { meta: { liveWalletId: String(liveId) } });
+  return { dryResetAt: live.dryResetAt };
+}
+
+const DAILY_DAYS = 7;
+
+/**
+ * What each exit style made per day (UTC) over the last 7 days, in dollars: a style's result counts on the day IT decided (sold), whatever the other
+ * styles did with the same entry. Only dry trades opened since the last reset are counted.
+ */
+export async function getDryDaily(liveId) {
+  if (!mongoose.isValidObjectId(liveId)) return null;
+  const id = new mongoose.Types.ObjectId(liveId);
+  const live = await LiveWallet.findById(id, { cooldownStyles: 1, dryResetAt: 1 }).lean();
+  if (!live) return null;
+
+  const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
+  const days = Array.from({ length: DAILY_DAYS }, (_, i) => dayKey(Date.now() - (DAILY_DAYS - 1 - i) * 86_400_000));
+  // A trade can be opened days before its exit; two weeks back covers any realistic max hold.
+  const from = new Date(Math.max(Date.now() - 14 * 86_400_000, live.dryResetAt ? new Date(live.dryResetAt).getTime() : 0));
+  const lots = await LiveLot.find({ liveWalletId: id, mode: "dry", openedAt: { $gte: from } }, { dryExits: 1, dryStyles: 1 }).lean();
+
+  const cooldowns = cooldownStylesOf(live);
+  const ids = new Set(["own", "follow", ...cooldowns.map((c) => c.id)]);
+  for (const lot of lots) for (const sid of lotStyleIds(lot)) ids.add(sid);
+
+  const styles = [...ids].map((sid) => {
+    const byDay = Object.fromEntries(days.map((d) => [d, { pnlUsd: 0, trades: 0, wins: 0 }]));
+    for (const lot of lots) {
+      const exit = lot.dryExits?.[sid];
+      if (!exit?.at) continue;
+      const bucket = byDay[dayKey(exit.at)];
+      if (!bucket) continue;
+      const pnl = exit.realizedPnlUsd ?? 0;
+      bucket.pnlUsd += pnl;
+      bucket.trades += 1;
+      if (pnl > 0) bucket.wins += 1;
+    }
+    const rows = days.map((d) => ({ date: d, ...byDay[d] }));
+    return { id: sid, label: styleLabel(sid, cooldowns), days: rows, totalUsd: rows.reduce((a, r) => a + r.pnlUsd, 0), trades: rows.reduce((a, r) => a + r.trades, 0) };
+  });
+  return { days, styles, dryResetAt: live.dryResetAt ?? null };
 }
 
 // ------------------------------------------------------------------ from the simulation wallet's side
