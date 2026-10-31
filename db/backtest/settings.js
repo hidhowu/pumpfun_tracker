@@ -25,7 +25,7 @@ export async function getBacktestSettingsDoc() {
 
 /** Splits the RPC pool the way the backtest sees it: dedicated (backtest-only) vs shared with live. */
 export async function loadRpcPoolDefinition() {
-  const rows = await HttpRpcEndpoint.find({ enabled: true }, { url: 1, scope: 1 }).lean();
+  const rows = await HttpRpcEndpoint.find({ enabled: true, health: { $ne: "blacklisted" } }, { url: 1, scope: 1 }).lean();
   const dedicated = rows.filter((r) => r.scope === "backtest").map((r) => r.url);
   const envUrls = (process.env.SOLANA_RPC_URLS || "").split(",").map((s) => s.trim()).filter(Boolean);
   const shared = [...new Set([...rows.filter((r) => r.scope !== "backtest").map((r) => r.url), ...envUrls])].filter(

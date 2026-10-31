@@ -24,6 +24,27 @@ const RpcEndpointSchema = new Schema({
   lastDisconnectedAt: { type: Date, default: null },
   lastError: { type: String, default: null },
   lastErrorAt: { type: Date, default: null },
+  // Auto-managed health, separate from the manual `enabled` switch (same idea as db/models/Proxy.js): once
+  // db/rpcHealth.js's recordRpcResult sees RPC_FAILURE_THRESHOLD rate-limit failures in a row, health flips to
+  // "blacklisted" and the endpoint is skipped everywhere until a test (or a real call) succeeds again.
+  health: { type: String, enum: ["active", "blacklisted"], default: "active" },
+  consecutiveFailures: { type: Number, default: 0 },
+  lastCheckedAt: { type: Date, default: null },
+  lastSuccessAt: { type: Date, default: null },
+  blacklistedAt: { type: Date, default: null },
+  // Result of the most recent test (UI "Test" button / "Test all").
+  lastTest: {
+    type: new Schema(
+      {
+        at: { type: Date },
+        verdict: { type: String },
+        latencyMs: { type: Number, default: null },
+        message: { type: String, default: null },
+      },
+      { _id: false }
+    ),
+    default: null,
+  },
   createdAt: { type: Date, default: Date.now },
 });
 

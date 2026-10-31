@@ -1,5 +1,6 @@
 ﻿import { SlotPool, sleep } from "./slotPool.js";
 import { loadRpcPoolDefinition, resolveBacktestSettings } from "./settings.js";
+import { recordRpcResult } from "../rpcHealth.js";
 
 const REFRESH_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 25_000;
@@ -73,6 +74,7 @@ export class BacktestRpcPool {
         });
         if (res.status === 429 || res.status === 503 || res.status === 403) {
           this.#rest(member.id, res.status, res.headers.get("retry-after"));
+          if (res.status === 429) recordRpcResult("http", url, false, { error: "HTTP 429 rate limited" });
           lastError = new Error(
             res.status === 403
               ? `${redact(url)} refused the request (HTTP 403 forbidden) ${soft + 1} times in a row, across the endpoints tried`
@@ -89,6 +91,7 @@ export class BacktestRpcPool {
           const forbidden = json.error.code === 403 || /forbidden/i.test(json.error.message || "");
           if (limited || forbidden) {
             this.#rest(member.id, forbidden ? 403 : 429, null);
+            if (!forbidden) recordRpcResult("http", url, false, { error: `Rate limited: ${json.error.message}` });
             lastError = new Error(`${redact(url)} ${forbidden ? "refused the request" : "rate-limited"}: ${json.error.message}`);
             tried.add(member.id);
             soft += 1;
@@ -100,7 +103,7 @@ export class BacktestRpcPool {
           hard += 1;
           continue;
         }
-        this.failures.delete(member.id);
+        if (this.failures.delete(member.id)) recordRpcResult("http", url, true); // clears the rate-limit strikes it just earned
         return json.result;
       } catch (err) {
         lastError = err;

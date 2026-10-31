@@ -11,6 +11,7 @@ import type {
   ProxyView,
   RpcEndpointAddress,
   RpcEndpointView,
+  RpcTestResult,
   TraderListView,
   ListOverview,
   ListPnlBreakdown,
@@ -221,6 +222,28 @@ export function reconnectRpcEndpoint(id: string): Promise<{ command: { status: s
 
 export function getRpcEndpointAddresses(id: string): Promise<{ addresses: RpcEndpointAddress[] }> {
   return request(`/api/rpc/${id}/addresses`);
+}
+
+export function deleteRpcEndpointsBulk(ids: string[]): Promise<{ deletedCount: number }> {
+  return request(`/api/rpc/bulk-delete`, { method: "POST", body: JSON.stringify({ ids }) });
+}
+
+/** Live check of one stored endpoint (WebSocket or HTTP): a pass clears its strikes and un-blacklists it, a fail adds a strike (3 in a row blacklists). */
+export function testRpcEndpoint(
+  kind: "ws" | "http",
+  id: string,
+  options: { enableOnSuccess?: boolean } = {}
+): Promise<RpcTestResult & { endpoint: RpcEndpointView | HttpRpcEndpointView }> {
+  return request(kind === "ws" ? `/api/rpc/${id}/test` : `/api/http-rpc/${id}/test`, { method: "POST", body: JSON.stringify(options) });
+}
+
+/** Tests a URL that isn't saved yet - nothing is written. */
+export function probeRpcUrl(kind: "ws" | "http", url: string): Promise<RpcTestResult> {
+  return request(`/api/rpc/probe`, { method: "POST", body: JSON.stringify({ kind, url }) });
+}
+
+export function deleteHttpRpcEndpointsBulk(ids: string[]): Promise<{ deletedCount: number }> {
+  return request(`/api/http-rpc/bulk-delete`, { method: "POST", body: JSON.stringify({ ids }) });
 }
 
 export function listHttpRpcEndpoints(): Promise<{ endpoints: HttpRpcEndpointView[] }> {

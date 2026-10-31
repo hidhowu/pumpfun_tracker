@@ -2,19 +2,23 @@
 
 import { CopyButton } from "@/components/copy-button";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Loader2,
   Plus,
   RefreshCw,
   Router,
+  ShieldAlert,
+  Square,
   Trash2,
   Wifi,
   WifiOff,
+  XCircle,
   Zap,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -52,16 +56,20 @@ import {
   addHttpRpcEndpoint,
   addRpcEndpoint,
   deleteHttpRpcEndpoint,
+  deleteHttpRpcEndpointsBulk,
   deleteRpcEndpoint,
+  deleteRpcEndpointsBulk,
   getRpcEndpointAddresses,
   listHttpRpcEndpoints,
   listRpcEndpoints,
+  probeRpcUrl,
   reconnectRpcEndpoint,
+  testRpcEndpoint,
   updateHttpRpcEndpoint,
   updateRpcEndpoint,
 } from "@/lib/api";
 import { formatAddress, formatRelativeTime } from "@/lib/format";
-import type { HttpRpcEndpointView, RpcEndpointAddress, RpcEndpointView } from "@/lib/types";
+import type { HttpRpcEndpointView, RpcEndpointAddress, RpcEndpointHealth, RpcEndpointView, RpcTestResult } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function StatusBadge({ status }: { status: RpcEndpointView["status"] }) {
@@ -83,6 +91,263 @@ function StatusBadge({ status }: { status: RpcEndpointView["status"] }) {
     <Badge className="gap-1 border-negative/30 bg-negative/15 text-negative">
       <WifiOff className="size-3" /> Disconnected
     </Badge>
+  );
+}
+
+/** Rate-limit failures in a row before an endpoint is blacklisted - mirrors RPC_FAILURE_THRESHOLD in db/rpcHealth.js. */
+const FAILURE_THRESHOLD = 3;
+
+type TestTarget = { _id: string; label: string; url: string };
+type HealthTarget = TestTarget & RpcEndpointHealth & { enabled: boolean };
+
+const isBlacklisted = (e: RpcEndpointHealth) => e.health === "blacklisted";
+const nameOf = (e: TestTarget) => e.label || formatAddress(e.url, 12);
+
+function BlacklistBadge({ endpoint }: { endpoint: RpcEndpointHealth }) {
+  if (isBlacklisted(endpoint)) {
+    return (
+      <Badge
+        className="gap-1 border-negative/30 bg-negative/15 text-negative"
+        title={`Rate limited ${FAILURE_THRESHOLD} times in a row - skipped everywhere until it passes a test`}
+      >
+        <ShieldAlert className="size-3" /> Blacklisted
+      </Badge>
+    );
+  }
+  const strikes = endpoint.consecutiveFailures ?? 0;
+  if (strikes > 0) {
+    return (
+      <Badge variant="secondary" className="gap-1 text-[10px] font-normal text-amber-400" title="Failures in a row - blacklisted at 3">
+        <AlertTriangle className="size-3" /> {strikes}/{FAILURE_THRESHOLD} strikes
+      </Badge>
+    );
+  }
+  return null;
+}
+
+const VERDICT_LABEL: Record<NonNullable<RpcEndpointHealth["lastTest"]>["verdict"], string> = {
+  ok: "Healthy",
+  slow: "Slow",
+  rate_limited: "Rate limited",
+  auth_failed: "Key rejected",
+  unreachable: "Unreachable",
+  error: "Error",
+};
+
+function TestResultLine({ test }: { test: RpcEndpointHealth["lastTest"] }) {
+  if (!test) return null;
+  const tone = test.verdict === "ok" ? "text-positive" : test.verdict === "slow" ? "text-amber-400" : "text-negative";
+  const Icon = test.verdict === "ok" ? CheckCircle2 : test.verdict === "slow" ? AlertTriangle : XCircle;
+  return (
+    <p className={cn("flex items-start gap-1.5 text-xs", tone)}>
+      <Icon className="mt-0.5 size-3 shrink-0" />
+      <span>
+        <span className="font-medium">{VERDICT_LABEL[test.verdict]}</span>
+        {test.message ? ` - ${test.message}` : ""}{" "}
+        <span className="text-muted-foreground">(tested {formatRelativeTime(test.at)})</span>
+      </span>
+    </p>
+  );
+}
+
+/**
+ * Runs endpoint tests from the UI: one at a time (testOne) or a list two at a time (testMany), so a long
+ * list finishes quickly without hammering providers - each test already fires a small burst on its own.
+ * Every test is recorded server-side: a pass un-blacklists, a fail adds a strike (3 in a row blacklists).
+ */
+function useRpcTester(kind: "ws" | "http", refresh: (options?: { silent?: boolean }) => Promise<void>) {
+  const [testingIds, setTestingIds] = useState<ReadonlySet<string>>(new Set());
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const cancelRef = useRef(false);
+
+  const setTesting = (id: string, on: boolean) =>
+    setTestingIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  const testOne = useCallback(
+    async (target: TestTarget, options: { enableOnSuccess?: boolean } = {}) => {
+      setTesting(target._id, true);
+      try {
+        const result = await testRpcEndpoint(kind, target._id, options);
+        if (result.ok) toast.success(`${nameOf(target)}: ${result.message}`);
+        else toast.error(`${nameOf(target)}: ${result.message}`);
+        await refresh({ silent: true });
+        return result as RpcTestResult;
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Test failed");
+        return null;
+      } finally {
+        setTesting(target._id, false);
+      }
+    },
+    [kind, refresh]
+  );
+
+  const testMany = useCallback(
+    async (targets: TestTarget[], options: { enableOnSuccess?: boolean } = {}) => {
+      if (targets.length === 0 || progress) return;
+      cancelRef.current = false;
+      const tally = { done: 0, healthy: 0, limited: 0, failed: 0 };
+      setProgress({ done: 0, total: targets.length });
+
+      const queue = [...targets];
+      async function worker() {
+        while (queue.length > 0 && !cancelRef.current) {
+          const target = queue.shift()!;
+          setTesting(target._id, true);
+          const result = await testRpcEndpoint(kind, target._id, options).catch(() => null);
+          setTesting(target._id, false);
+          tally.done += 1;
+          if (result?.ok) tally.healthy += 1;
+          else if (result?.verdict === "rate_limited") tally.limited += 1;
+          else tally.failed += 1;
+          setProgress({ done: tally.done, total: targets.length });
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(2, targets.length) }, worker));
+
+      setProgress(null);
+      await refresh({ silent: true });
+      const parts = [`${tally.healthy} healthy`];
+      if (tally.limited > 0) parts.push(`${tally.limited} rate limited (probably need upgrading)`);
+      if (tally.failed > 0) parts.push(`${tally.failed} failed`);
+      const message = `Tested ${tally.done} endpoint${tally.done === 1 ? "" : "s"}${cancelRef.current ? " (stopped early)" : ""}: ${parts.join(", ")}`;
+      if (tally.limited + tally.failed > 0) toast.error(message);
+      else toast.success(message);
+    },
+    [kind, refresh, progress]
+  );
+
+  const stop = useCallback(() => {
+    cancelRef.current = true;
+  }, []);
+
+  return { testingIds, progress, testOne, testMany, stop };
+}
+
+type RpcTester = ReturnType<typeof useRpcTester>;
+
+/** Test all / re-test and delete the blacklisted ones - shared by the WebSocket and HTTP sections. */
+function HealthToolbar({
+  endpoints,
+  tester,
+  onDeleteMany,
+}: {
+  endpoints: HealthTarget[];
+  tester: RpcTester;
+  onDeleteMany: (ids: string[]) => Promise<void>;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const blacklisted = endpoints.filter(isBlacklisted);
+  const busy = tester.progress !== null;
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      await onDeleteMany(blacklisted.map((e) => e._id));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  if (endpoints.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {busy ? (
+        <>
+          <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" />
+            Testing {tester.progress!.done}/{tester.progress!.total}...
+          </span>
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={tester.stop}>
+            <Square className="size-3.5" />
+            Stop
+          </Button>
+        </>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          onClick={() => tester.testMany(endpoints)}
+          title="Tests every endpoint with a quick burst of requests - flags any that are rate limited. A pass un-blacklists; a fail counts toward blacklisting."
+        >
+          <CheckCircle2 className="size-3.5" />
+          Test all ({endpoints.length})
+        </Button>
+      )}
+      {blacklisted.length > 0 && !busy && (
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => tester.testMany(blacklisted, { enableOnSuccess: true })}
+            title="Tests every blacklisted endpoint and brings back the ones that now work"
+          >
+            <RefreshCw className="size-3.5" />
+            Re-test blacklisted ({blacklisted.length})
+          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5 text-negative hover:text-negative" disabled={deleting}>
+                {deleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                Delete blacklisted ({blacklisted.length})
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  Delete {blacklisted.length} blacklisted endpoint{blacklisted.length === 1 ? "" : "s"}?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  Only blacklisted endpoints are deleted - the rest are not touched. This can&apos;t be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction className="bg-negative text-negative-foreground hover:bg-negative/90" onClick={handleDelete}>
+                  Delete {blacklisted.length}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** "Test" for a URL typed into an Add dialog - checks it before it's saved, so a dead or rate-limited one never gets added blind. */
+function UrlProbe({ kind, url }: { kind: "ws" | "http"; url: string }) {
+  const [testing, setTesting] = useState(false);
+  const [outcome, setOutcome] = useState<{ url: string; result: RpcTestResult } | null>(null);
+  const trimmed = url.trim();
+
+  async function run() {
+    setTesting(true);
+    try {
+      setOutcome({ url: trimmed, result: await probeRpcUrl(kind, trimmed) });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Test failed");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  const shown = outcome && outcome.url === trimmed ? outcome.result : null; // a result for an older URL is stale once the URL changes
+  return (
+    <div className="space-y-1.5">
+      <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={!trimmed || testing} onClick={run}>
+        {testing ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+        Test this endpoint
+      </Button>
+      {shown && <TestResultLine test={{ at: new Date().toISOString(), verdict: shown.verdict, latencyMs: shown.latencyMs, message: shown.message }} />}
+    </div>
   );
 }
 
@@ -148,6 +413,7 @@ function AddRpcDialog({ onAdded }: { onAdded: () => void }) {
             <Label htmlFor="rpc-label">Label (optional)</Label>
             <Input id="rpc-label" placeholder="e.g. Chainstack #2" value={label} onChange={(e) => setLabel(e.target.value)} />
           </div>
+          <UrlProbe kind="ws" url={url} />
         </div>
         <DialogFooter>
           <DialogClose asChild>
@@ -222,6 +488,7 @@ function AddHttpRpcDialog({ onAdded }: { onAdded: () => void }) {
             <Label htmlFor="http-rpc-label">Label (optional)</Label>
             <Input id="http-rpc-label" placeholder="e.g. Alchemy #2" value={label} onChange={(e) => setLabel(e.target.value)} />
           </div>
+          <UrlProbe kind="http" url={url} />
           <div className="space-y-1.5">
             <Label htmlFor="http-rpc-scope">Used for</Label>
             <Select value={scope} onValueChange={(v) => setScope(v as "both" | "backtest")}>
@@ -252,7 +519,7 @@ function AddHttpRpcDialog({ onAdded }: { onAdded: () => void }) {
   );
 }
 
-function HttpRpcSection() {
+function HttpRpcSection({ ref }: { ref?: Ref<{ testAll: () => Promise<void> }> }) {
   const [endpoints, setEndpoints] = useState<HttpRpcEndpointView[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -274,6 +541,19 @@ function HttpRpcSection() {
     const interval = setInterval(() => refresh({ silent: true }), 15000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  const tester = useRpcTester("http", refresh);
+  useImperativeHandle(ref, () => ({ testAll: () => tester.testMany(endpoints ?? []) }), [tester, endpoints]);
+
+  async function handleDeleteMany(ids: string[]) {
+    try {
+      const { deletedCount } = await deleteHttpRpcEndpointsBulk(ids);
+      toast.success(`${deletedCount} blacklisted HTTP RPC endpoint${deletedCount === 1 ? "" : "s"} deleted`);
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
 
   async function handleToggleEnabled(endpoint: HttpRpcEndpointView, enabled: boolean) {
     setPendingId(endpoint._id);
@@ -329,6 +609,8 @@ function HttpRpcSection() {
         <AddHttpRpcDialog onAdded={refresh} />
       </div>
 
+      <HealthToolbar endpoints={endpoints ?? []} tester={tester} onDeleteMany={handleDeleteMany} />
+
       {loading && !endpoints ? (
         <div className="flex flex-col gap-2">
           {Array.from({ length: 2 }).map((_, i) => (
@@ -348,6 +630,7 @@ function HttpRpcSection() {
               <TableHeader>
                 <TableRow className="border-border/60 hover:bg-transparent">
                   <TableHead>Endpoint</TableHead>
+                  <TableHead>Health</TableHead>
                   <TableHead>Used for</TableHead>
                   <TableHead className="text-center">Enabled</TableHead>
                   <TableHead className="pr-4 text-right">Actions</TableHead>
@@ -356,12 +639,23 @@ function HttpRpcSection() {
               <TableBody>
                 {endpoints.map((endpoint) => {
                   const isPending = pendingId === endpoint._id;
+                  const isTesting = tester.testingIds.has(endpoint._id);
                   return (
-                    <TableRow key={endpoint._id} className="border-border/60">
+                    <TableRow key={endpoint._id} className={cn("border-border/60", isBlacklisted(endpoint) && "bg-negative/5")}>
                       <TableCell className="max-w-3xs sm:max-w-xs">
                         <div className="flex min-w-0 flex-col gap-0.5">
                           <span className="truncate font-medium">{endpoint.label || "Unlabeled endpoint"}</span>
                           <span className="truncate font-mono text-xs text-muted-foreground">{endpoint.url}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="max-w-3xs whitespace-normal sm:max-w-xs">
+                        <div className="flex flex-col gap-1">
+                          <BlacklistBadge endpoint={endpoint} />
+                          {endpoint.lastTest ? (
+                            <TestResultLine test={endpoint.lastTest} />
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Not tested yet</span>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -390,6 +684,17 @@ function HttpRpcSection() {
                         </div>
                       </TableCell>
                       <TableCell className="pr-4 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={isPending || isTesting || tester.progress !== null}
+                          onClick={() => tester.testOne(endpoint, { enableOnSuccess: isBlacklisted(endpoint) })}
+                          className="gap-1.5"
+                        >
+                          {isTesting ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                          Test
+                        </Button>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
                             <Button variant="ghost" size="sm" disabled={isPending} className="text-muted-foreground hover:text-negative">
@@ -412,6 +717,7 @@ function HttpRpcSection() {
                             </AlertDialogFooter>
                           </AlertDialogContent>
                         </AlertDialog>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -454,6 +760,30 @@ export default function RpcPage() {
     const interval = setInterval(() => refresh({ silent: true }), 5000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  const tester = useRpcTester("ws", refresh);
+  const httpSectionRef = useRef<{ testAll: () => Promise<void> }>(null);
+  const [testingEverything, setTestingEverything] = useState(false);
+
+  /** One click for the whole page: the WebSocket endpoints and the HTTP ones, together. */
+  async function handleTestEverything() {
+    setTestingEverything(true);
+    try {
+      await Promise.all([tester.testMany(endpoints ?? []), httpSectionRef.current?.testAll()]);
+    } finally {
+      setTestingEverything(false);
+    }
+  }
+
+  async function handleDeleteMany(ids: string[]) {
+    try {
+      const { deletedCount } = await deleteRpcEndpointsBulk(ids);
+      toast.success(`${deletedCount} blacklisted endpoint${deletedCount === 1 ? "" : "s"} deleted`);
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
 
   async function toggleExpand(endpoint: RpcEndpointView) {
     if (expandedId === endpoint._id) {
@@ -514,6 +844,7 @@ export default function RpcPage() {
   }
 
   const totalAddresses = endpoints?.reduce((sum, e) => sum + e.addressCount, 0) ?? 0;
+  const blacklistedCount = (endpoints ?? []).filter(isBlacklisted).length;
   const endpointLabelByUrl = new Map((endpoints ?? []).map((e) => [e.url, e.label || formatAddress(e.url, 12)]));
 
   return (
@@ -531,7 +862,19 @@ export default function RpcPage() {
             </p>
           </div>
         </div>
-        <AddRpcDialog onAdded={refresh} />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            className="gap-1.5"
+            disabled={testingEverything || tester.progress !== null}
+            onClick={handleTestEverything}
+            title="Tests every WebSocket and HTTP endpoint and flags any that are rate limited"
+          >
+            {testingEverything ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+            Test all RPC
+          </Button>
+          <AddRpcDialog onAdded={refresh} />
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-3 text-sm">
@@ -541,6 +884,12 @@ export default function RpcPage() {
         <div className="rounded-lg border border-border/60 bg-card/40 px-3 py-1.5 text-muted-foreground">
           {totalAddresses} address{totalAddresses === 1 ? "" : "es"} tracked
         </div>
+        {blacklistedCount > 0 && (
+          <div className="inline-flex items-center gap-1.5 rounded-lg border border-negative/30 bg-negative/10 px-3 py-1.5 text-negative">
+            <ShieldAlert className="size-3.5" />
+            {blacklistedCount} blacklisted
+          </div>
+        )}
         {unresolvedCount > 0 && (
           <div className="inline-flex items-center gap-1.5 rounded-lg border border-negative/30 bg-negative/10 px-3 py-1.5 text-negative">
             <AlertTriangle className="size-3.5" />
@@ -548,6 +897,8 @@ export default function RpcPage() {
           </div>
         )}
       </div>
+
+      <HealthToolbar endpoints={endpoints ?? []} tester={tester} onDeleteMany={handleDeleteMany} />
 
       {unresolvedAddresses.length > 0 && (
         <Card className="border-negative/30 bg-negative/5">
@@ -596,8 +947,10 @@ export default function RpcPage() {
           {endpoints.map((endpoint) => {
             const isPending = pendingId === endpoint._id;
             const isExpanded = expandedId === endpoint._id;
+            const isTesting = tester.testingIds.has(endpoint._id);
+            const blacklisted = isBlacklisted(endpoint);
             return (
-              <Card key={endpoint._id} className="border-border/60">
+              <Card key={endpoint._id} className={cn("border-border/60", blacklisted && "border-negative/30 bg-negative/5")}>
                 <CardContent className="flex flex-col gap-3 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <button
@@ -622,12 +975,19 @@ export default function RpcPage() {
                     </button>
 
                     <div className="flex items-center gap-2">
-                      <StatusBadge status={endpoint.status} />
-                      <span className="hidden text-xs text-muted-foreground sm:inline">
-                        {endpoint.status === "connected"
-                          ? `since ${formatRelativeTime(endpoint.lastConnectedAt)}`
-                          : `since ${formatRelativeTime(endpoint.lastDisconnectedAt)}`}
-                      </span>
+                      {blacklisted ? (
+                        <BlacklistBadge endpoint={endpoint} />
+                      ) : (
+                        <>
+                          <BlacklistBadge endpoint={endpoint} />
+                          <StatusBadge status={endpoint.status} />
+                          <span className="hidden text-xs text-muted-foreground sm:inline">
+                            {endpoint.status === "connected"
+                              ? `since ${formatRelativeTime(endpoint.lastConnectedAt)}`
+                              : `since ${formatRelativeTime(endpoint.lastDisconnectedAt)}`}
+                          </span>
+                        </>
+                      )}
                       <Switch
                         checked={endpoint.enabled}
                         disabled={isPending}
@@ -637,7 +997,17 @@ export default function RpcPage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={isPending || !endpoint.enabled}
+                        disabled={isPending || isTesting || tester.progress !== null}
+                        onClick={() => tester.testOne(endpoint, { enableOnSuccess: blacklisted })}
+                        className="gap-1.5"
+                      >
+                        {isTesting ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                        Test
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={isPending || !endpoint.enabled || blacklisted}
                         onClick={() => handleReconnect(endpoint)}
                         className="gap-1.5"
                       >
@@ -673,12 +1043,19 @@ export default function RpcPage() {
                     </div>
                   </div>
 
+                  {blacklisted && (
+                    <p className="text-xs text-negative/90">
+                      Blacklisted after {FAILURE_THRESHOLD} rate limits in a row - its addresses were moved to the other endpoints. Test it to bring
+                      it back, or delete it.
+                    </p>
+                  )}
                   {endpoint.lastError && (
                     <p className="flex items-start gap-1.5 text-xs text-negative/90">
                       <AlertTriangle className="mt-0.5 size-3 shrink-0" />
                       {endpoint.lastError}
                     </p>
                   )}
+                  <TestResultLine test={endpoint.lastTest} />
 
                   {isExpanded && (
                     <div className="rounded-lg border border-border/40 bg-background/40 p-3">
@@ -714,7 +1091,7 @@ export default function RpcPage() {
       )}
 
       <Separator />
-      <HttpRpcSection />
+      <HttpRpcSection ref={httpSectionRef} />
     </div>
   );
 }

@@ -296,8 +296,29 @@ export type SystemLogEntry = {
   createdAt: string;
 };
 
+export type RpcTestVerdict = "ok" | "slow" | "rate_limited" | "auth_failed" | "unreachable" | "error";
+
+/** Outcome of an RPC endpoint test - see db/rpcHealth.js. `ok` is true for "ok" and "slow". */
+export type RpcTestResult = {
+  ok: boolean;
+  verdict: RpcTestVerdict;
+  latencyMs: number | null;
+  message: string;
+};
+
+/** Health fields shared by WebSocket and HTTP RPC endpoints (auto-blacklisted after 3 rate-limit failures in a row). */
+export type RpcEndpointHealth = {
+  // Absent on endpoints saved before health tracking existed - read as "active".
+  health?: "active" | "blacklisted";
+  consecutiveFailures?: number;
+  lastCheckedAt?: string | null;
+  lastSuccessAt?: string | null;
+  blacklistedAt?: string | null;
+  lastTest?: { at: string; verdict: RpcTestVerdict; latencyMs: number | null; message: string | null } | null;
+};
+
 /** A WebSocket RPC endpoint traders are distributed across - see /rpc and db/rpcAssignment.js. */
-export type RpcEndpointView = {
+export type RpcEndpointView = RpcEndpointHealth & {
   _id: string;
   url: string;
   label: string;
@@ -312,11 +333,12 @@ export type RpcEndpointView = {
 };
 
 /** A plain HTTP RPC endpoint round-robinned for non-websocket Solana calls - see /rpc's second section and src/rpcPool.js. */
-export type HttpRpcEndpointView = {
+export type HttpRpcEndpointView = RpcEndpointHealth & {
   _id: string;
   url: string;
   label: string;
   enabled: boolean;
+  lastError?: string | null;
   // "both" = live tracking + backtests; "backtest" = backtests only, never used live.
   scope: "both" | "backtest";
   createdAt: string;

@@ -4,12 +4,30 @@
  * another endpoint on rate-limit / transient errors. `urls` can be swapped
  * out live (see src/tracker.js's startHttpRpcPoolSync) by reassigning
  * `.urls` directly - pickUrl() always reads the current array.
+ *
+ * `onResult(url, ok, error)` (optional) reports rate-limit strikes and the
+ * recovery after one, so the caller can blacklist an endpoint that keeps
+ * getting throttled. Successes are only reported while a strike is
+ * outstanding, so a healthy endpoint costs no extra work per call.
  */
 export class RpcPool {
-  constructor(urls) {
+  constructor(urls, { onResult } = {}) {
     if (!urls || urls.length === 0) throw new Error("RpcPool requires at least one RPC URL");
     this.urls = urls;
     this._index = 0;
+    this._onResult = onResult;
+    this._struckUrls = new Set(); // endpoints with an unanswered rate-limit strike
+  }
+
+  _reportStrike(url, error) {
+    if (!this._onResult) return;
+    this._struckUrls.add(url);
+    this._onResult(url, false, error);
+  }
+
+  _reportSuccess(url) {
+    if (!this._onResult || !this._struckUrls.delete(url)) return;
+    this._onResult(url, true, null);
   }
 
   pickUrl() {
@@ -31,6 +49,7 @@ export class RpcPool {
         });
         if (res.status === 429 || res.status === 503) {
           lastError = new Error(`${url} rate-limited (HTTP ${res.status})`);
+          if (res.status === 429) this._reportStrike(url, "HTTP 429 rate limited");
           await sleep(150 * (attempt + 1));
           continue;
         }
@@ -40,11 +59,13 @@ export class RpcPool {
           const rateLimited = json.error.code === 429 || /rate.?limit/i.test(json.error.message || "");
           if (rateLimited) {
             lastError = new Error(`${url} RPC error ${json.error.code}: ${json.error.message}`);
+            this._reportStrike(url, `Rate limited: ${json.error.message}`);
             await sleep(150 * (attempt + 1));
             continue;
           }
           throw new Error(`${url} RPC error ${json.error.code}: ${json.error.message}`);
         }
+        this._reportSuccess(url);
         return json.result;
       } catch (err) {
         lastError = err;

@@ -25,6 +25,7 @@ import { connectDb } from "../db/connect.js";
 import { Trader } from "../db/models/Trader.js";
 import { RpcEndpoint } from "../db/models/RpcEndpoint.js";
 import { HttpRpcEndpoint } from "../db/models/HttpRpcEndpoint.js";
+import { recordRpcResult, isRateLimitMessage } from "../db/rpcHealth.js";
 import { recordTrade, markTradeActioned } from "../db/positionLedger.js";
 import { addTradersBulk } from "../db/traderService.js";
 import { evaluateRealTrade } from "../db/simulation/engine.js";
@@ -87,7 +88,7 @@ export class TrackerService extends EventEmitter {
     commitment = config.commitment,
   } = {}) {
     super();
-    this.rpcPool = new RpcPool(rpcUrls);
+    this.rpcPool = new RpcPool(rpcUrls, { onResult: (url, ok, error) => recordRpcResult("http", url, ok, { error }) });
     this.commitment = commitment;
     // url -> LogSubscriber, one per active RpcEndpoint - populated/torn down
     // by syncWatchedFromDb as RpcEndpoint documents are added/removed/toggled.
@@ -155,6 +156,7 @@ export class TrackerService extends EventEmitter {
       this.emit("error", err);
       logEvent("rpc", `RPC error (${url}): ${err.message || err}`, { level: "error", meta: { url } });
       RpcEndpoint.updateOne({ url }, { $set: { lastError: err.message || String(err), lastErrorAt: new Date() } }).catch(() => {});
+      if (isRateLimitMessage(err.message)) recordRpcResult("ws", url, false, { error: err.message });
     });
     sub.on("connected", () => {
       this.emit("connected", url);
@@ -212,8 +214,10 @@ export class TrackerService extends EventEmitter {
       await sub.watch(address);
     } catch (err) {
       await markSubscriptionFailed(address).catch(() => {});
+      if (isRateLimitMessage(err.message)) recordRpcResult("ws", url, false, { error: err.message });
       throw err;
     }
+    recordRpcResult("ws", url, true); // clears an outstanding rate-limit strike; a no-op write-wise otherwise
   }
 
   /** Stops watching one address on a specific endpoint's subscriber. No-op if that endpoint no longer exists. */
@@ -271,10 +275,12 @@ export class TrackerService extends EventEmitter {
     await connectDb();
 
     // 1. Make the live subscriber pool match RpcEndpoint (enabled ones only get a connection).
-    const endpoints = await RpcEndpoint.find({}, { url: 1, enabled: 1 }).lean();
-    const activeEndpointUrls = new Set(endpoints.filter((e) => e.enabled).map((e) => e.url));
-    for (const ep of endpoints) {
-      if (ep.enabled && !this.subscribers.has(ep.url)) this._createSubscriber(ep.url);
+    // A blacklisted endpoint (rate-limited 3 times in a row) is treated like a disabled one until it passes a test.
+    const endpoints = await RpcEndpoint.find({}, { url: 1, enabled: 1, health: 1 }).lean();
+    const usable = endpoints.filter((e) => e.enabled && e.health !== "blacklisted");
+    const activeEndpointUrls = new Set(usable.map((e) => e.url));
+    for (const ep of usable) {
+      if (!this.subscribers.has(ep.url)) this._createSubscriber(ep.url);
     }
 
     // 2. Sticky rebalance: persists assignedRpcUrl for every active trader
@@ -377,7 +383,7 @@ export class TrackerService extends EventEmitter {
    * install has no replica set).
    */
   async syncHttpRpcPoolFromDb() {
-    const enabled = await HttpRpcEndpoint.find({ enabled: true, scope: { $ne: "backtest" } }, { url: 1 }).lean();
+    const enabled = await HttpRpcEndpoint.find({ enabled: true, health: { $ne: "blacklisted" }, scope: { $ne: "backtest" } }, { url: 1 }).lean();
     const merged = [...new Set([...config.rpcUrls, ...enabled.map((e) => e.url)])];
     this.rpcPool.urls = merged;
   }

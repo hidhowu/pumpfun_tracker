@@ -5,7 +5,7 @@ import { RpcEndpoint } from "@/db/models/RpcEndpoint";
 
 type Params = { params: Promise<{ id: string }> };
 
-/** Body: { label?: string, enabled?: boolean }. Disabling the last enabled endpoint is rejected - it would leave zero tracking coverage. */
+/** Body: { label?: string, enabled?: boolean }. Disabling the last usable (enabled, not blacklisted) endpoint is rejected - it would leave zero tracking coverage. */
 export async function PATCH(request: NextRequest, { params }: Params) {
   const denied = await requireApiSession();
   if (denied) return denied;
@@ -16,8 +16,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   const endpoint = await RpcEndpoint.findById(id);
   if (!endpoint) return NextResponse.json({ error: "RPC endpoint not found" }, { status: 404 });
 
-  if (body.enabled === false && endpoint.enabled) {
-    const enabledCount = await RpcEndpoint.countDocuments({ enabled: true });
+  if (body.enabled === false && endpoint.enabled && endpoint.health !== "blacklisted") {
+    const enabledCount = await RpcEndpoint.countDocuments({ enabled: true, health: { $ne: "blacklisted" } });
     if (enabledCount <= 1) {
       return NextResponse.json(
         { error: "Can't disable the last active RPC endpoint - every tracked address would stop updating." },
@@ -44,8 +44,8 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
   const endpoint = await RpcEndpoint.findById(id);
   if (!endpoint) return NextResponse.json({ error: "RPC endpoint not found" }, { status: 404 });
 
-  if (endpoint.enabled) {
-    const enabledCount = await RpcEndpoint.countDocuments({ enabled: true });
+  if (endpoint.enabled && endpoint.health !== "blacklisted") {
+    const enabledCount = await RpcEndpoint.countDocuments({ enabled: true, health: { $ne: "blacklisted" } });
     if (enabledCount <= 1) {
       return NextResponse.json(
         { error: "Can't delete the last active RPC endpoint - every tracked address would stop updating." },

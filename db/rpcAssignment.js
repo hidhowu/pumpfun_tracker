@@ -10,7 +10,7 @@ import { logEvent } from "./systemLog.js";
 const STUCK_THRESHOLD_MS = 60 * 1000;
 
 function isEndpointAvailable(endpoint) {
-  if (!endpoint.enabled) return false;
+  if (!endpoint.enabled || endpoint.health === "blacklisted") return false;
   if (endpoint.status === "connected") return true;
   if (!endpoint.lastDisconnectedAt) return true; // never even had a chance to fail yet - give it the benefit of the doubt
   return Date.now() - new Date(endpoint.lastDisconnectedAt).getTime() < STUCK_THRESHOLD_MS;
@@ -62,12 +62,12 @@ export async function ensureRpcEndpointsSeeded(seedUrls) {
  * @returns {Promise<{moves: Array<{address:string, fromUrl:string|null, toUrl:string}>, unresolved: string[]}>}
  */
 export async function rebalanceAssignments() {
-  const allEndpoints = await RpcEndpoint.find({}, { url: 1, enabled: 1, status: 1, lastDisconnectedAt: 1 })
+  const allEndpoints = await RpcEndpoint.find({}, { url: 1, enabled: 1, status: 1, health: 1, lastDisconnectedAt: 1 })
     .sort({ createdAt: 1 })
     .lean();
   const endpoints = allEndpoints.filter(isEndpointAvailable);
   const activeUrls = endpoints.map((e) => e.url);
-  const stuckUrls = allEndpoints.filter((e) => e.enabled && !isEndpointAvailable(e)).map((e) => e.url);
+  const stuckUrls = allEndpoints.filter((e) => e.enabled && e.health !== "blacklisted" && !isEndpointAvailable(e)).map((e) => e.url);
   const traders = await Trader.find({ status: "active" }, { address: 1, assignedRpcUrl: 1 }).lean();
 
   if (activeUrls.length === 0) {
