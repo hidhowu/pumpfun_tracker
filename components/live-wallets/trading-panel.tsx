@@ -120,7 +120,7 @@ function LookupTableCard({ walletId, state, onDone }: { walletId: string; state:
         <div className="min-w-0">
           <div className="text-[15px] font-extrabold">Lookup table</div>
           <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
-            A table of the accounts pump.fun trades use, owned by this wallet. It lets the bigger swaps (paying with SOL for tokens quoted in USDC, PUMP and so on) fit in one transaction. Create it now so the first trade doesn&apos;t have to wait for it. It costs about 0.01-0.02 SOL of rent (refundable by closing the table) plus a few network fees, and takes up to a minute. Clicking again tops it up.
+            A table of the accounts pump.fun trades use, owned by this wallet. It lets the bigger swaps (paying with SOL for tokens quoted in USDC, PUMP and so on) fit in one transaction. Create it now so the first trade doesn&apos;t have to wait for it. It costs about 0.01-0.02 SOL of rent (refundable by closing the table) plus a few network fees, and takes up to a minute. Clicking again tops it up. (Needs 0.001 SOL in the wallet to create it, 0.005 SOL to update it.)
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             {has ? (

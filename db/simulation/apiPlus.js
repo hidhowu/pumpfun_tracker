@@ -48,10 +48,10 @@ export async function poolPriceAt(mint, atSec, { nowSec = Date.now() / 1000, for
   return null;
 }
 
-/** The newest check moment of a schedule that is old enough to judge (anchored at `startSec`), or null before the first. */
-export function latestSampleAt({ key, startSec, intervalSec, nowSec }) {
-  const first = startSec + sweepPhase(key, intervalSec);
-  const last = nowSec - INDEX_LAG_SEC;
-  if (last < first) return null;
-  return first + Math.floor((last - first) / intervalSec) * intervalSec;
+/**
+ * The first check moment of a schedule (anchored at `startSec`) after `afterSec` (null = none judged yet): the moment to judge next.
+ * Whether it is old enough to be listed is the caller's to check (INDEX_LAG_SEC).
+ */
+export function nextSampleAt({ key, startSec, intervalSec, afterSec = null }) {
+  return afterSec == null ? startSec + sweepPhase(key, intervalSec) : afterSec + intervalSec;
 }

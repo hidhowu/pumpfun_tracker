@@ -5,10 +5,12 @@ import { checkLiveRiskExits } from "./risk.js";
 import { SWEEP_EVERY_MS, sweepAllWallets } from "./burnEngine.js";
 import { pumpSdks } from "./sdk.js";
 
+const API_PLUS_BEAT_MS = 2000;
+
 /**
  * Starts the three background loops of the live wallets, in the tracker daemon (the process that sees the traders' trades as they happen):
  *  - the trade queue, every 250 ms (several rounds may overlap: each claims its own entries, so one slow landing never holds up another);
- *  - the live wallets' own exit rules, as often as the simulation's risk sweep;
+ *  - the live wallets' own exit rules, as often as the simulation's risk sweep (the lots of "api_plus" wallets: every 2 seconds, judged at their check moments);
  *  - the burn engine, every 30 minutes.
  * @returns {() => void} stops them
  */
@@ -55,6 +57,19 @@ export function startLiveTradingLoops({ onError = (err) => console.error("[live]
   };
   riskLoop();
 
+  // The lots of "api_plus" wallets are looked at every 2 seconds, but only judged at their own check moments (the risk-check interval, as in the backtest):
+  // the short beat finds a moment as soon as its trades are listed, and a slow pass can't push the next look a whole interval away.
+  let apiPlusRunning = false;
+  const apiPlusTimer = setInterval(() => {
+    if (apiPlusRunning) return;
+    apiPlusRunning = true;
+    checkLiveRiskExits({ apiPlus: true })
+      .catch(onError)
+      .finally(() => {
+        apiPlusRunning = false;
+      });
+  }, API_PLUS_BEAT_MS);
+
   // The first burn pass waits a couple of minutes so a restart does not start with it.
   let burning = false;
   const burn = () => {
@@ -72,6 +87,7 @@ export function startLiveTradingLoops({ onError = (err) => console.error("[live]
   return () => {
     active = false;
     clearInterval(queueTimer);
+    clearInterval(apiPlusTimer);
     clearInterval(burnTimer);
     clearTimeout(burnFirst);
     clearTimeout(preload);

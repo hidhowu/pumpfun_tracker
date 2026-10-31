@@ -1,5 +1,5 @@
 import { request } from "./api";
-import type { BurnEmptyResult, BurnResult, EncryptedKey, LiveTransactionsPage, LiveWallet, LiveWalletDetail, LinkedLive, LiveWalletListItem, TradingLotsPage, TradingPatch, TradingState, TradingSummary, TxStats, LookupTableResult, DryDaily } from "./live-wallet-types";
+import type { BurnEmptyResult, BurnResult, EncryptedKey, LiveTransactionsPage, LiveWallet, LiveWalletDetail, LinkedLive, LiveWalletListItem, TradingLotsPage, TradingPatch, TradingState, TradingSummary, TxStats, LookupTableResult, DryDaily, TransferResult } from "./live-wallet-types";
 
 export function listLiveWallets(): Promise<{ wallets: LiveWalletListItem[]; twoFactorEnabled: boolean }> {
   return request("/api/live-wallets");
@@ -95,4 +95,9 @@ export function sellLotNow(walletId: string, lotId: string): Promise<{ queued: b
 /** Creates the wallet's lookup table now (or tops it up) so its first trade is fast. Spends about 0.01-0.02 SOL of rent. Can take up to a minute. */
 export function createLookupTable(walletId: string): Promise<LookupTableResult> {
   return request(`/api/live-wallets/${walletId}/trading/lookup-table`, { method: "POST" });
+}
+
+/** Sends SOL to another live wallet on this platform. Needs a fresh authenticator code. `all` sends everything but the network fee. Can take up to a minute. */
+export function transferSol(walletId: string, body: { toWalletId: string; amountSol?: string; all?: boolean; code: string }): Promise<TransferResult> {
+  return request(`/api/live-wallets/${walletId}/transfer`, { method: "POST", body: JSON.stringify(body) });
 }

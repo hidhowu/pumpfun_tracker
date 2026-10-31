@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { AlertOctagon, ChevronLeft, ChevronRight, Loader2, TestTube2 } from "lucide-react";
+import { AlertOctagon, ChevronDown, ChevronLeft, ChevronRight, Loader2, TestTube2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,9 +26,9 @@ const reasonLabel = (reason: string | null | undefined) => (reason ? (REASONS[re
 
 function Row({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-2 text-[13px]">
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-[13px]">
       <span className="text-muted-foreground">{label}</span>
-      <span className={cn("min-w-0 truncate text-right font-bold tabular-nums", className)}>{children}</span>
+      <span className={cn("ml-auto min-w-0 text-right font-bold tabular-nums", className)}>{children}</span>
     </div>
   );
 }
@@ -47,13 +47,13 @@ function Side({ title, tag, children }: { title: string; tag?: React.ReactNode; 
 
 function ExitLine({ label, exit, chosen }: { label: string; exit: LotDryExit | null; chosen: boolean }) {
   return (
-    <div className={cn("flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-[13px]", chosen ? "bg-primary/10" : "bg-secondary/40")}>
+    <div className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg px-2.5 py-1.5 text-[13px]", chosen ? "bg-primary/10" : "bg-secondary/40")}>
       <span className="font-bold">
         {label}
         {chosen ? <span className="ml-1.5 text-[11px] font-semibold text-brand-soft">in use</span> : null}
       </span>
       {exit ? (
-        <span className="flex items-center gap-2">
+        <span className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground">
             {reasonLabel(exit.reason)}
             {exit.at ? <span className="ml-1.5 tabular-nums">sold {formatExactTime(exit.at)}</span> : null}
@@ -72,6 +72,7 @@ const ROUTES: Record<string, string> = { direct: "direct", multihop: "multi-hop 
 
 function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exitMode: string; walletId: string; onChanged: () => void }) {
   const [selling, setSelling] = useState(false);
+  const [expanded, setExpanded] = useState(false); // phones: the two sides are folded away until the card is tapped
   async function sellNow() {
     setSelling(true);
     try {
@@ -130,7 +131,24 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2.5">
+      {/* On a phone the card shows only the results until it is tapped; from md up both sides are always open, side by side. */}
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className="flex items-center justify-between gap-3 rounded-xl bg-secondary/40 px-3 py-2 text-left text-[13px] font-bold outline-none focus-visible:ring-3 focus-visible:ring-ring/50 md:hidden"
+      >
+        <span className="min-w-0">
+          Live {open ? result(live.unrealizedUsd, live.unrealizedPercent, true) : result(live.pnlUsd, live.pnlPercent, false)}
+          {sim ? <span className="text-muted-foreground"> · sim </span> : null}
+          {sim ? (sim.status === "open" ? result(sim.unrealizedUsd, sim.unrealizedPercent, true) : result(sim.pnlUsd, sim.pnlPercent, false)) : null}
+        </span>
+        <span className="flex shrink-0 items-center gap-1 text-xs text-brand-soft">
+          {expanded ? "Hide details" : "Details"} <ChevronDown className={cn("size-4 transition-transform", expanded && "rotate-180")} />
+        </span>
+      </button>
+
+      <div className={cn("grid-cols-1 gap-2.5 md:grid md:grid-cols-2", expanded ? "grid" : "hidden")}>
         <Side title={dry ? "Live (dry run)" : "Live"} tag={!live.verified && !dry ? <span className="text-[11px] text-muted-foreground">estimated</span> : undefined}>
           <Row label="Bought at">{formatPrice(live.buyPriceUsd)}</Row>
           <Row label={open ? "Value now" : "Sold at"}>{open ? (live.valueUsd != null ? formatUsd(live.valueUsd) : "-") : formatPrice(live.sellPriceUsd)}</Row>
@@ -269,7 +287,7 @@ export function TradingLots({ walletId, exitMode, refreshKey }: { walletId: stri
           No trades yet. When the connected simulation wallet takes its next trade, it shows up here.
         </div>
       ) : (
-        <div className="grid gap-3 xl:grid-cols-2">{data?.lots.map((lot) => <LotCard key={lot.id} lot={lot} exitMode={exitMode} walletId={walletId} onChanged={load} />)}</div>
+        <div className="grid gap-3 2xl:grid-cols-2">{data?.lots.map((lot) => <LotCard key={lot.id} lot={lot} exitMode={exitMode} walletId={walletId} onChanged={load} />)}</div>
       )}
 
       {data && data.totalPages > 1 ? (

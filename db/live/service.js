@@ -6,6 +6,7 @@ import { isTwoFactorEnabled, verifyTwoFactorStepUp } from "../authService.js";
 import { logEvent } from "../systemLog.js";
 import { getChainSnapshot, invalidateChainSnapshot } from "./chain.js";
 import { BurnError, burnAndCloseTokenAccount } from "./burnTokenAccount.js";
+import { parseSolToLamports, transferSol } from "./transferSol.js";
 import { getTokenMeta } from "./tokenMeta.js";
 import { buildLedger, emptyStats } from "./pnl.js";
 import { syncLiveWallet } from "./txSync.js";
@@ -256,5 +257,55 @@ export async function burnLiveWalletTokenAccount(id, { userId, username, account
   } finally {
     secret?.fill(0);
     burning.delete(lock);
+  }
+}
+
+const transferring = new Set(); // wallet ids with a transfer in progress - a double click must never send two
+
+/**
+ * Sends SOL from one live wallet to ANOTHER LIVE WALLET ON THIS PLATFORM (never to an outside address: the destination is looked up by its id).
+ * Needs two-factor on and a fresh authenticator code, like viewing the key. The key is decrypted only for the length of the call and wiped after.
+ * @param {{ userId: string, username: string, toId: string, amountSol?: string|number, all?: boolean, code: string, ip?: string }} actor
+ */
+export async function transferLiveWalletSol(id, { userId, username, toId, amountSol, all = false, code, ip }) {
+  if (!(await isTwoFactorEnabled(userId))) throw new LiveWalletError(TWO_FACTOR_REQUIRED, 403);
+  if (!isWalletEncryptionConfigured()) throw new LiveWalletError("Wallet encryption isn't configured on this server (WALLET_ENCRYPTION_KEY).", 503);
+  if (String(id) === String(toId)) throw new LiveWalletError("Choose a different wallet to send to.");
+  const lamports = all ? null : parseSolToLamports(amountSol);
+  if (!all && lamports == null) throw new LiveWalletError("Enter an amount in SOL (up to 9 decimals), or use Max.");
+  const wallet = await LiveWallet.findById(id).select("+encryptedSecret");
+  if (!wallet) throw new LiveWalletError("Wallet not found", 404);
+  const target = await LiveWallet.findById(toId).lean();
+  if (!target) throw new LiveWalletError("The receiving wallet wasn't found on this platform.", 404);
+  if (transferring.has(String(wallet._id))) throw new LiveWalletError("A transfer from this wallet is already in progress.", 409);
+
+  const check = await verifyTwoFactorStepUp(userId, String(code ?? "").trim().slice(0, 12), { ip });
+  if (!check.ok) {
+    logEvent("tracker", `[live-wallet] Failed transfer attempt from "${wallet.name}" by ${username}`, { level: "warn", meta: { walletId: String(wallet._id), reason: check.error } });
+    throw new LiveWalletError(check.error, check.status);
+  }
+
+  transferring.add(String(wallet._id));
+  let secret = null;
+  try {
+    secret = base58Decode(decryptWalletSecret(wallet.address, wallet.encryptedSecret));
+    if (secret.length !== 64 || base58Encode(secret.subarray(32)) !== wallet.address) throw new LiveWalletError("The stored key doesn't match this wallet.", 500);
+    const result = await transferSol({ secretKey: secret, to: target.address, lamports, all });
+    invalidateChainSnapshot(wallet.address);
+    invalidateChainSnapshot(target.address);
+    logEvent("tracker", `[live-wallet] "${wallet.name}" sent ${result.lamports / 1e9} SOL to "${target.name}" (${result.status}) by ${username}`, {
+      level: "warn",
+      meta: { walletId: String(wallet._id), toWalletId: String(target._id), signature: result.signature, lamports: result.lamports },
+    });
+    return { ...result, toName: target.name };
+  } catch (err) {
+    if (err instanceof BurnError) {
+      logEvent("tracker", `[live-wallet] Transfer from "${wallet.name}" to "${target.name}" by ${username} failed: ${err.message}`, { level: "warn", meta: { walletId: String(wallet._id), toWalletId: String(target._id) } });
+      throw new LiveWalletError(err.message, err.status);
+    }
+    throw err;
+  } finally {
+    secret?.fill(0);
+    transferring.delete(String(wallet._id));
   }
 }

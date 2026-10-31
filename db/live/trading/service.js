@@ -600,7 +600,8 @@ export async function stuckSellCounts() {
 
 // ------------------------------------------------------------------ the lookup table
 
-const TABLE_MIN_SOL = 0.03; // rent for the table (~0.01-0.02 SOL) plus the network fees of creating and filling it
+const TABLE_CREATE_MIN_SOL = 0.001; // a small floor to create the table: the chain refuses the transaction itself if the rent is not there
+const TABLE_UPDATE_MIN_SOL = 0.005; // topping up an existing table
 let creatingTable = new Set();
 
 /** The wallet's lookup table: its address and how many accounts it holds, or nulls when it has none yet. */
@@ -620,7 +621,8 @@ export async function createLookupTable(liveId, { userId, username }) {
   if (!live) throw new TradingError("Wallet not found", 404);
   if (creatingTable.has(String(live._id))) throw new TradingError("The lookup table is already being created.", 409);
   const lamports = (await rpc("getBalance", [live.address, { commitment: "confirmed" }])).value;
-  if (lamports / LAMPORTS < TABLE_MIN_SOL) throw new TradingError(`The wallet needs at least ${TABLE_MIN_SOL} SOL to create the table (it has ${(lamports / LAMPORTS).toFixed(4)}).`, 409);
+  const minSol = live.lookupTable ? TABLE_UPDATE_MIN_SOL : TABLE_CREATE_MIN_SOL;
+  if (lamports / LAMPORTS < minSol) throw new TradingError(`The wallet needs at least ${minSol} SOL to ${live.lookupTable ? "update" : "create"} the table (it has ${(lamports / LAMPORTS).toFixed(4)}).`, 409);
 
   creatingTable.add(String(live._id));
   const secret = base58Decode(decryptWalletSecret(live.address, live.encryptedSecret));

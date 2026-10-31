@@ -131,6 +131,17 @@ export type BurnResult = {
   reclaimedLamports: number;
 };
 
+/** What sending SOL to another platform wallet did - see db/live/transferSol.js. "pending" = sent, not yet seen confirmed. */
+export type TransferResult = {
+  signature: string;
+  status: "confirmed" | "pending";
+  from: string;
+  to: string;
+  toName: string;
+  lamports: number;
+  feeLamports: number;
+};
+
 // ---------------------------------------------------------------- copy trading (db/live/trading/*)
 
 export type TradingMode = "dry" | "live";

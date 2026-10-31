@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowDown, ChevronLeft, Copy, Eye, EyeOff, KeyRound, Pencil, RefreshCw, TrendingUp } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronLeft, Copy, Eye, EyeOff, KeyRound, Pencil, RefreshCw, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,7 @@ import { ActivityTable } from "@/components/live-wallets/activity-table";
 import { HoldingsTable, SOL, TokenAccountsTable } from "@/components/live-wallets/holdings-table";
 import { SolSheet } from "@/components/live-wallets/sol-sheet";
 import { ReceiveDialog } from "@/components/live-wallets/receive-dialog";
+import { SendDialog } from "@/components/live-wallets/send-dialog";
 import { TokenSheet } from "@/components/live-wallets/token-sheet";
 import { TradingPanel } from "@/components/live-wallets/trading-panel";
 import { StuckSellsBanner } from "@/components/live-wallets/stuck-sells";
@@ -184,6 +185,7 @@ export default function LiveWalletDetailPage() {
                   <RefreshCw className={cn("size-4", refreshing && "animate-spin")} /> Refresh
                 </Button>
                 <ReceiveDialog name={wallet.name} address={wallet.address} />
+                <SendDialog wallet={wallet} twoFactorEnabled={detail.twoFactorEnabled} solBalance={chain?.solBalance ?? null} onSent={handleManualRefresh} />
                 <ViewKeyDialog wallet={wallet} twoFactorEnabled={detail.twoFactorEnabled} />
               </div>
             </div>
@@ -225,8 +227,9 @@ export default function LiveWalletDetailPage() {
               </Card>
 
               {/* Phone actions */}
-              <div className="grid grid-cols-4 gap-2 md:hidden">
+              <div className="grid grid-cols-5 gap-2 md:hidden">
                 <ReceiveDialog name={wallet.name} address={wallet.address} trigger={<CircleAction label="Receive" icon={ArrowDown} primary />} />
+                <SendDialog wallet={wallet} twoFactorEnabled={detail.twoFactorEnabled} solBalance={chain?.solBalance ?? null} onSent={handleManualRefresh} trigger={<CircleAction label="Send" icon={ArrowUp} />} />
                 <CircleAction label="Copy" icon={Copy} onClick={() => handleCopyAddress(wallet.address)} />
                 <CircleAction label="Refresh" icon={RefreshCw} onClick={handleManualRefresh} spinning={refreshing} disabled={refreshing} />
                 <ViewKeyDialog wallet={wallet} twoFactorEnabled={detail.twoFactorEnabled} trigger={<CircleAction label="Key" icon={KeyRound} />} />

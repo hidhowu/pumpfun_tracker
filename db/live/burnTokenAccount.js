@@ -106,7 +106,7 @@ export function buildBurnAndCloseInstructions({ owner, tokenAccount, account }) 
   return instructions;
 }
 
-async function waitForConfirmation(signature, lastValidBlockHeight) {
+export async function waitForConfirmation(signature, lastValidBlockHeight) {
   const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const statuses = await rpc("getSignatureStatuses", [[signature], { searchTransactionHistory: false }]).catch(() => null);
