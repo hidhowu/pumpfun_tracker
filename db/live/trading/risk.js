@@ -9,7 +9,7 @@ import { getPrice, prefetchPrices, PRICE_MAX_AGE } from "../../pumpFunApi.js";
 import { logEvent } from "../../systemLog.js";
 import { buyCostUsd, lotValueUsd } from "./lots.js";
 import { buildTrigger, confirmExit } from "../../simulation/exitTrigger.js";
-import { cooldownStylesOf, lotStyleIds, selectedStyleId } from "./styles.js";
+import { API_PLUS_STYLE, cooldownStylesOf, lotStyleIds, selectedStyleId } from "./styles.js";
 import { tradeDelaySeconds } from "./settings.js";
 import { INDEX_LAG_SEC, apiPlusIntervalSeconds, nextSampleAt, poolPriceAt } from "../../simulation/apiPlus.js";
 
@@ -119,7 +119,22 @@ const tracking = (lot, sim) => {
   return !(maxSeconds > 0) || Date.now() - lot.openedAt.getTime() < maxSeconds * 1000 + TRACK_GRACE_MS;
 };
 
-/** @param {{ apiPlus?: boolean }} [options] apiPlus = sweep only the lots of "api_plus" wallets (judged at their own check moments); otherwise only all the others */
+/**
+ * The styles this sweep judges for a lot: a live lot only the one the wallet is set to; a dry lot each one that has not decided. "follow" copies the
+ * simulation's exits (mirror.js); for a trade the simulation never took it has none to copy and takes the "own" exit (executeDrySell): in a dry lot that
+ * is handled there, and a live lot of a wallet set to follow is judged here by the own-entry rules.
+ */
+function stylesFor(lot, live) {
+  const cooldowns = new Map(cooldownStylesOf(live).map((c) => [c.id, c]));
+  const selected = selectedStyleId(live);
+  const wanted = lot.mode === "dry" ? lotStyleIds(lot).filter((id) => !lot.dryExits?.[id] && id !== "follow") : selected === "follow" ? (lot.unpaired ? ["own"] : []) : [selected];
+  return wanted.map((id) => cooldowns.get(id) ?? (id === "own" || id === "follow" || id === API_PLUS_STYLE ? { id, kind: "own" } : null)).filter(Boolean);
+}
+
+/** A style is judged on sampled prices at the lot's check moments (the API Plus way) when its simulation wallet is "api_plus", or when it is the API Plus style itself. */
+const sampledStyle = (style, sim) => sim.settings?.trackingMethod === "api_plus" || style.id === API_PLUS_STYLE;
+
+/** @param {{ apiPlus?: boolean }} [options] apiPlus = judge only the styles that look at sampled prices (API Plus), every few seconds; otherwise all the other styles */
 export async function checkLiveRiskExits({ apiPlus: apiPlusPass = false } = {}) {
   const all = await LiveLot.find({ $or: [{ status: "open" }, { mode: "dry", dryDone: false }] });
   if (all.length === 0) return 0;
@@ -133,19 +148,30 @@ export async function checkLiveRiskExits({ apiPlus: apiPlusPass = false } = {}) 
   // A closed dry lot that has been waited for past the profile's max trade time stops being tracked.
   const expired = all.filter((l) => l.status === "closed" && !tracking(l, sims.get(String(l.liveWalletId))));
   if (expired.length) await LiveLot.updateMany({ _id: { $in: expired.map((l) => l._id) } }, { $set: { dryDone: true } });
-  const isApiPlus = (l) => sims.get(String(l.liveWalletId))?.settings?.trackingMethod === "api_plus";
-  const lots = all.filter((l) => tracking(l, sims.get(String(l.liveWalletId))) && isApiPlus(l) === apiPlusPass);
-  if (lots.length === 0) return 0;
-  await markUnpaired(lots, lives).catch((err) => logEvent("trade", `[live] Couldn't check which trades the simulation took: ${err instanceof Error ? err.message : err}`, { level: "warn" }));
+  const tracked = all.filter((l) => tracking(l, sims.get(String(l.liveWalletId))));
+  if (tracked.length === 0) return 0;
+  // Bookkeeping over every tracked lot, once per normal sweep.
+  if (!apiPlusPass) await markUnpaired(tracked, lives).catch((err) => logEvent("trade", `[live] Couldn't check which trades the simulation took: ${err instanceof Error ? err.message : err}`, { level: "warn" }));
+  // A lot is in the API Plus pass when one of its styles is judged on sampled prices, and in the normal pass when any other style (or none) is.
+  const lots = tracked.filter((l) => {
+    const live = lives.get(String(l.liveWalletId));
+    const sim = sims.get(String(l.liveWalletId));
+    if (!live || !sim) return false;
+    const styles = stylesFor(l, live);
+    return apiPlusPass ? styles.some((s) => sampledStyle(s, sim)) : styles.length === 0 || styles.some((s) => !sampledStyle(s, sim));
+  });
+  if (apiPlusPass && lots.length === 0) return 0;
   const blacklisted = new Set((await Trader.find({ address: { $in: [...new Set(lots.map((l) => l.traderAddress))] }, status: "blacklisted" }, { address: 1 }).lean()).map((t) => t.address));
 
   if (!apiPlusPass) await prefetchPrices(lots.map((l) => l.mint), { maxAgeMs: PRICE_MAX_AGE.RISK_SWEEP });
   const apiPlusInterval = apiPlusPass ? await apiPlusIntervalSeconds() : 0;
 
-  let queued = await requeueMissedFollowExits(lots).catch((err) => {
-    logEvent("trade", `[live] Couldn't re-queue missed dry-run exits: ${err instanceof Error ? err.message : err}`, { level: "warn" });
-    return 0;
-  });
+  let queued = apiPlusPass
+    ? 0
+    : await requeueMissedFollowExits(tracked).catch((err) => {
+        logEvent("trade", `[live] Couldn't re-queue missed dry-run exits: ${err instanceof Error ? err.message : err}`, { level: "warn" });
+        return 0;
+      });
   await Promise.all(
     lots.map(async (lot) => {
       const live = lives.get(String(lot.liveWalletId));
@@ -153,13 +179,8 @@ export async function checkLiveRiskExits({ apiPlus: apiPlusPass = false } = {}) 
       if (!live || !sim) return;
       const dry = lot.mode === "dry";
 
-      // The styles this sweep judges for this lot: a live lot only the one the wallet is set to; a dry lot each one that has not decided. "follow" copies the
-      // simulation's exits (mirror.js); for a trade the simulation never took it has none to copy and takes the "own" exit (executeDrySell): in a dry lot that
-      // is handled there, and a live lot of a wallet set to follow is judged here by the own-entry rules.
-      const cooldowns = new Map(cooldownStylesOf(live).map((c) => [c.id, c]));
-      const selected = selectedStyleId(live);
-      const wanted = dry ? lotStyleIds(lot).filter((id) => !lot.dryExits?.[id] && id !== "follow") : selected === "follow" ? (lot.unpaired ? ["own"] : []) : [selected];
-      const styles = wanted.map((id) => cooldowns.get(id) ?? (id === "own" || id === "follow" ? { id, kind: "own" } : null)).filter(Boolean);
+      // Each pass judges its own share of the lot's styles: the sampled (API Plus) ones in the API Plus pass, the rest in the normal one.
+      const styles = stylesFor(lot, live).filter((style) => sampledStyle(style, sim) === apiPlusPass);
 
       if (blacklisted.has(lot.traderAddress)) {
         // Settles every way at once. A dry lot that has already decided every style has nothing left to settle.
@@ -168,11 +189,15 @@ export async function checkLiveRiskExits({ apiPlus: apiPlusPass = false } = {}) 
       }
       if (styles.length === 0) return;
 
-      const apiPlus = sim.settings?.trackingMethod === "api_plus" && apiPlusInterval > 0;
+      const apiPlus = apiPlusPass && apiPlusInterval > 0;
+      // Peak / lowest value and armed trailing stops are shared by the styles judged on sweep prices (or, on an api_plus wallet, all on sampled ones). The API Plus style
+      // of a wallet whose simulation isn't api_plus judges on sampled prices of its own, so it keeps its own armed rules and leaves the lot's peak / lowest alone.
+      const sharedState = !apiPlusPass || sim.settings?.trackingMethod === "api_plus";
+      const armedField = sharedState ? "armedTrailingStopIds" : "apiPlusArmedIds";
       const openedAtSec = lot.openedAt.getTime() / 1000;
       const s = sim.settings;
       // What the lot has seen so far, kept here so that several check moments judged in one pass (an api_plus catch-up) build on each other.
-      const armed = new Set((lot.armedTrailingStopIds || []).map(String));
+      const armed = new Set((lot[armedField] || []).map(String));
       let maxValue = lot.maxValueUsd ?? 0;
       let minValue = lot.minValueUsd ?? null;
       let remaining = styles;
@@ -188,7 +213,7 @@ export async function checkLiveRiskExits({ apiPlus: apiPlusPass = false } = {}) 
 
         const peak = value > maxValue ? { maxValueUsd: value } : null;
         const trough = minValue == null || value < minValue ? { minValueUsd: value } : null;
-        if (peak || trough) {
+        if (sharedState && (peak || trough)) {
           await LiveLot.updateOne({ _id: lot._id }, { $set: { ...peak, ...trough } });
           maxValue = peak ? value : maxValue;
           minValue = trough ? value : minValue;
@@ -208,7 +233,7 @@ export async function checkLiveRiskExits({ apiPlus: apiPlusPass = false } = {}) 
         const armedBefore = new Set(armed);
         for (const rule of rules) {
           if (!armedBefore.has(String(rule._id)) && percent >= rule.armPercent) {
-            await LiveLot.updateOne({ _id: lot._id }, { $addToSet: { armedTrailingStopIds: String(rule._id) } });
+            await LiveLot.updateOne({ _id: lot._id }, { $addToSet: { [armedField]: String(rule._id) } });
             armed.add(String(rule._id));
             logEvent("trade", `[live] Trailing-stop armed on ${lot.mint} for ${lot.traderAddress} at +${percent.toFixed(1)}% (exits at ${rule.exitPercent}%)`, { meta: { liveWalletId: String(lot.liveWalletId), mint: lot.mint } });
           }

@@ -227,7 +227,7 @@ async function insertLot(item, live, fill, { buy, tokenRaw, decimals, tokenProgr
         openedAt: new Date(),
         sourceSignature: item.sourceSignature,
         exitMode: live.exitMode,
-        // A dry run works out every style the wallet has (own, follow, its cool-downs) side by side; dryDone says they have all decided.
+        // A dry run works out every style the wallet has (own, follow, API Plus, its cool-downs) side by side; dryDone says they have all decided.
         ...(fill.mode === "dry" ? { dryStyles: dryStyleIds(live), dryExits: Object.fromEntries(dryStyleIds(live).map((id) => [id, null])), dryDone: false } : {}),
         sizeScale: fill.sizeScale ?? 1,
         buy,

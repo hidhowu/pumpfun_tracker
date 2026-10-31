@@ -16,7 +16,7 @@ import { buyCostUsd, lotValueUsd } from "./lots.js";
 import { MAX_PRIORITY_MICRO_LAMPORTS, MAX_TIP_USD, MAX_TRADE_DELAY_SECONDS, RATIO_MAX, RATIO_MIN, tradingSettings } from "./settings.js";
 import { listStuckSells } from "./alerts.js";
 import { getTxStats } from "./txStats.js";
-import { COOLDOWN_DEFAULT_STOP_PERCENT, COOLDOWN_MAX_SECONDS, COOLDOWN_MAX_STYLES, COOLDOWN_MIN_SECONDS, cooldownStylesOf, lotStyleIds, styleLabel } from "./styles.js";
+import { API_PLUS_STYLE, COOLDOWN_DEFAULT_STOP_PERCENT, COOLDOWN_MAX_SECONDS, COOLDOWN_MAX_STYLES, COOLDOWN_MIN_SECONDS, cooldownStylesOf, lotStyleIds, styleLabel } from "./styles.js";
 import { createWalletTable, loadWalletTable } from "./lookupTable.js";
 import { resolveMarket } from "./market.js";
 import { prepareBuy } from "./pumpSwap.js";
@@ -121,7 +121,7 @@ const SLIPPAGE_MAX = 90;
 
 /**
  * @param {string} liveId
- * @param {{ connectedWalletId?: string | null, tradingMode?: "dry" | "live", exitMode?: "own" | "follow" | string, cooldownStyles?: { seconds: number, stopLossPercent?: number }[], buySlippagePercent?: number, sellSlippagePercent?: number, tradeDelaySeconds?: number,
+ * @param {{ connectedWalletId?: string | null, tradingMode?: "dry" | "live", exitMode?: "own" | "follow" | "apiplus" | string, cooldownStyles?: { seconds: number, stopLossPercent?: number }[], buySlippagePercent?: number, sellSlippagePercent?: number, tradeDelaySeconds?: number,
  *   sendMode?: "raw" | "jito", jitoTipUsd?: number | null, scaleJitoFee?: boolean, rawPriorityMicroLamports?: number, tradeRatioSim?: number, tradeRatioLive?: number, paused?: boolean }} patch
  * @param {{ userId: string, username: string, code?: string, ip?: string }} actor
  */
@@ -171,9 +171,9 @@ export async function updateTrading(liveId, patch, { userId, username, code, ip 
   }
   {
     // The exit rules must name a style the wallet has (counting the cool-down styles being saved in this same change).
-    const styleIds = ["own", "follow", ...cooldownStylesOf({ cooldownStyles: set.cooldownStyles ?? live.cooldownStyles }).map((c) => c.id)];
+    const styleIds = ["own", "follow", API_PLUS_STYLE, ...cooldownStylesOf({ cooldownStyles: set.cooldownStyles ?? live.cooldownStyles }).map((c) => c.id)];
     const next = patch.exitMode ?? live.exitMode ?? "own";
-    if (!styleIds.includes(next)) throw new TradingError(patch.exitMode !== undefined ? "Choose 'own', 'follow' or one of the cool-down styles." : "The exit rules are set to a cool-down style that is being removed. Choose another first.");
+    if (!styleIds.includes(next)) throw new TradingError(patch.exitMode !== undefined ? "Choose 'own', 'follow', 'apiplus' or one of the cool-down styles." : "The exit rules are set to a cool-down style that is being removed. Choose another first.");
     if (patch.exitMode !== undefined) set.exitMode = patch.exitMode;
   }
   for (const key of ["buySlippagePercent", "sellSlippagePercent"]) {
@@ -518,7 +518,7 @@ export async function getDryDaily(liveId) {
   const lots = await LiveLot.find({ liveWalletId: id, mode: "dry", openedAt: { $gte: from } }, { dryExits: 1, dryStyles: 1 }).lean();
 
   const cooldowns = cooldownStylesOf(live);
-  const ids = new Set(["own", "follow", ...cooldowns.map((c) => c.id)]);
+  const ids = new Set(["own", "follow", API_PLUS_STYLE, ...cooldowns.map((c) => c.id)]);
   for (const lot of lots) for (const sid of lotStyleIds(lot)) ids.add(sid);
 
   const styles = [...ids].map((sid) => {

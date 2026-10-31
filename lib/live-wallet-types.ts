@@ -145,7 +145,7 @@ export type TransferResult = {
 // ---------------------------------------------------------------- copy trading (db/live/trading/*)
 
 export type TradingMode = "dry" | "live";
-/** "own", "follow", or a cool-down style "cd<seconds>" (see CooldownStyle). */
+/** "own", "follow", "apiplus" (API Plus), or a cool-down style "cd<seconds>" (see CooldownStyle). */
 export type ExitMode = string;
 
 /** Within `seconds` of the buy only a stop-loss of `stopLossPercent` (50 = -50%), a take-profit, the max hold time or a trailing stop in profit sells; then the profile's rules apply. */

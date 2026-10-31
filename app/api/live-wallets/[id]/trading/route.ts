@@ -21,7 +21,7 @@ export async function GET(_request: NextRequest, { params }: Params) {
 }
 
 /**
- * Body (every field optional): { connectedWalletId: string | null, tradingMode: "dry" | "live", exitMode: "own" | "follow" | "cd<seconds>",
+ * Body (every field optional): { connectedWalletId: string | null, tradingMode: "dry" | "live", exitMode: "own" | "follow" | "apiplus" | "cd<seconds>",
  * cooldownStyles: [{ seconds: number, stopLossPercent?: number }],
  * buySlippagePercent: number, sellSlippagePercent: number, tradeDelaySeconds: number, sendMode: "raw" | "jito", jitoTipUsd: number | null, scaleJitoFee: boolean, rawPriorityMicroLamports: number,
  * tradeRatioSim: number, tradeRatioLive: number, paused: boolean, code?: string }.

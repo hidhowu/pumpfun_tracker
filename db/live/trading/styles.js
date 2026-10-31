@@ -3,6 +3,9 @@
  *
  *   own       the profile's stop-loss / take-profit / max hold / trailing stops, judged against what the live position really cost.
  *   follow    the connected simulation wallet's exits are copied the moment it makes them.
+ *   apiplus   "API Plus": the "own" rules, but judged the way an "api_plus" simulation wallet does and the backtest does (db/simulation/apiPlus.js): not on
+ *             the price at every sweep but on the pool price from the token's trade list, only at the position's own check moments (opened + a fixed phase +
+ *             k x the risk-check interval). It is the same rules and the same real entry as "own" - only WHEN and on WHAT price they are looked at differs.
  *   cd<sec>   a cool-down style (the wallet's `cooldownStyles`): like "own", except that for the first <sec> seconds after the buy only these can sell it -
  *             a deep stop-loss of its own (`stopLossPercent`, 50 = -50%), a take-profit, the max hold time and the POSITIVE trailing stops (exit
  *             level above 0%). Negative trailing stops (exit level below 0%) do not fire in that time (they still arm). A loss short of that stop is sat
@@ -14,6 +17,7 @@
  * A dry run works every style out side by side on the same entries, so they can be compared; a live wallet follows the one it is set to (`exitMode`).
  */
 
+export const API_PLUS_STYLE = "apiplus";
 export const cooldownId = (seconds) => `cd${seconds}`;
 export const isCooldownId = (id) => /^cd\d+$/.test(String(id));
 
@@ -30,7 +34,7 @@ export function cooldownStylesOf(live) {
 }
 
 /** Every style id a dry lot of this wallet works out. */
-export const dryStyleIds = (live) => ["own", "follow", ...cooldownStylesOf(live).map((s) => s.id)];
+export const dryStyleIds = (live) => ["own", "follow", API_PLUS_STYLE, ...cooldownStylesOf(live).map((s) => s.id)];
 
 /** The styles a lot was opened with (lots made before cool-downs existed have only the first two). */
 export const lotStyleIds = (lot) => (lot.dryStyles?.length ? lot.dryStyles : ["own", "follow"]);
@@ -38,12 +42,13 @@ export const lotStyleIds = (lot) => (lot.dryStyles?.length ? lot.dryStyles : ["o
 /** The style a live wallet is set to, falling back to "own" when it names a cool-down style that no longer exists. */
 export function selectedStyleId(live) {
   const id = live.exitMode ?? "own";
-  return id === "own" || id === "follow" || cooldownStylesOf(live).some((s) => s.id === id) ? id : "own";
+  return id === "own" || id === "follow" || id === API_PLUS_STYLE || cooldownStylesOf(live).some((s) => s.id === id) ? id : "own";
 }
 
 export function styleLabel(id, cooldowns = []) {
   if (id === "own") return "Its own entry";
   if (id === "follow") return "Follow simulation";
+  if (id === API_PLUS_STYLE) return "API Plus";
   const seconds = Number(String(id).slice(2)) || cooldowns.find((c) => c.id === id)?.seconds || 0;
   return `Cool-down ${seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} sec`}`;
 }

@@ -288,6 +288,7 @@ export function TradingConnection({
             options={[
               { value: "own", label: "Its own entry" },
               { value: "follow", label: "Follow simulation" },
+              { value: "apiplus", label: "API Plus" },
               ...state.cooldownStyles.map((c) => ({ value: c.id, label: styleLabel(c.id) })),
             ]}
             onChange={(exitMode) => exitMode !== state.exitMode && void apply({ exitMode })}
@@ -297,7 +298,9 @@ export function TradingConnection({
               ? "The live position is judged by what it really paid. The trader's sells and blacklisting still sell it at once."
               : state.exitMode === "follow"
                 ? "The live wallet sells whenever the simulated position exits. In a dry run every way is worked out side by side, so you can compare them."
-                : "Like its own entry, but for the first minutes after the buy only a deep stop-loss, a take-profit, the max hold time or a positive trailing stop (one that exits above 0%) sells it - negative trailing stops wait until the cool-down is over. A dry run works every way out side by side."}
+                : state.exitMode === "apiplus"
+                  ? "The same rules as its own entry, but looked at the way API Plus does: on the pool price from the token's trade list, only at the position's check moments (every risk-check interval, checked every 2 seconds). In a dry run it is worked out side by side with the other ways."
+                  : "Like its own entry, but for the first minutes after the buy only a deep stop-loss, a take-profit, the max hold time or a positive trailing stop (one that exits above 0%) sells it - negative trailing stops wait until the cool-down is over. A dry run works every way out side by side."}
           </p>
         </div>
 
