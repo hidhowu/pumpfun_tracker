@@ -6,10 +6,12 @@ import { logEvent } from "./systemLog.js";
 export const RPC_FAILURE_THRESHOLD = 3;
 
 const PROBE_TIMEOUT_MS = 10_000;
-const BURST_SIZE = 10; // concurrent requests fired at an HTTP endpoint to see whether it rate-limits
-const WS_BURST_SIZE = 5; // concurrent logsSubscribe calls fired at a WebSocket endpoint
+const MAX_ATTEMPTS = 5; // a test stops at the first success, so a healthy endpoint costs one request
+const RETRY_DELAY_MS = 1500; // pause after a failed attempt so a rate limit has time to clear before the next one
 const SLOW_MS = 1500; // median latency above this is flagged as slow
-const PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"; // any valid address works - this one is what the tracker watches anyway
+const PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"; // only used for the logsSubscribe fallback on WebSocket endpoints
+// Same options the tracker passes to getTransaction (src/parseTransaction.js).
+const TX_OPTIONS = { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" };
 
 const RATE_LIMIT_RE = /rate.?limit|too many|throttl|exceeded|\b429\b/i;
 const modelFor = (kind) => (kind === "ws" ? RpcEndpoint : HttpRpcEndpoint);
@@ -81,9 +83,16 @@ export async function recordRpcResult(kind, url, ok, { error = null, stamp = fal
 
 // ----------------------------------------------------------------- tests
 
-const median = (nums) => {
-  const sorted = [...nums].sort((a, b) => a - b);
-  return sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The known-good transaction signature every test fetches - set RPC_TEST_SIGNATURE in .env. */
+const testSignature = () => (process.env.RPC_TEST_SIGNATURE || "").trim();
+
+const NO_SIGNATURE_RESULT = {
+  ok: false,
+  verdict: "no_signature",
+  latencyMs: null,
+  message: "No test transaction configured - set RPC_TEST_SIGNATURE in .env to a signature of a real transaction and restart",
 };
 
 /** One JSON-RPC POST. Resolves with what came back (never throws on an HTTP error status); rejects on network failure/timeout. */
@@ -97,150 +106,195 @@ async function postRpc(url, method, params = []) {
   });
   const ms = Math.round(performance.now() - started);
   const json = await res.json().catch(() => null);
-  const limited = res.status === 429 || (json?.error && (json.error.code === 429 || isRateLimitMessage(json.error.message)));
-  return { status: res.status, ok: res.ok && !json?.error, limited: Boolean(limited), json, ms };
+  return { status: res.status, json, ms };
 }
 
 const networkMessage = (err) => (err?.name === "TimeoutError" ? `no answer within ${PROBE_TIMEOUT_MS / 1000}s` : err?.cause?.code || err?.message || "request failed");
 
 /**
- * Live check of an HTTP JSON-RPC endpoint: one getSlot probe (reachable? key valid? how fast?), then a
- * burst of BURST_SIZE concurrent getSlot calls to see whether the provider's rate limit kicks in -
- * which is what actually breaks live tracking, and the sign an endpoint needs a paid plan.
+ * Turns one getTransaction answer into an attempt outcome. Only a non-null result counts as a pass: the endpoint
+ * must actually return the transaction, which is the call the tracker depends on.
+ * state: ok | limited | auth | unsupported | notfound | error
  */
-export async function testHttpRpc(url) {
-  let probe;
-  try {
-    probe = await postRpc(url, "getSlot");
-  } catch (err) {
-    return { ok: false, verdict: "unreachable", latencyMs: null, message: `Unreachable: ${networkMessage(err)}` };
-  }
-  if (probe.limited) {
-    return { ok: false, verdict: "rate_limited", latencyMs: probe.ms, message: "Rate limited on the very first request - the plan's limit is already used up or too low. Probably needs upgrading." };
-  }
-  if (probe.status === 401 || probe.status === 403) {
-    return { ok: false, verdict: "auth_failed", latencyMs: probe.ms, message: `HTTP ${probe.status} - the API key was rejected or this IP/method is blocked` };
-  }
-  if (!probe.ok) {
-    const detail = probe.json?.error ? `RPC error ${probe.json.error.code}: ${probe.json.error.message}` : `HTTP ${probe.status}`;
-    return { ok: false, verdict: "error", latencyMs: probe.ms, message: detail };
-  }
+function classifyAnswer({ status, json, ms }) {
+  const err = json?.error;
+  if (status === 429 || err?.code === 429 || (err && isRateLimitMessage(err.message))) return { state: "limited", ms, message: "rate limited" };
+  if (status === 401 || status === 403) return { state: "auth", ms, message: `HTTP ${status} - the API key was rejected or this IP/method is blocked` };
+  if (err?.code === -32601) return { state: "unsupported", ms, message: `${err.message}` };
+  if (err) return { state: "error", ms, message: `RPC error ${err.code}: ${err.message}` };
+  if (status < 200 || status >= 300) return { state: "error", ms, message: `HTTP ${status}` };
+  if (!json || json.result === undefined) return { state: "error", ms, message: "answer was not a JSON-RPC response" };
+  if (json.result === null) return { state: "notfound", ms, message: "answered, but doesn't have the test transaction (too old for this node's history?)" };
+  return { state: "ok", ms };
+}
 
-  const burst = await Promise.all(Array.from({ length: BURST_SIZE }, () => postRpc(url, "getSlot").catch(() => null)));
-  const limited = burst.filter((r) => r?.limited).length;
-  const failed = burst.filter((r) => !r || (!r.ok && !r.limited)).length;
-  const medianMs = median(burst.filter((r) => r?.ok).map((r) => r.ms)) ?? probe.ms;
+const VERDICT_OF_STATE = { limited: "rate_limited", auth: "auth_failed", unreachable: "unreachable" };
 
-  if (limited > 0) {
-    return {
-      ok: false,
-      verdict: "rate_limited",
-      latencyMs: medianMs,
-      message: `Rate limited: ${limited} of ${BURST_SIZE} quick back-to-back requests were refused. Probably needs upgrading (or spread the load across more endpoints).`,
-    };
+/**
+ * Runs `attempt` up to MAX_ATTEMPTS times, RETRY_DELAY_MS apart, and stops at the first pass. One pass is enough to
+ * call an endpoint working - failures before it (a rate limit, a hiccup) are not held against it. Only when every
+ * attempt fails does the endpoint fail the test, with the last attempt's reason as the verdict.
+ */
+async function runAttempts(attempt) {
+  const failures = [];
+  for (let n = 1; n <= MAX_ATTEMPTS; n++) {
+    const outcome = await attempt();
+    if (outcome.state === "ok") {
+      const slow = outcome.ms > SLOW_MS;
+      const earlier = failures.length ? ` (${failures.length} earlier ${failures.length === 1 ? "attempt" : "attempts"} failed - last: ${failures[failures.length - 1].message})` : "";
+      return {
+        ok: true,
+        verdict: slow ? "slow" : "ok",
+        latencyMs: outcome.ms,
+        message: `${slow ? "Works, but slow - " : "Healthy - "}fetched the test transaction on attempt ${n} of ${MAX_ATTEMPTS} in ${outcome.ms} ms${earlier}`,
+      };
+    }
+    failures.push(outcome);
+    if (n < MAX_ATTEMPTS) await sleep(RETRY_DELAY_MS);
   }
-  if (failed > BURST_SIZE / 2) {
-    return { ok: false, verdict: "error", latencyMs: medianMs, message: `${failed} of ${BURST_SIZE} test requests failed or timed out` };
-  }
-  if (medianMs > SLOW_MS) {
-    return { ok: true, verdict: "slow", latencyMs: medianMs, message: `Works, but slow (${medianMs} ms median) - fine for backtests, risky for live trade detection` };
-  }
-  return { ok: true, verdict: "ok", latencyMs: medianMs, message: `Healthy - ${BURST_SIZE}/${BURST_SIZE} burst requests answered, ${medianMs} ms median` };
+  const last = failures[failures.length - 1];
+  const limitedCount = failures.filter((f) => f.state === "limited").length;
+  const detail =
+    last.state === "limited"
+      ? `rate limited on ${limitedCount} of ${MAX_ATTEMPTS} attempts even with ${RETRY_DELAY_MS / 1000}s between them - the plan's limit is too low or used up`
+      : last.message;
+  return {
+    ok: false,
+    verdict: VERDICT_OF_STATE[last.state] ?? "error",
+    latencyMs: last.ms ?? null,
+    message: `All ${MAX_ATTEMPTS} attempts failed, ${RETRY_DELAY_MS / 1000}s apart - ${detail}`,
+  };
 }
 
 /**
- * Live check of a WebSocket endpoint: opens a connection, fires WS_BURST_SIZE concurrent logsSubscribe
- * calls (what the tracker does per address), flags rate-limit refusals, then unsubscribes and closes.
+ * Live check of an HTTP JSON-RPC endpoint: fetch a known transaction (RPC_TEST_SIGNATURE) with getTransaction -
+ * one success within MAX_ATTEMPTS spaced-out tries means the endpoint works.
  */
-export function testWsRpc(url) {
-  return new Promise((resolve) => {
-    let settled = false;
-    let socket;
-    const subIds = [];
-    let answered = 0;
-    let limited = 0;
-    let otherError = null;
-    const started = performance.now();
-    let openMs = null;
-    let subscribeStarted = 0;
+export async function testHttpRpc(url) {
+  const signature = testSignature();
+  if (!signature) return NO_SIGNATURE_RESULT;
+  return runAttempts(async () => {
+    try {
+      return classifyAnswer(await postRpc(url, "getTransaction", [signature, TX_OPTIONS]));
+    } catch (err) {
+      return { state: "unreachable", message: `unreachable: ${networkMessage(err)}` };
+    }
+  });
+}
 
-    const finish = (result) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
+/** A lazily-opened WebSocket that answers one JSON-RPC request at a time and reconnects if the provider drops it. */
+function createWsSession(url) {
+  let socket = null;
+  let nextId = 1;
+  const pending = new Map();
+
+  const failPending = (message) => {
+    for (const { reject } of pending.values()) reject(Object.assign(new Error(message), { state: "error" }));
+    pending.clear();
+  };
+
+  const connect = () =>
+    new Promise((resolve, reject) => {
+      let ws;
+      const unreachable = (message) => reject(Object.assign(new Error(message), { state: "unreachable" }));
       try {
-        for (const id of subIds) socket.send(JSON.stringify({ jsonrpc: "2.0", id: 1000 + id, method: "logsUnsubscribe", params: [id] }));
-        socket.close();
+        ws = new WebSocket(url);
+      } catch (err) {
+        unreachable(`invalid WebSocket URL: ${err.message}`);
+        return;
+      }
+      const timer = setTimeout(() => {
+        unreachable(`could not open a WebSocket within ${PROBE_TIMEOUT_MS / 1000}s`);
+        ws.close();
+      }, PROBE_TIMEOUT_MS);
+      ws.addEventListener("open", () => {
+        clearTimeout(timer);
+        socket = ws;
+        resolve();
+      });
+      ws.addEventListener("error", () => {
+        clearTimeout(timer);
+        if (socket !== ws) unreachable("could not open the WebSocket - unreachable, or the provider refused the connection (a 429/403 on connect looks like this)");
+      });
+      ws.addEventListener("close", () => {
+        clearTimeout(timer);
+        if (socket === ws) {
+          socket = null;
+          failPending("connection closed by the provider");
+        } else {
+          unreachable("connection closed before it opened");
+        }
+      });
+      ws.addEventListener("message", (event) => {
+        let msg;
+        try {
+          msg = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        const waiting = pending.get(msg.id);
+        if (!waiting) return;
+        pending.delete(msg.id);
+        waiting.resolve({ status: 200, json: msg, ms: Math.round(performance.now() - waiting.started) });
+      });
+    });
+
+  return {
+    async request(method, params) {
+      if (!socket) await connect();
+      const id = nextId++;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(Object.assign(new Error(`no answer within ${PROBE_TIMEOUT_MS / 1000}s`), { state: "error" }));
+        }, PROBE_TIMEOUT_MS);
+        pending.set(id, {
+          started: performance.now(),
+          resolve: (value) => (clearTimeout(timer), resolve(value)),
+          reject: (err) => (clearTimeout(timer), reject(err)),
+        });
+        socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+      });
+    },
+    close() {
+      try {
+        socket?.close();
       } catch {
         // already closed - nothing to clean up
       }
-      resolve(result);
-    };
+    },
+  };
+}
 
-    const timer = setTimeout(() => {
-      finish(
-        openMs === null
-          ? { ok: false, verdict: "unreachable", latencyMs: null, message: `Could not open a WebSocket within ${PROBE_TIMEOUT_MS / 1000}s` }
-          : { ok: false, verdict: "error", latencyMs: openMs, message: `Connected, but only ${answered} of ${WS_BURST_SIZE} subscribe calls were answered in time` }
-      );
-    }, PROBE_TIMEOUT_MS);
-
-    try {
-      socket = new WebSocket(url);
-    } catch (err) {
-      finish({ ok: false, verdict: "error", latencyMs: null, message: `Invalid WebSocket URL: ${err.message}` });
-      return;
-    }
-
-    socket.addEventListener("open", () => {
-      openMs = Math.round(performance.now() - started);
-      subscribeStarted = performance.now();
-      for (let i = 1; i <= WS_BURST_SIZE; i++) {
-        socket.send(JSON.stringify({ jsonrpc: "2.0", id: i, method: "logsSubscribe", params: [{ mentions: [PUMP_PROGRAM] }, { commitment: "processed" }] }));
-      }
-    });
-    socket.addEventListener("error", () => {
-      if (openMs !== null) return; // a late error after connecting - the answers/timeout decide
-      finish({
-        ok: false,
-        verdict: "unreachable",
-        latencyMs: null,
-        message: "Could not open the WebSocket - unreachable, or the provider refused the connection (a 429/403 on connect looks like this)",
-      });
-    });
-    socket.addEventListener("close", () => {
-      if (settled) return;
-      finish({ ok: false, verdict: "error", latencyMs: openMs, message: "Connection closed by the provider before the test finished" });
-    });
-    socket.addEventListener("message", (event) => {
-      let msg;
+/**
+ * Live check of a WebSocket endpoint, the same way as HTTP: getTransaction for the test signature over the socket.
+ * Some providers only expose subscriptions on their WS gateway ("Method not found" for everything else), so for
+ * those a successful logsSubscribe - what the tracker uses this endpoint for - counts as the pass instead.
+ */
+export async function testWsRpc(url) {
+  const signature = testSignature();
+  if (!signature) return NO_SIGNATURE_RESULT;
+  const session = createWsSession(url);
+  try {
+    return await runAttempts(async () => {
       try {
-        msg = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      if (typeof msg.id !== "number" || msg.id > WS_BURST_SIZE) return;
-      answered += 1;
-      if (msg.error) {
-        if (msg.error.code === 429 || isRateLimitMessage(msg.error.message)) limited += 1;
-        else otherError ??= `RPC error ${msg.error.code}: ${msg.error.message}`;
-      } else if (typeof msg.result === "number") {
-        subIds.push(msg.result);
-      }
-      if (answered < WS_BURST_SIZE) return;
+        const answer = classifyAnswer(await session.request("getTransaction", [signature, TX_OPTIONS]));
+        if (answer.state !== "unsupported") return answer;
 
-      const subscribeMs = Math.round((performance.now() - subscribeStarted) / WS_BURST_SIZE);
-      if (limited > 0) {
-        finish({ ok: false, verdict: "rate_limited", latencyMs: openMs, message: `Rate limited: ${limited} of ${WS_BURST_SIZE} quick subscribe calls were refused. Probably needs upgrading.` });
-      } else if (otherError) {
-        finish({ ok: false, verdict: "error", latencyMs: openMs, message: otherError });
-      } else if (openMs > SLOW_MS) {
-        finish({ ok: true, verdict: "slow", latencyMs: openMs, message: `Works, but connecting took ${openMs} ms` });
-      } else {
-        finish({ ok: true, verdict: "ok", latencyMs: openMs, message: `Healthy - connected in ${openMs} ms, ${WS_BURST_SIZE}/${WS_BURST_SIZE} subscribe calls answered (~${subscribeMs} ms each)` });
+        const subscribed = await session.request("logsSubscribe", [{ mentions: [PUMP_PROGRAM] }, { commitment: "processed" }]);
+        if (typeof subscribed.json?.result === "number") {
+          await session.request("logsUnsubscribe", [subscribed.json.result]).catch(() => null);
+          return { state: "ok", ms: subscribed.ms };
+        }
+        const failed = classifyAnswer(subscribed);
+        return failed.state === "ok" ? { state: "error", ms: subscribed.ms, message: "logsSubscribe returned no subscription id" } : failed;
+      } catch (err) {
+        return { state: err.state ?? "error", message: err.message };
       }
     });
-  });
+  } finally {
+    session.close();
+  }
 }
 
 /** Tests an endpoint by URL without touching the DB - used by the Add dialog before anything is saved. */
@@ -259,6 +313,8 @@ export async function testRpcEndpoint(kind, id, { enableOnSuccess = false } = {}
   if (!endpoint) throw new Error("RPC endpoint not found");
 
   const result = await probeRpcUrl(kind, endpoint.url);
+  // Nothing was tested, so it must not count as a strike.
+  if (result.verdict === "no_signature") return { ...result, endpoint };
   await recordRpcResult(kind, endpoint.url, result.ok, { error: result.ok ? null : result.message, stamp: true });
   const set = { lastTest: { at: new Date(), verdict: result.verdict, latencyMs: result.latencyMs, message: result.message } };
   if (result.ok && enableOnSuccess && !endpoint.enabled) set.enabled = true;

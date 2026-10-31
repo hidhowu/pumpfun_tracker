@@ -132,6 +132,7 @@ const VERDICT_LABEL: Record<NonNullable<RpcEndpointHealth["lastTest"]>["verdict"
   auth_failed: "Key rejected",
   unreachable: "Unreachable",
   error: "Error",
+  no_signature: "Not tested",
 };
 
 function TestResultLine({ test }: { test: RpcEndpointHealth["lastTest"] }) {
@@ -152,7 +153,7 @@ function TestResultLine({ test }: { test: RpcEndpointHealth["lastTest"] }) {
 
 /**
  * Runs endpoint tests from the UI: one at a time (testOne) or a list two at a time (testMany), so a long
- * list finishes quickly without hammering providers - each test already fires a small burst on its own.
+ * list finishes quickly without hammering providers - each test already makes up to 5 spaced-out requests on its own.
  * Every test is recorded server-side: a pass un-blacklists, a fail adds a strike (3 in a row blacklists).
  */
 function useRpcTester(kind: "ws" | "http", refresh: (options?: { silent?: boolean }) => Promise<void>) {
@@ -274,7 +275,7 @@ function HealthToolbar({
           size="sm"
           className="gap-1.5"
           onClick={() => tester.testMany(endpoints)}
-          title="Tests every endpoint with a quick burst of requests - flags any that are rate limited. A pass un-blacklists; a fail counts toward blacklisting."
+          title="Tests every endpoint by fetching a known transaction (up to 5 tries, 1.5s apart; one success passes). A pass un-blacklists; a fail counts toward blacklisting."
         >
           <CheckCircle2 className="size-3.5" />
           Test all ({endpoints.length})
@@ -868,7 +869,7 @@ export default function RpcPage() {
             className="gap-1.5"
             disabled={testingEverything || tester.progress !== null}
             onClick={handleTestEverything}
-            title="Tests every WebSocket and HTTP endpoint and flags any that are rate limited"
+            title="Tests every WebSocket and HTTP endpoint by fetching a known transaction (one success in up to 5 tries passes)"
           >
             {testingEverything ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
             Test all RPC
@@ -1045,7 +1046,7 @@ export default function RpcPage() {
 
                   {blacklisted && (
                     <p className="text-xs text-negative/90">
-                      Blacklisted after {FAILURE_THRESHOLD} rate limits in a row - its addresses were moved to the other endpoints. Test it to bring
+                      Blacklisted after {FAILURE_THRESHOLD} failed tests in a row - its addresses were moved to the other endpoints. Test it to bring
                       it back, or delete it.
                     </p>
                   )}

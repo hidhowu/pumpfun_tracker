@@ -296,7 +296,7 @@ export type SystemLogEntry = {
   createdAt: string;
 };
 
-export type RpcTestVerdict = "ok" | "slow" | "rate_limited" | "auth_failed" | "unreachable" | "error";
+export type RpcTestVerdict = "ok" | "slow" | "rate_limited" | "auth_failed" | "unreachable" | "error" | "no_signature";
 
 /** Outcome of an RPC endpoint test - see db/rpcHealth.js. `ok` is true for "ok" and "slow". */
 export type RpcTestResult = {
