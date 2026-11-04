@@ -74,13 +74,14 @@ const WalletSchema = new Schema({
     // How this wallet learns about its traders' trades:
     //  - "logs": the tracker's RPC log subscription (the original way) - pump.fun's price/fees are modelled by db/pumpFunApi.js's
     //    getPrice and the pump-fee setting above;
-    //  - "api": the tracker polls pump.fun's user-trades API for this wallet's traders (db/simulation/apiTradePoller.js), checks the
-    //    token has trades before buying, and prices every fill and every stop-loss / take-profit check with pump.fun's SDK
+    //  - "api": the tracker polls pump.fun's user-trades API for this wallet's traders (db/simulation/apiTradePoller.js) and prices every fill and every stop-loss / take-profit check with pump.fun's SDK
     //    (db/simulation/sdkQuote.js) - the SDK's quote already contains pump.fun's fee, so pumpFeePercent is not charged again.
     //  - "api_plus": detected like "api", but every price (fill, stop-loss / take-profit / trailing checks, sale) is read from the token's
     //    trade list at the backtest's moments (db/simulation/apiPlus.js), so a live run and a backtest of the same trade agree.
+    //  - "grpc": like "api_plus" for every price, but the traders' trades are not polled: the standalone gRPC tracking server (db/grpc/) follows
+    //    their wallets over Yellowstone gRPC and pushes each trade to the tracker's webhook (db/grpc/receiver.js) the moment it lands.
     // Per wallet: a trader in two wallets is followed both ways, each wallet by its own method.
-    trackingMethod: { type: String, enum: ["logs", "api", "api_plus"], default: "logs" },
+    trackingMethod: { type: String, enum: ["logs", "api", "api_plus", "grpc"], default: "logs" },
     // Panic level: how deep a loss stretch (in dollars, a positive number) this wallet may reach before it counts as doing worse than
     // expected - normally a bit beyond the "deepest point" its backtest showed. null = off. Display only (db/walletPanic.js): it
     // never stops or changes a trade.

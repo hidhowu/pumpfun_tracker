@@ -21,7 +21,10 @@ const WINDOW_SEC = 30; // how far past the moment trades are read - only the fir
 
 export { INDEX_LAG_SEC };
 
-export const isApiPlusWallet = (wallet) => wallet?.settings?.trackingMethod === "api_plus";
+/** Tracking methods whose prices are read the API Plus way ("grpc" detects trades through the gRPC tracking server, then prices exactly like "api_plus"). */
+export const usesApiPlusPricing = (trackingMethod) => trackingMethod === "api_plus" || trackingMethod === "grpc";
+
+export const isApiPlusWallet = (wallet) => usesApiPlusPricing(wallet?.settings?.trackingMethod);
 
 /** The sweep interval a position gets, frozen at its open (the backtest freezes it per run). Never below 1 second. */
 export async function apiPlusIntervalSeconds() {

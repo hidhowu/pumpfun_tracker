@@ -11,7 +11,7 @@ import { buyCostUsd, lotValueUsd } from "./lots.js";
 import { buildTrigger, confirmExit } from "../../simulation/exitTrigger.js";
 import { API_PLUS_STYLE, cooldownStylesOf, lotStyleIds, selectedStyleId } from "./styles.js";
 import { tradeDelaySeconds } from "./settings.js";
-import { INDEX_LAG_SEC, apiPlusIntervalSeconds, nextSampleAt, poolPriceAt } from "../../simulation/apiPlus.js";
+import { INDEX_LAG_SEC, apiPlusIntervalSeconds, nextSampleAt, poolPriceAt, usesApiPlusPricing } from "../../simulation/apiPlus.js";
 
 /**
  * The live wallet's OWN exit rules: stop-loss, take-profit, max hold time and trailing stops, judged against what each live position really
@@ -132,7 +132,7 @@ function stylesFor(lot, live) {
 }
 
 /** A style is judged on sampled prices at the lot's check moments (the API Plus way) when its simulation wallet is "api_plus", or when it is the API Plus style itself. */
-const sampledStyle = (style, sim) => sim.settings?.trackingMethod === "api_plus" || style.id === API_PLUS_STYLE;
+const sampledStyle = (style, sim) => usesApiPlusPricing(sim.settings?.trackingMethod) || style.id === API_PLUS_STYLE;
 
 /** @param {{ apiPlus?: boolean }} [options] apiPlus = judge only the styles that look at sampled prices (API Plus), every few seconds; otherwise all the other styles */
 export async function checkLiveRiskExits({ apiPlus: apiPlusPass = false } = {}) {
@@ -192,7 +192,7 @@ export async function checkLiveRiskExits({ apiPlus: apiPlusPass = false } = {}) 
       const apiPlus = apiPlusPass && apiPlusInterval > 0;
       // Peak / lowest value and armed trailing stops are shared by the styles judged on sweep prices (or, on an api_plus wallet, all on sampled ones). The API Plus style
       // of a wallet whose simulation isn't api_plus judges on sampled prices of its own, so it keeps its own armed rules and leaves the lot's peak / lowest alone.
-      const sharedState = !apiPlusPass || sim.settings?.trackingMethod === "api_plus";
+      const sharedState = !apiPlusPass || usesApiPlusPricing(sim.settings?.trackingMethod);
       const armedField = sharedState ? "armedTrailingStopIds" : "apiPlusArmedIds";
       const openedAtSec = lot.openedAt.getTime() / 1000;
       const s = sim.settings;

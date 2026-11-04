@@ -4,8 +4,7 @@ import { Trader } from "../models/Trader.js";
 import { getSystemSettings } from "../models/SystemSettings.js";
 import { logEvent } from "../systemLog.js";
 import { userTradesClient } from "./apiClients.js";
-import { recordApiTrade, markApiTradeActioned } from "./apiLedger.js";
-import { evaluateWalletTrade } from "./walletEngine.js";
+import { handleDetectedTrade, FRESH_BUY_SECONDS } from "./detectedTrade.js";
 
 /**
  * The "api" tracking method (Wallet.settings.trackingMethod): instead of waiting for a trader's transaction to arrive through the RPC
@@ -26,9 +25,8 @@ const SYNC_INTERVAL_MS = 10_000;
 const STATS_INTERVAL_MS = 60_000;
 const POLL_LIMIT = 20; // newest trades per request; a trader doesn't make 20 trades between two polls
 const SEEN_PER_TRADER = 500; // remembered trade ids per trader, for telling new trades from ones already seen
-// A trade first seen older than this is history, not a signal: a buy is skipped (copying it now wouldn't be a faithful copy), and
-// when a loop starts everything older is ignored outright. A SELL seen late is still acted on - missing it would leave a position open.
-const FRESH_BUY_SECONDS = 30;
+// A trade first seen older than FRESH_BUY_SECONDS (db/simulation/detectedTrade.js) is history, not a signal: a buy is skipped, and when a loop starts
+// everything older is ignored outright.
 const MAX_BACKOFF_MS = 5000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -148,36 +146,7 @@ export class ApiTradePoller {
         continue;
       }
       this.stats.newTrades += 1;
-      await this.#handle(address, t);
-    }
-  }
-
-  async #handle(address, t) {
-    const trade = {
-      signature: t.tx,
-      slot: null,
-      blockTime: t.ts,
-      type: t.isBuy ? "buy" : "sell",
-      program: null,
-      mint: t.mint,
-      wallet: address,
-      tokenAmount: t.tokenAmount,
-      solAmount: t.amountSol,
-      amountUsd: t.amountUsd,
-      solAmountSource: "api",
-      isNativeSolQuote: true,
-      quoteMint: null,
-      source: "api",
-      detectedAt: Date.now(),
-    };
-    try {
-      await recordApiTrade(trade);
-      // A trade already recorded (a restart re-reads the last seconds) is evaluated again on purpose: the queue's own idempotency
-      // keys make that harmless, and it is what recovers a trade the previous run saw but died before acting on.
-      if (await evaluateWalletTrade(trade, { trackingMethod: "api" })) await markApiTradeActioned(trade);
-    } catch (err) {
-      this.onError(err);
-      logEvent("tracker", `Failed to evaluate API trade ${trade.signature} for ${address}: ${err.message}`, { level: "error", meta: { address, signature: trade.signature } });
+      await handleDetectedTrade(address, t, { trackingMethod: "api", onError: this.onError });
     }
   }
 

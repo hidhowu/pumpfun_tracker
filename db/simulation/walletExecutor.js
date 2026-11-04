@@ -12,7 +12,6 @@ import { isTradingPaused } from "./guards.js";
 import { mirrorExit } from "../live/trading/mirror.js";
 import { TradeError } from "../live/trading/pumpSwap.js";
 import { priceBuy, priceSell, valueMany } from "./sdkQuote.js";
-import { tokenHasTrades } from "./apiClients.js";
 import { CONFIRMED_EXITS, buildTrigger, confirmExit, recoveryLevel, triggerHolds } from "./exitTrigger.js";
 import { INDEX_LAG_SEC, apiPlusIntervalSeconds, apiPlusSchedule, isApiPlusWallet, poolPriceAt } from "./apiPlus.js";
 
@@ -130,8 +129,7 @@ async function executeWalletBuy(pending) {
     let method = "spot";
     let apiPlus = null;
     if (isApiPlusWallet(walletDoc)) {
-      // Same last check as an API wallet, then the fill is the pool price at the moment the buy was due - what the backtest fills at.
-      if (!(await tokenHasTrades(pending.mint))) return markSkipped(pending, "no trades on this token (pump.fun's trades API returned none)");
+      // The fill is the pool price at the moment the buy was due - what the backtest fills at.
       const price = await apiPlusFillPrice(pending);
       if (price === "wait") return;
       if (!price) return retryWithoutPrice(pending);
@@ -140,9 +138,6 @@ async function executeWalletBuy(pending) {
       method = "api_plus";
       apiPlus = apiPlusSchedule({ mint: pending.mint, signature: pending.sourceSignature, fillAtSec: price.atSec, intervalSec: await apiPlusIntervalSeconds() });
     } else if (isApiWallet(walletDoc)) {
-      // Last check before an API wallet buys: the token must have real trades on pump.fun. An empty answer skips the buy; a failed
-      // request throws (and is retried) rather than being mistaken for an empty token.
-      if (!(await tokenHasTrades(pending.mint))) return markSkipped(pending, "no trades on this token (pump.fun's trades API returned none)");
       // The fill is what pump.fun's SDK says buying the trade size's worth of tokens costs right now; its fee is booked on top, below.
       const quote = await priceBuy(pending.mint, spendUsd, { feePercent: walletDoc.settings.pumpFeePercent ?? DEFAULT_PUMP_FEE_PERCENT }).catch((err) => {
         if (err instanceof TradeError) return err;

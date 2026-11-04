@@ -228,12 +228,21 @@ export function WalletSettingsPanel({ walletId, settings, lastAutoResetAt, onUpd
               >
                 pump.fun API+
               </Button>
+              <Button
+                size="sm"
+                variant={trackingMethod === "grpc" ? "default" : "outline"}
+                onClick={() => trackingMethod !== "grpc" && save({ trackingMethod: "grpc" })}
+              >
+                gRPC
+              </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              {trackingMethod === "api_plus"
+              {trackingMethod === "grpc"
+                ? "Traders are followed over Yellowstone gRPC by the standalone tracking server, which pushes each of their trades to the tracker the moment it lands - no pump.fun API, no proxies. Everything after the detection works exactly like pump.fun API+: every price comes from the token's own trade list (also served by the tracking server), checked at the backtest's moments, a buy fills at the pool price when it is due, and an exit fills the execution delay after the moment it was decided. The pump fee below is charged on buys and sells."
+                : trackingMethod === "api_plus"
                 ? "Traders are detected through pump.fun's user-trades API like \"pump.fun API\", but every price comes from the token's own trade list, checked exactly the way a backtest checks it: a buy fills at the pool price when it is due, the stop-loss / take-profit / trailing stops are judged on the pool price at fixed moments (every risk-check interval from the fill), and an exit fills the execution delay after the moment it was decided. A run here and a backtest of the same trade agree. The pump fee below is charged on buys and sells. A connected live wallet that follows this wallet's exits gets the same exits; its own exit styles use the same price."
                 : trackingMethod === "api"
-                ? "This wallet's traders are polled through pump.fun's user-trades API several times a second (rate set in Settings). Before a buy the token must have trades on pump.fun, and every fill and every stop-loss / take-profit check uses pump.fun's SDK quote - the quote already contains pump.fun's fee, so the pump fee below is not charged again. Traders who are also in a logs wallet keep being tracked by the logs for that wallet."
+                ? "This wallet's traders are polled through pump.fun's user-trades API several times a second (rate set in Settings). Every fill and every stop-loss / take-profit check uses pump.fun's SDK quote - the quote already contains pump.fun's fee, so the pump fee below is not charged again. Traders who are also in a logs wallet keep being tracked by the logs for that wallet."
                 : "This wallet's traders are followed through the tracker's RPC log subscription, and priced at the token's spot price plus the pump fee below."}
             </p>
           </div>

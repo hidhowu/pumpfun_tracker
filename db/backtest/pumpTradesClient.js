@@ -43,7 +43,7 @@ const pad = (n, width) => String(n).padStart(width, "0");
  * `valueNative` is the trade's worth in SOL whatever the pool is quoted in, so valueUsd / valueNative is the SOL price even for a
  * pool quoted in another token (where priceQuote is not a SOL price); priceSol is derived from it.
  */
-function normalizeTrade(t) {
+export function normalizeTrade(t) {
   const [block, txIndex, eventIndex] = t.ordinalKey.split("-");
   const tokens = Number(t.baseAmount.raw) / 10 ** t.baseAmount.decimals;
   const amountUsd = Number(t.valueUsd);
@@ -71,7 +71,7 @@ function normalizeTrade(t) {
 }
 
 /** One user-trades row (a wallet's own swap), with numbers and seconds instead of strings. */
-function normalizeUserTrade(t) {
+export function normalizeUserTrade(t) {
   return {
     tx: t.tx,
     isBuy: !!t.isBuy,

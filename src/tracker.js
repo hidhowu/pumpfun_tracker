@@ -36,6 +36,7 @@ import {
 import { ensureTodaySnapshotsForAllActiveTraders } from "../db/simulation/snapshot.js";
 import { evaluateWalletTrade } from "../db/simulation/walletEngine.js";
 import { ApiTradePoller } from "../db/simulation/apiTradePoller.js";
+import { GrpcFeed } from "../db/grpc/receiver.js";
 import { processDueWalletExecutions, checkWalletRiskExits, checkApiPlusExits } from "../db/simulation/walletExecutor.js";
 import { ensureTodaySnapshotsForAllWallets, applyDailyBalanceResets, recordHourlyWalletSnapshots } from "../db/simulation/walletSnapshot.js";
 import { startLiveTradingLoops } from "../db/live/trading/loops.js";
@@ -115,6 +116,8 @@ export class TrackerService extends EventEmitter {
     this._walletRolloverInProgress = false;
     // Wallets set to track by pump.fun's API instead of the logs: polls their traders' trades (see db/simulation/apiTradePoller.js).
     this.apiPoller = null;
+    // Wallets set to "grpc": their traders are followed by the standalone gRPC tracking server, which pushes each trade to a webhook here (db/grpc/receiver.js).
+    this.grpcFeed = null;
   }
 
   /** Starts polling the user-trades API for the traders of every wallet whose tracking method is "api". Safe to leave running with no such wallet. */
@@ -127,6 +130,18 @@ export class TrackerService extends EventEmitter {
   stopApiTracking() {
     this.apiPoller?.stop();
     this.apiPoller = null;
+  }
+
+  /** Starts the webhook the gRPC tracking server pushes trades to, and keeps the server's wallet list in step with the "grpc" wallets. Does nothing unless GRPC_TRACKER_URL is set. */
+  startGrpcTracking() {
+    if (this.grpcFeed) return;
+    this.grpcFeed = new GrpcFeed({ onError: (err) => this.emit("error", err) });
+    this.grpcFeed.start();
+  }
+
+  stopGrpcTracking() {
+    this.grpcFeed?.stop();
+    this.grpcFeed = null;
   }
 
   /** Creates and wires a LogSubscriber dedicated to exactly one RPC endpoint. */
@@ -710,6 +725,7 @@ export class TrackerService extends EventEmitter {
     this.stopSimulationLoops();
     this.stopWalletSimulationLoops();
     this.stopApiTracking();
+    this.stopGrpcTracking();
     this.stopCommandPolling();
     for (const sub of this.subscribers.values()) sub.close();
     this.subscribers.clear();
@@ -787,6 +803,7 @@ async function runCli() {
   tracker.startSimulationLoops();
   tracker.startWalletSimulationLoops();
   tracker.startApiTracking();
+  tracker.startGrpcTracking();
   // Live wallets connected to a simulation wallet: their trade queue, their own exit rules and the burn engine (db/live/trading/).
   const stopLive = startLiveTradingLoops({ onError: (err) => tracker.emit("error", err) });
   tracker.once("closed", stopLive);
