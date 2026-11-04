@@ -8,6 +8,7 @@ import { sumApiTraderTokenAmount } from "./apiLedger.js";
 import { getSolUsd } from "../onchainPrice.js";
 import { logEvent } from "../systemLog.js";
 import { liveHolds, mirrorBuy, mirrorSell } from "../live/trading/mirror.js";
+import { recordUnpricedBuy } from "./unpricedLog.js";
 
 const CLOSING_OUT_FRACTION_PERCENT = 95; // same threshold as db/simulation/engine.js's evaluateSell
 
@@ -36,7 +37,13 @@ async function evaluateWalletBuy(wallet, walletTrader, trade) {
   if (alreadyPending) return false;
 
   const tradeUsd = await tradeUsdValue(trade);
-  if (tradeUsd === null || tradeUsd < wallet.settings.dustBuyUsd) return false;
+  if (tradeUsd === null) {
+    // A feed trade (API / gRPC) nobody could value: it cannot be compared with dustBuyUsd, so it is not copied - but never silently. It is kept in the
+    // unpriced-trades list (db/models/UnpricedTrade.js) and shows in the Logs feed, so the missing price source can be found and added.
+    if (trade.source === "api") await recordUnpricedBuy(trade, wallet);
+    return false;
+  }
+  if (tradeUsd < wallet.settings.dustBuyUsd) return false;
 
   const triggerAt = new Date(Date.now() + wallet.settings.executionDelaySeconds * 1000);
   try {

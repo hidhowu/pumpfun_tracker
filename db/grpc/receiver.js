@@ -130,6 +130,7 @@ export class GrpcFeed {
       if (typeof row?.walletAddress !== "string" || typeof row?.mint !== "string" || typeof row?.tx !== "string") continue;
       const t = normalizeUserTrade(row);
       if (!Number.isFinite(t.ts)) continue;
+      t.feed = { quoteMint: row.quoteMint ?? null, hops: row.hops ?? 1, venue: row.venue ?? null };
       if (t.isBuy && Date.now() / 1000 - t.ts > FRESH_BUY_SECONDS) {
         this.stats.staleBuys += 1;
         continue;

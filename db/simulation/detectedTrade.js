@@ -35,6 +35,7 @@ export async function handleDetectedTrade(address, t, { trackingMethod, onError 
     quoteMint: null,
     source: "api",
     detectedAt: Date.now(),
+    feed: t.feed ?? null, // what the gRPC server said about how the trade was paid ({ quoteMint, hops, venue }) - kept if the trade turns out unpriced
   };
   // The buy check and every price afterwards are read from the tracking server (when it is set): ask it to follow the token at once.
   if (t.isBuy) trackTokenInBackground(t.mint, onError);
