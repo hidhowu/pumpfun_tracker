@@ -14,7 +14,9 @@ export function SolSheet({ walletId, open, chain, onClose }: { walletId: string;
   const rentLamports = chain?.accounts.reduce((sum, a) => sum + a.rentLamports, 0) ?? 0;
   return (
     <Sheet open={open} onOpenChange={(next) => !next && onClose()}>
-      <SheetContent className="gap-0 overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-[480px]">
+      <SheetContent className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[480px]">
+        {/* The sheet itself does not scroll, this does - so the close button stays in the corner while the content moves. */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
         <SheetHeader className="flex-row items-center gap-3.5 px-5 pt-5 pr-14 pb-3">
           <TokenAvatar symbol="SOL" className="size-12" />
           <div className="min-w-0">
@@ -37,6 +39,7 @@ export function SolSheet({ walletId, open, chain, onClose }: { walletId: string;
             <h3 className="mb-3 text-[15px] font-extrabold">SOL history</h3>
             {open ? <ActivityTable walletId={walletId} mint="SOL" layout="list" showSummary={false} /> : null}
           </div>
+        </div>
         </div>
       </SheetContent>
     </Sheet>

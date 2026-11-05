@@ -55,7 +55,7 @@ function GoLiveDialog({ open, onOpenChange, walletId, onDone }: { open: boolean;
             From now on every trade the connected simulation wallet takes is also sent to the chain from this wallet, with its own money. Positions stay open until they are sold. You can switch back to a dry run at any time; positions already open are still managed and sold for real when they exit.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-2">
+        <div className="min-w-0 space-y-2">
           <Label htmlFor="go-live-code" className="text-[13px] font-bold text-muted-foreground">
             Authenticator code
           </Label>
@@ -89,7 +89,9 @@ function GoLiveDialog({ open, onOpenChange, walletId, onDone }: { open: boolean;
 
 function Segmented<T extends string>({ value, options, onChange, disabled }: { value: T; options: Array<{ value: T; label: string }>; onChange: (value: T) => void; disabled?: boolean }) {
   return (
-    <div className="inline-flex w-full rounded-xl border border-border bg-secondary p-1 sm:w-fit" role="group">
+    // flex-wrap: five exit ways (own entry, follow, API Plus, two cool-downs) are wider than a half-width column or a phone, and the buttons cannot shrink
+    // (whitespace-nowrap), so a non-wrapping row ran out of its frame and hid the last one. They now wrap onto a second line inside it.
+    <div className="flex w-full flex-wrap gap-1 rounded-xl border border-border bg-secondary p-1 sm:w-fit sm:max-w-full" role="group">
       {options.map((o) => (
         <button
           key={o.value}
@@ -98,7 +100,7 @@ function Segmented<T extends string>({ value, options, onChange, disabled }: { v
           onClick={() => onChange(o.value)}
           aria-pressed={value === o.value}
           className={cn(
-            "flex-1 rounded-lg px-3.5 py-1.5 text-[13px] font-bold whitespace-nowrap transition-colors disabled:opacity-50 sm:flex-none",
+            "min-w-fit flex-1 rounded-lg px-3.5 py-1.5 text-[13px] font-bold whitespace-nowrap transition-colors disabled:opacity-50 sm:flex-none",
             value === o.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
           )}
         >
@@ -260,7 +262,7 @@ export function TradingConnection({
       </div>
 
       <div className="grid gap-5 md:grid-cols-2">
-        <div className="space-y-2">
+        <div className="min-w-0 space-y-2">
           <Label className="text-[13px] font-bold text-muted-foreground">Mode</Label>
           <Segmented
             value={state.tradingMode}
@@ -280,7 +282,7 @@ export function TradingConnection({
           </p>
         </div>
 
-        <div className="space-y-2">
+        <div className="min-w-0 space-y-2">
           <Label className="text-[13px] font-bold text-muted-foreground">Stop-loss, take-profit and trailing stops use</Label>
           <Segmented<ExitMode>
             value={state.exitMode}
@@ -304,7 +306,7 @@ export function TradingConnection({
           </p>
         </div>
 
-        <div className="space-y-2">
+        <div className="min-w-0 space-y-2">
           <Label className="text-[13px] font-bold text-muted-foreground">Cool-down styles</Label>
           <p className="text-xs leading-relaxed text-muted-foreground">
             For the first minutes after a buy, ride out a dip: only the stop-loss set here (not the profile&apos;s), a take-profit, the max hold time or a positive trailing stop (exit level above 0%) can sell; negative trailing stops do not fire. When the cool-down is over the profile&apos;s stop-loss and all trailing stops apply at once: a position that is then below an armed trailing level sells, one that dipped under it and recovered keeps going. Each one

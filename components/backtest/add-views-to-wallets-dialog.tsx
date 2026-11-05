@@ -87,7 +87,7 @@ export function AddViewsToWalletsDialog({ runId, views, open, onOpenChange }: Pr
         </DialogHeader>
 
         {result ? (
-          <div className="flex min-h-0 flex-col gap-2 overflow-y-auto text-sm">
+          <div className="flex min-h-0 max-h-[45dvh] flex-col gap-2 overflow-y-auto text-sm">
             {result.created.map((c) => (
               <div key={c.walletId} className="rounded-md border border-border/60 px-3 py-2">
                 <Link href={`/wallets/${c.walletId}`} className="font-medium hover:underline">
@@ -116,7 +116,7 @@ export function AddViewsToWalletsDialog({ runId, views, open, onOpenChange }: Pr
                 {picked.size === views.length ? "Clear" : "Select all"}
               </button>
             </div>
-            <div className="min-h-0 overflow-y-auto rounded-md border border-border/60">
+            <div className="min-h-0 max-h-[45dvh] overflow-y-auto rounded-md border border-border/60">
               {views.map((v) => (
                 <label key={v._id} className="flex cursor-pointer items-center gap-3 border-b border-border/40 px-3 py-2 last:border-b-0">
                   <input type="checkbox" checked={picked.has(v._id)} onChange={() => toggle(v._id)} />

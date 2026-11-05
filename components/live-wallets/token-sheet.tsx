@@ -25,9 +25,10 @@ export function TokenSheet({
 }) {
   return (
     <Sheet open={mint !== null} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent className="gap-0 overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-[480px]">
+      <SheetContent className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[480px]">
         {mint ? (
-          <>
+          // The sheet itself does not scroll, this does - so the close button stays in the corner while the content moves.
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
             <SheetHeader className="flex-row items-center gap-3.5 px-5 pt-5 pr-14 pb-3">
               <TokenAvatar icon={holding?.icon} symbol={holding?.symbol} className="size-12" />
               <div className="min-w-0">
@@ -89,7 +90,7 @@ export function TokenSheet({
                 <ActivityTable walletId={walletId} mint={mint} layout="list" showSummary={false} />
               </div>
             </div>
-          </>
+          </div>
         ) : null}
       </SheetContent>
     </Sheet>

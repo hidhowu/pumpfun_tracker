@@ -38,7 +38,7 @@ function DailyDialog({ walletId, styleId, onClose }: { walletId: string; styleId
 
   return (
     <Dialog open={!!styleId} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+      <DialogContent className="max-h-[90dvh] sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>{style ? style.label : "Exit way"}: day by day</DialogTitle>
           <DialogDescription>
@@ -65,27 +65,28 @@ function DailyDialog({ walletId, styleId, onClose }: { walletId: string; styleId
               </div>
             ) : null}
 
-            <div className="overflow-x-auto rounded-xl border border-border">
+            {/* Eight columns do not fit a phone: the table scrolls sideways inside its own frame and the exit-way column stays in view. */}
+            <div className="max-w-full overflow-x-auto rounded-xl border border-border">
               <table className="w-full text-[13px]">
                 <thead>
                   <tr className="border-b border-border bg-secondary/40 text-left text-xs text-muted-foreground">
-                    <th className="px-3 py-2 font-bold">Exit way</th>
+                    <th className="sticky left-0 z-10 bg-popover px-2 py-2 font-bold whitespace-nowrap sm:px-3">Exit way</th>
                     {[...daily.days].reverse().map((d) => (
-                      <th key={d} className="px-3 py-2 text-right font-bold whitespace-nowrap">{dayLabel(d)}</th>
+                      <th key={d} className="px-2 py-2 text-right font-bold whitespace-nowrap sm:px-3">{dayLabel(d)}</th>
                     ))}
-                    <th className="px-3 py-2 text-right font-bold">7 days</th>
+                    <th className="px-2 py-2 text-right font-bold whitespace-nowrap sm:px-3">7 days</th>
                   </tr>
                 </thead>
                 <tbody>
                   {ordered.map((s) => (
                     <tr key={s.id} className={cn("border-b border-border/60 last:border-0", s.id === styleId && "bg-primary/10")}>
-                      <td className="px-3 py-2 font-bold whitespace-nowrap">{s.label}</td>
+                      <td className={cn("sticky left-0 z-10 bg-popover px-2 py-2 font-bold whitespace-nowrap sm:px-3", s.id === styleId && "text-brand-soft")}>{s.label}</td>
                       {[...s.days].reverse().map((d) => (
-                        <td key={d.date} className={cn("px-3 py-2 text-right tabular-nums", toneClass(d.trades ? d.pnlUsd : null))} title={`${d.trades} trade${d.trades === 1 ? "" : "s"}, ${d.wins} winning`}>
+                        <td key={d.date} className={cn("px-2 py-2 text-right tabular-nums sm:px-3", toneClass(d.trades ? d.pnlUsd : null))} title={`${d.trades} trade${d.trades === 1 ? "" : "s"}, ${d.wins} winning`}>
                           {d.trades ? signedUsd(d.pnlUsd) : "-"}
                         </td>
                       ))}
-                      <td className={cn("px-3 py-2 text-right font-extrabold tabular-nums", toneClass(s.trades ? s.totalUsd : null))}>{s.trades ? signedUsd(s.totalUsd) : "-"}</td>
+                      <td className={cn("px-2 py-2 text-right font-extrabold tabular-nums sm:px-3", toneClass(s.trades ? s.totalUsd : null))}>{s.trades ? signedUsd(s.totalUsd) : "-"}</td>
                     </tr>
                   ))}
                 </tbody>
