@@ -11,7 +11,20 @@ import { buyCostUsd, lotValueUsd } from "./lots.js";
 import { buildTrigger, confirmExit } from "../../simulation/exitTrigger.js";
 import { API_PLUS_STYLE, cooldownStylesOf, lotStyleIds, selectedStyleId } from "./styles.js";
 import { tradeDelaySeconds } from "./settings.js";
-import { INDEX_LAG_SEC, apiPlusIntervalSeconds, nextSampleAt, poolPriceAt, priceSources } from "../../simulation/apiPlus.js";
+import {
+  INDEX_LAG_SEC,
+  MAX_HOLD_GRACE_SEC,
+  NO_PRICE_REQUEUE_SEC,
+  NO_PRICE_RETRY_SEC,
+  NO_PRICE_SELL_AFTER_ERROR_SEC,
+  NO_PRICE_SELL_AFTER_SEC,
+  UNPRICED_FALLBACK_SEC,
+  apiPlusIntervalSeconds,
+  currentPrice,
+  nextSampleAt,
+  poolPriceAt,
+  priceSources,
+} from "../../simulation/apiPlus.js";
 
 /**
  * The live wallet's OWN exit rules: stop-loss, take-profit, max hold time and trailing stops, judged against what each live position really
@@ -65,6 +78,33 @@ async function queueSell(lot, closeReason, track, trigger = null, delaySeconds =
     if (err?.code === 11000) return false; // already queued
     throw err;
   }
+}
+
+const noPriceRetryAt = new Map(); // lot id -> epoch seconds before which /price is not asked again
+
+/**
+ * /price could not price the lot (all its stages failed, or the tracking server could not be asked), so the styles still undecided cannot be judged on a
+ * price. The max hold time is a clock and still holds; beyond that they are sold once the lot has gone without any price for NO_PRICE_SELL_AFTER_SEC - the same
+ * rule as the simulation wallet's (db/simulation/walletExecutor.js handleNoPrice). Without this a lot on a token nobody can price is never decided at all.
+ * @returns {Promise<number>} how many sells were queued
+ */
+async function settleWithoutPrice(lot, live, simSettings, styles, dry, nowSec, quote) {
+  if (lot.noPriceSinceSec == null) {
+    lot.noPriceSinceSec = nowSec;
+    await LiveLot.updateOne({ _id: lot._id, noPriceSinceSec: null }, { $set: { noPriceSinceSec: nowSec } });
+  }
+  const maxHold = simSettings.maxTradeTimeSeconds > 0 ? simSettings.maxTradeTimeSeconds : 0;
+  const ageSeconds = nowSec - lot.openedAt.getTime() / 1000;
+  let reason = null;
+  if (maxHold > 0 && ageSeconds >= maxHold + MAX_HOLD_GRACE_SEC) reason = "max_hold_time";
+  else if (nowSec - lot.noPriceSinceSec >= (quote.error ? NO_PRICE_SELL_AFTER_ERROR_SEC : NO_PRICE_SELL_AFTER_SEC)) reason = "no_price";
+  if (!reason) return 0;
+  const why = quote.error ? `the price service could not be asked: ${quote.error}` : quote.reason;
+  const trigger = { ...buildTrigger(reason, { thresholdPercent: null, unrealizedPercent: null, valueUsd: null, priceUsd: null, priceSource: quote.error ? "price_service_unreachable" : "none_of_the_stages" }), reason: why };
+  let queued = 0;
+  for (const style of styles) if (await queueSell(lot, reason, dry ? style.id : null, trigger, tradeDelaySeconds(live))) queued += 1;
+  if (queued > 0) noPriceRetryAt.set(String(lot._id), nowSec + NO_PRICE_REQUEUE_SEC);
+  return queued;
 }
 
 const HEAL_AFTER_MS = 30_000; // a simulated exit gets this long to reach its dry lot the normal way first
@@ -281,12 +321,33 @@ export async function checkLiveRiskExits({ apiPlus: apiPlusPass = false } = {}) 
       // every moment that has become old enough to be listed since the last pass, in order, so a slow pass or a trade list that was late never costs a moment.
       for (let n = 0; n < API_PLUS_MAX_CATCH_UP && remaining.length > 0; n++) {
         const at = nextSampleAt({ key: `${lot.mint}:${lot._id}`, startSec: openedAtSec, intervalSec: apiPlusInterval, afterSec: lot.apiPlusLastAtSec });
-        if (Date.now() / 1000 < at + INDEX_LAG_SEC) return;
-        const sample = await poolPriceAt(lot.mint, at);
-        if (!sample) return; // not listed yet - the next pass tries this same moment again
-        await LiveLot.updateOne({ _id: lot._id }, { $set: { apiPlusLastAtSec: at } });
-        lot.apiPlusLastAtSec = at;
-        await judgeAt({ priceUsd: sample.priceUsd, source: `api_plus_${sample.source}` }, at);
+        const nowSec = Date.now() / 1000;
+        if (nowSec < at + INDEX_LAG_SEC) return;
+        let sample = await poolPriceAt(lot.mint, at);
+        let sampleAt = at;
+        let stage = null;
+        if (!sample) {
+          // Not listed yet - or the token's trades carry no USD price at all (a pool quoted in a token nobody prices), in which case the trade list never will
+          // and the lot would never be judged, not even for its max hold time. Ask the tracking server's /price for the best CURRENT price instead (the missed
+          // moment cannot be read afterwards, so the schedule resumes from now).
+          if (!lot.priceStage && nowSec < at + UNPRICED_FALLBACK_SEC) return; // the next pass tries this same moment again
+          if (nowSec < (noPriceRetryAt.get(String(lot._id)) ?? 0)) return;
+          const quote = await currentPrice(lot.mint);
+          if (!(quote.priceUsd > 0)) {
+            noPriceRetryAt.set(String(lot._id), nowSec + NO_PRICE_RETRY_SEC);
+            queued += await settleWithoutPrice(lot, live, s, remaining, dry, nowSec, quote);
+            return;
+          }
+          noPriceRetryAt.delete(String(lot._id));
+          stage = quote.stage;
+          sample = { priceUsd: quote.priceUsd, source: `grpc_price_${stage}` };
+          sampleAt = nowSec;
+        }
+        await LiveLot.updateOne({ _id: lot._id }, { $set: { apiPlusLastAtSec: sampleAt, noPriceSinceSec: null, ...(stage && { priceStage: stage }) } });
+        lot.apiPlusLastAtSec = sampleAt;
+        lot.noPriceSinceSec = null;
+        if (stage) lot.priceStage = stage;
+        await judgeAt({ priceUsd: sample.priceUsd, source: stage ? sample.source : `api_plus_${sample.source}` }, sampleAt);
       }
     })
   );

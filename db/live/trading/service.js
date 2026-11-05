@@ -445,7 +445,8 @@ export async function getTradingSummary(liveId) {
   const count = (mode, status) => byStatus.find((r) => r._id.mode === mode && r._id.status === status)?.n ?? 0;
   const c = closed[0];
   // The dry-run comparison: only trades every style has decided, so each style is judged on exactly the same entries.
-  const decided = dryLots.filter((l) => lotStyleIds(l).every((sid) => l.dryExits?.[sid]));
+  // (A style closed without a result - `excluded`, see the one-off fix for tokens nobody could price - keeps its whole trade out of the comparison.)
+  const decided = dryLots.filter((l) => lotStyleIds(l).every((sid) => l.dryExits?.[sid]) && !lotStyleIds(l).some((sid) => l.dryExits?.[sid]?.excluded));
   const styleIds = decided.length ? lotStyleIds(decided[0]) : [];
   const live = await LiveWallet.findById(id, { cooldownStyles: 1 }).lean();
   const cooldowns = cooldownStylesOf(live ?? {});
@@ -525,7 +526,7 @@ export async function getDryDaily(liveId) {
     const byDay = Object.fromEntries(days.map((d) => [d, { pnlUsd: 0, trades: 0, wins: 0 }]));
     for (const lot of lots) {
       const exit = lot.dryExits?.[sid];
-      if (!exit?.at) continue;
+      if (!exit?.at || exit.excluded) continue; // an excluded exit was closed without a result: it is not a trade of this style
       const bucket = byDay[dayKey(exit.at)];
       if (!bucket) continue;
       const pnl = exit.realizedPnlUsd ?? 0;

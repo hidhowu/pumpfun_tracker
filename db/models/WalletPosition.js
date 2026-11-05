@@ -43,7 +43,7 @@ const WalletPositionSchema = new Schema({
   closedAt: { type: Date, default: null },
   closeReason: {
     type: String,
-    enum: ["trader_sell", "stop_loss", "take_profit", "trailing_stop", "max_hold_time", "blacklisted", null],
+    enum: ["trader_sell", "stop_loss", "take_profit", "trailing_stop", "max_hold_time", "blacklisted", "no_price", null],
     default: null,
   },
   closeTriggerSignature: { type: String, default: null },

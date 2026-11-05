@@ -134,7 +134,7 @@ export type SimPosition = {
   minUnrealizedPnlPercent: number | null;
   closedAt: string | null;
   // "bench" only appears on positions closed before the trailingStops rule list replaced the single bench-cap.
-  closeReason: "trader_sell" | "stop_loss" | "take_profit" | "bench" | "trailing_stop" | "max_hold_time" | "blacklisted" | null;
+  closeReason: "trader_sell" | "stop_loss" | "take_profit" | "bench" | "trailing_stop" | "max_hold_time" | "blacklisted" | "no_price" | null;
   closeTriggerSignature: string | null;
   sellPriceUsd: number | null;
   proceedsUsd: number | null;
@@ -444,6 +444,20 @@ export type WalletView = {
   panic?: WalletPanic | null; // null/absent when the wallet has no panic level
   traderCount?: number; // present on the /api/wallets list endpoint only
   todayRealizedPnlUsd?: number; // present on the /api/wallets list endpoint only - sum of realizedPnlUsd for positions closed today (UTC)
+};
+
+/** A position nothing could price (app/api/wallets/[id]/no-price-exits): sold with the close reason "no_price", or still open without a price. */
+export type NoPriceExit = {
+  id: string;
+  mint: string;
+  traderAddress: string;
+  status: "open" | "closed";
+  openedAt: string;
+  closedAt: string | null;
+  realizedPnlUsd: number | null;
+  realizedPnlPercent: number | null;
+  reason: string | null;
+  noPriceSinceSec: number | null;
 };
 
 /** One position within a Wallet - field-for-field the same shape as SimPosition, just scoped to a Wallet instead of a (Profile, trader) pair. */

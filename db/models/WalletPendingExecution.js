@@ -28,7 +28,7 @@ const WalletPendingExecutionSchema = new Schema({
   // through this same queue so it waits the execution delay like any trade.
   closeReason: {
     type: String,
-    enum: ["trader_sell", "stop_loss", "take_profit", "trailing_stop", "max_hold_time", "blacklisted"],
+    enum: ["trader_sell", "stop_loss", "take_profit", "trailing_stop", "max_hold_time", "blacklisted", "no_price"],
     default: "trader_sell",
   },
   // What made this exit happen (db/simulation/exitTrigger.js): the rule, its level, and the price the sweep saw. Null for a copied trade.

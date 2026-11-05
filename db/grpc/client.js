@@ -112,6 +112,15 @@ export class LocalTradesClient {
   }
 
   /**
+   * The USD price of a token from the tracking server (GET /price/:mint, src/tokenprice.js there): the token's own pool ratio times the USD price of the
+   * token it is quoted in, found in up to three stages (priced here / walked up DexScreener / from real trades' balances). One call does it all.
+   * @returns {Promise<{ priceUsd: number|null, stage: "direct"|"chain"|"flows"|"none", reason?: string, quoteMint?: string }>} priceUsd null = stage "none"
+   */
+  async fetchPrice(mint) {
+    return this.#get(`/price/${encodeURIComponent(mint)}`, {});
+  }
+
+  /**
    * Every trade with `fromSec <= timestamp <= toSec`, oldest first, and `prior` = the newest trade before `fromSec` (the price to fall back on when
    * nothing traded inside the window). Same result shape as PumpTradesClient.fetchRange; the server answers in one request, so there is one "page".
    */

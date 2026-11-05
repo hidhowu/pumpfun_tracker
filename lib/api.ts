@@ -5,6 +5,7 @@ import type {
   LeaderboardEntry,
   PnlBreakdown,
   HttpRpcEndpointView,
+  NoPriceExit,
   OpenPositionWithTrader,
   Profile,
   ProfileOverview,
@@ -413,6 +414,11 @@ export function getWalletPositions(
   limit = 25
 ): Promise<{ positions: WalletPositionView[]; page: number; totalPages: number; total: number }> {
   return request(`/api/wallets/${walletId}/positions?status=${status}&page=${page}&limit=${limit}`);
+}
+
+/** The wallet's positions that nothing could price - sold for it, or still open without a price. */
+export function getWalletNoPriceExits(walletId: string): Promise<{ total: number; positions: NoPriceExit[] }> {
+  return request(`/api/wallets/${walletId}/no-price-exits`);
 }
 
 /** `date` (YYYY-MM-DD, UTC) picks which day to show for period=day; defaults to today. */

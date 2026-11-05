@@ -86,6 +86,10 @@ const LiveLotSchema = new Schema({
   armedTrailingStopIds: { type: [String], default: [] },
   // Connected to an "api_plus" simulation wallet: the last price-check moment (epoch seconds) this lot was judged at (db/simulation/apiPlus.js).
   apiPlusLastAtSec: { type: Number, default: null },
+  // A token whose trades carry no USD price is priced by the tracking server's /price (db/simulation/apiPlus.js currentPrice): the stage that last priced this
+  // lot ("direct" / "chain" / "flows"), and since when (epoch seconds) nothing could - the clock after which it is sold (risk.js).
+  priceStage: { type: String, default: null },
+  noPriceSinceSec: { type: Number, default: null },
   // The "apiplus" exit style on a wallet whose simulation is NOT api_plus keeps its own armed trailing stops, so its sampled prices never arm the ones of the other styles.
   apiPlusArmedIds: { type: [String], default: [] },
 

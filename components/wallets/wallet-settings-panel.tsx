@@ -21,6 +21,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { TrailingStopsEditor } from "@/components/trailing-stops-editor";
+import { NoPriceExits } from "@/components/wallets/no-price-exits";
 import { resetWallet, resetWalletBalance, updateWalletSettings } from "@/lib/api";
 import type { PriceSource, TrailingStop, WalletSettings, WalletView } from "@/lib/types";
 
@@ -330,6 +331,18 @@ export function WalletSettingsPanel({ walletId, settings, lastAutoResetAt, onUpd
             </div>
           )}
         </div>
+
+        {(trackingMethod === "grpc" || trackingMethod === "api_plus") && (
+          <>
+            <Separator />
+            <div>
+              <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <TriangleAlert className="size-3.5" /> POSITIONS NO PRICE COULD BE FOUND FOR
+              </div>
+              <NoPriceExits walletId={walletId} />
+            </div>
+          </>
+        )}
 
         <Separator />
 

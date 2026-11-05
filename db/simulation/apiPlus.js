@@ -22,6 +22,15 @@ const WINDOW_SEC = 30; // how far past the moment trades are read - only the fir
 
 export { INDEX_LAG_SEC };
 
+// When a token's trades carry no USD price (a pool quoted in a token nobody prices) the position is priced by the tracking server's /price instead
+// (currentPrice below). Shared by the simulation wallet's sweep (walletExecutor.js) and the live wallet's (live/trading/risk.js).
+export const UNPRICED_FALLBACK_SEC = 20; // a check moment the trade list still cannot price this long after it: ask /price (a token already known to be unpriced asks at once)
+export const NO_PRICE_RETRY_SEC = 3; // a position /price could not price asks again this often
+export const NO_PRICE_SELL_AFTER_SEC = 15; // /price answered "none" (all its stages failed) for this long in a row: the position is sold
+export const NO_PRICE_SELL_AFTER_ERROR_SEC = 90; // the tracking server could not be reached for this long in a row: sold too (a longer wait: it may just be restarting)
+export const NO_PRICE_REQUEUE_SEC = 60; // after a no-price exit is queued, the position is not looked at again for this long
+export const MAX_HOLD_GRACE_SEC = 30; // past the max hold time by this much with no price of any kind: the position is sold anyway
+
 /**
  * Where a wallet's prices come from, one choice for each of the three moments a price is needed (Wallet.settings.buyPriceSource / checkPriceSource /
  * exitPriceSource):
@@ -70,6 +79,22 @@ export async function poolPriceAt(mint, atSec, { nowSec = Date.now() / 1000, for
   if (first && first.priceUsd > 0) return { priceUsd: first.priceUsd, source: "trade" };
   if (prior?.fillPriceUsd > 0 && (force || nowSec >= atSec + QUIET_GRACE_SEC)) return { priceUsd: prior.fillPriceUsd, source: "prior_trade" };
   return null;
+}
+
+/**
+ * The price of a token RIGHT NOW from the tracking server's /price (db/grpc/client.js fetchPrice), for a token whose trades in the list carry no USD price
+ * (a pool quoted in a token nobody prices). It is not "at a check moment" like poolPriceAt: it is the best current answer.
+ * @returns {Promise<{ priceUsd: number, stage: string } | { none: true, reason: string } | { error: string }>} none = the server tried all its stages and has no price;
+ *          error = the server could not be asked
+ */
+export async function currentPrice(mint) {
+  if (typeof tokenTradesClient.fetchPrice !== "function") return { error: "the gRPC tracking server is not configured (GRPC_TRACKER_URL)" };
+  try {
+    const r = await tokenTradesClient.fetchPrice(mint);
+    return r?.priceUsd > 0 ? { priceUsd: r.priceUsd, stage: r.stage } : { none: true, reason: r?.reason || "no price" };
+  } catch (err) {
+    return { error: err.message || String(err) };
+  }
 }
 
 /**

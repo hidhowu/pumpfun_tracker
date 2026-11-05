@@ -23,6 +23,7 @@ const CLOSE_REASON_LABEL: Record<string, string> = {
   trailing_stop: "Trailing stop",
   max_hold_time: "Max hold time",
   blacklisted: "Trader blacklisted",
+  no_price: "No price available",
 };
 
 export function WalletTradeHistory({ walletId }: Props) {

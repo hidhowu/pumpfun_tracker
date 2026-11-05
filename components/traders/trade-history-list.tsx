@@ -41,6 +41,7 @@ const CLOSE_REASON_META: Record<
   trailing_stop: { label: "Trailing stop", icon: Waves, className: "border-primary/30 text-primary" },
   max_hold_time: { label: "Max hold time", icon: Clock, className: "border-border/60 text-muted-foreground" },
   blacklisted: { label: "Trader blacklisted", icon: ShieldAlert, className: "border-border/60 text-muted-foreground" },
+  no_price: { label: "No price available", icon: ShieldAlert, className: "border-border/60 text-muted-foreground" },
 };
 
 function CloseReasonBadge({ reason }: { reason: SimPosition["closeReason"] }) {

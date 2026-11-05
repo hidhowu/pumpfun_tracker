@@ -21,6 +21,7 @@ const REASONS: Record<string, string> = {
   max_hold_time: "Max hold time",
   manual: "Sold by hand",
   blacklisted: "Trader blacklisted",
+  no_price: "No price available (left out of the results)",
 };
 const reasonLabel = (reason: string | null | undefined) => (reason ? (REASONS[reason] ?? reason) : "-");
 

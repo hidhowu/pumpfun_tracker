@@ -13,7 +13,20 @@ import { mirrorExit } from "../live/trading/mirror.js";
 import { TradeError } from "../live/trading/pumpSwap.js";
 import { priceBuy, priceSell, valueMany } from "./sdkQuote.js";
 import { CONFIRMED_EXITS, buildTrigger, confirmExit, recoveryLevel, triggerHolds } from "./exitTrigger.js";
-import { INDEX_LAG_SEC, apiPlusIntervalSeconds, apiPlusSchedule, poolPriceAt, priceSources } from "./apiPlus.js";
+import {
+  INDEX_LAG_SEC,
+  MAX_HOLD_GRACE_SEC,
+  NO_PRICE_REQUEUE_SEC,
+  NO_PRICE_RETRY_SEC,
+  NO_PRICE_SELL_AFTER_ERROR_SEC,
+  NO_PRICE_SELL_AFTER_SEC,
+  UNPRICED_FALLBACK_SEC,
+  apiPlusIntervalSeconds,
+  apiPlusSchedule,
+  currentPrice,
+  poolPriceAt,
+  priceSources,
+} from "./apiPlus.js";
 
 // Where each wallet's prices come from (SDK quote, the token's trade list, or - "logs" wallets - the spot price) is decided per wallet and per moment
 // (buy fill / interval checks / sale fill) by priceSources() in db/simulation/apiPlus.js.
@@ -377,9 +390,18 @@ async function executeWalletSell(pending) {
       // Sold at the pool price at the moment the exit was due (a decided exit: the check moment + the execution delay; a copied sell: the moment it is due).
       const price = await apiPlusFillPrice(pending);
       if (price === "wait") return;
-      if (!price) return retryWithoutPrice(pending);
-      priceUsd = price.priceUsd;
-      method = "api_plus";
+      if (price) {
+        priceUsd = price.priceUsd;
+        method = "api_plus";
+      } else {
+        // The trade list has no price for this token (its trades carry no USD price): sell at what the SDK / spot says instead of never selling.
+        const quote = await priceSell(pending.mint, position.tokenAmount).catch((err) => {
+          if (err instanceof TradeError) return null;
+          throw err;
+        });
+        if (!quote) return retryWithoutPrice(pending);
+        ({ priceUsd, method } = quote);
+      }
     } else if (sources.exit === "sdk") {
       // What pump.fun's SDK says selling the whole position pays out right now (the sale's fee is already in it).
       const quote = await priceSell(pending.mint, position.tokenAmount).catch((err) => {
@@ -671,6 +693,7 @@ export async function checkWalletRiskExits() {
 }
 
 const API_PLUS_MAX_CATCH_UP = 12; // check moments judged per position per call, if the daemon was away for a while
+const noPriceRetryAt = new Map(); // position id -> epoch seconds before which /price is not asked again
 const API_PLUS_PARALLEL = 8;
 
 /**
@@ -706,6 +729,41 @@ export async function checkApiPlusExits() {
   return queued;
 }
 
+/**
+ * The max hold time is a clock, not a price rule: a position older than it is sold even when nothing could price it (no trade-list price, no SDK / spot
+ * value). The sale is priced at the fill like any other (db/simulation/walletExecutor.js executeWalletSell), and retried if that has no price either.
+ */
+async function maxHoldWithoutPrice(position, settings, nowSec) {
+  const maxHold = settings.maxTradeTimeSeconds > 0 ? settings.maxTradeTimeSeconds : 0;
+  if (maxHold === 0 || nowSec < position.apiPlus.fillAtSec + maxHold + MAX_HOLD_GRACE_SEC) return false;
+  const trigger = buildTrigger("max_hold_time", { thresholdPercent: null, unrealizedPercent: null, valueUsd: null, priceUsd: null, priceSource: "none_available" });
+  return queueExit(position, settings.executionDelaySeconds, "max_hold_time", trigger);
+}
+
+/**
+ * /price could not price the position (all three stages failed, or the tracking server could not be asked). The max hold time is a clock and still holds. Beyond
+ * that the position is sold once it has gone without any price for NO_PRICE_SELL_AFTER_SEC (a server that is down: NO_PRICE_SELL_AFTER_ERROR_SEC) - holding a
+ * position nobody can price is the one thing worse than selling it. The close is listed under the wallet's settings ("Sold - no price available").
+ * @returns {Promise<boolean>} true if an exit was queued
+ */
+async function handleNoPrice(position, settings, nowSec, quote) {
+  if (position.apiPlus.noPriceSinceSec == null) {
+    position.apiPlus.noPriceSinceSec = nowSec;
+    await WalletPosition.updateOne({ _id: position._id, status: "open", "apiPlus.noPriceSinceSec": null }, { $set: { "apiPlus.noPriceSinceSec": nowSec } });
+  }
+  if (await maxHoldWithoutPrice(position, settings, nowSec)) return true;
+  const grace = quote.error ? NO_PRICE_SELL_AFTER_ERROR_SEC : NO_PRICE_SELL_AFTER_SEC;
+  if (nowSec - position.apiPlus.noPriceSinceSec < grace) return false;
+  const reason = quote.error ? `the price service could not be asked: ${quote.error}` : quote.reason;
+  const trigger = { ...buildTrigger("no_price", { thresholdPercent: null, unrealizedPercent: null, valueUsd: null, priceUsd: null, priceSource: quote.error ? "price_service_unreachable" : "none_of_the_stages" }), reason };
+  logEvent("trade", `[wallet] Selling ${position.mint} for ${position.traderAddress}: no price for ${Math.round(nowSec - position.apiPlus.noPriceSinceSec)}s (${reason})`, {
+    level: "warn",
+    meta: { walletId: String(position.walletId), traderAddress: position.traderAddress, mint: position.mint },
+  });
+  noPriceRetryAt.set(String(position._id), nowSec + NO_PRICE_REQUEUE_SEC); // a sale nothing can price is skipped by the queue: do not queue (and log) it again every few seconds
+  return queueExit(position, settings.executionDelaySeconds, "no_price", trigger);
+}
+
 async function sweepApiPlusPosition(position, wallet, isBlacklisted) {
   if (!wallet) return false;
   const settings = wallet.settings;
@@ -725,9 +783,28 @@ async function sweepApiPlusPosition(position, wallet, isBlacklisted) {
   for (let n = 0; n < API_PLUS_MAX_CATCH_UP; n++) {
     const nowSec = Date.now() / 1000;
     if (nowSec < nextAt + INDEX_LAG_SEC) return false;
-    const sample = await poolPriceAt(position.mint, nextAt, { nowSec });
-    if (!sample) return false; // not listed yet - looked at again on the next call
-    const at = nextAt;
+    let sample = await poolPriceAt(position.mint, nextAt, { nowSec });
+    // Judged on `scheduledAt` in the database; `at` is the moment the reading stands for (the same, unless the trade list had no price - see below).
+    const scheduledAt = nextAt;
+    let at = nextAt;
+    let fallbackStage = null;
+    if (!sample) {
+      // A token already priced by /price once is known to have no USD price in its trade list: no waiting for the list to show one.
+      if (!position.apiPlus.priceStage && nowSec < nextAt + UNPRICED_FALLBACK_SEC) return false; // not listed yet - looked at again on the next call
+      // The trade list has no usable price for this moment: the token's trades carry no USD price (a pool quoted in a token nobody priced). Ask the tracking
+      // server's /price, which finds it in up to three stages (its own USD price / walked up DexScreener / real trades' balances). That price is the best
+      // current one, not the pool price at the missed moment, so the schedule resumes from now.
+      if (nowSec < (noPriceRetryAt.get(String(position._id)) ?? 0)) return false;
+      const quote = await currentPrice(position.mint);
+      if (!(quote.priceUsd > 0)) {
+        noPriceRetryAt.set(String(position._id), nowSec + NO_PRICE_RETRY_SEC);
+        return !!(await handleNoPrice(position, settings, nowSec, quote));
+      }
+      noPriceRetryAt.delete(String(position._id));
+      fallbackStage = quote.stage;
+      sample = { priceUsd: quote.priceUsd, source: `grpc_price_${quote.stage}` };
+      at = nowSec;
+    }
     nextAt = at + intervalSec;
 
     const currentValue = position.tokenAmount * sample.priceUsd;
@@ -761,10 +838,12 @@ async function sweepApiPlusPosition(position, wallet, isBlacklisted) {
 
     // This moment is judged: move the schedule on, record the peak / trough and which trailing stops are armed - in one guarded write.
     const set = { "apiPlus.nextSweepAtSec": nextAt };
+    if (fallbackStage) set["apiPlus.priceStage"] = fallbackStage; // which stage of /price priced this position last (kept on the position)
+    if (position.apiPlus.noPriceSinceSec != null) set["apiPlus.noPriceSinceSec"] = null; // priced again: the no-price clock starts over
     if (currentValue > position.maxValueUsd) Object.assign(set, { maxValueUsd: currentValue, maxUnrealizedPnlUsd: unrealizedUsd, maxUnrealizedPnlPercent: unrealizedPercent });
     if (position.minValueUsd === null || currentValue < position.minValueUsd) Object.assign(set, { minValueUsd: currentValue, minUnrealizedPnlUsd: unrealizedUsd, minUnrealizedPnlPercent: unrealizedPercent });
     const advanced = await WalletPosition.updateOne(
-      { _id: position._id, status: "open", "apiPlus.nextSweepAtSec": at },
+      { _id: position._id, status: "open", "apiPlus.nextSweepAtSec": scheduledAt },
       { $set: { ...set, armedTrailingStopIds: [...armed] } }
     );
     if (advanced.modifiedCount === 0) return false; // another pass judged this moment (or the position closed)
@@ -776,7 +855,7 @@ async function sweepApiPlusPosition(position, wallet, isBlacklisted) {
         unrealizedPercent,
         valueUsd: currentValue,
         priceUsd: sample.priceUsd,
-        priceSource: `api_plus_${sample.source}`,
+        priceSource: fallbackStage ? sample.source : `api_plus_${sample.source}`,
         rule,
       });
       return !!(await queueExit(position, settings.executionDelaySeconds, reason, trigger, at));
