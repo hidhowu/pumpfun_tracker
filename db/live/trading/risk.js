@@ -11,7 +11,7 @@ import { buyCostUsd, lotValueUsd } from "./lots.js";
 import { buildTrigger, confirmExit } from "../../simulation/exitTrigger.js";
 import { API_PLUS_STYLE, cooldownStylesOf, lotStyleIds, selectedStyleId } from "./styles.js";
 import { tradeDelaySeconds } from "./settings.js";
-import { INDEX_LAG_SEC, apiPlusIntervalSeconds, nextSampleAt, poolPriceAt, usesApiPlusPricing } from "../../simulation/apiPlus.js";
+import { INDEX_LAG_SEC, apiPlusIntervalSeconds, nextSampleAt, poolPriceAt, priceSources } from "../../simulation/apiPlus.js";
 
 /**
  * The live wallet's OWN exit rules: stop-loss, take-profit, max hold time and trailing stops, judged against what each live position really
@@ -34,7 +34,8 @@ const TRACK_GRACE_MS = 5 * 60_000;
 const API_PLUS_MAX_CATCH_UP = 12; // check moments judged per lot per pass, if the daemon was away for a while
 
 /*
- * A live wallet connected to an "api_plus" simulation wallet (Wallet.settings.trackingMethod) judges its own exit rules the way that wallet does
+ * A live wallet connected to a simulation wallet whose interval checks read the trade list (Wallet.settings.checkPriceSource "api", the default of the
+ * "api_plus" and "grpc" tracking methods) judges its own exit rules the way that wallet does
  * (db/simulation/apiPlus.js): not on the price right now but on the pool price, from the token's trade list, at the lot's check moments (the
  * lot's open + a fixed phase + k x the risk-check interval). Each sweep judges the newest moment that is old enough to be listed and has not been
  * judged yet, so a spike between two moments is never seen; there is no fresh re-check of a low reading, as in the backtest. The simulation wallet's
@@ -131,8 +132,8 @@ function stylesFor(lot, live) {
   return wanted.map((id) => cooldowns.get(id) ?? (id === "own" || id === "follow" || id === API_PLUS_STYLE ? { id, kind: "own" } : null)).filter(Boolean);
 }
 
-/** A style is judged on sampled prices at the lot's check moments (the API Plus way) when its simulation wallet is "api_plus", or when it is the API Plus style itself. */
-const sampledStyle = (style, sim) => usesApiPlusPricing(sim.settings?.trackingMethod) || style.id === API_PLUS_STYLE;
+/** A style is judged on sampled prices at the lot's check moments (the API Plus way) when its simulation wallet's checks read the trade list, or when it is the API Plus style itself. */
+const sampledStyle = (style, sim) => priceSources(sim.settings).check === "api" || style.id === API_PLUS_STYLE;
 
 /** @param {{ apiPlus?: boolean }} [options] apiPlus = judge only the styles that look at sampled prices (API Plus), every few seconds; otherwise all the other styles */
 export async function checkLiveRiskExits({ apiPlus: apiPlusPass = false } = {}) {
@@ -192,7 +193,7 @@ export async function checkLiveRiskExits({ apiPlus: apiPlusPass = false } = {}) 
       const apiPlus = apiPlusPass && apiPlusInterval > 0;
       // Peak / lowest value and armed trailing stops are shared by the styles judged on sweep prices (or, on an api_plus wallet, all on sampled ones). The API Plus style
       // of a wallet whose simulation isn't api_plus judges on sampled prices of its own, so it keeps its own armed rules and leaves the lot's peak / lowest alone.
-      const sharedState = !apiPlusPass || usesApiPlusPricing(sim.settings?.trackingMethod);
+      const sharedState = !apiPlusPass || priceSources(sim.settings).check === "api";
       const armedField = sharedState ? "armedTrailingStopIds" : "apiPlusArmedIds";
       const openedAtSec = lot.openedAt.getTime() / 1000;
       const s = sim.settings;

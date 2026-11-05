@@ -387,6 +387,8 @@ export type LeaderboardEntry = {
 // --- Wallets: a second, fully independent copy-trade simulation - see db/models/Wallet.js ---
 
 /** Flat, wallet-own settings - no per-trader-within-wallet override tier (unlike TraderSimSettings). No allowNegativeBalance: wallets can never go negative, not configurable. */
+export type PriceSource = "sdk" | "api";
+
 export type WalletSettings = {
   tradeSizeUsd: number;
   dustBuyUsd: number;
@@ -403,6 +405,10 @@ export type WalletSettings = {
   autoResetBalanceDaily: boolean;
   /** How the wallet learns about its traders' trades: the tracker's RPC logs (default) or pump.fun's user-trades API. See db/models/Wallet.js. */
   trackingMethod?: "logs" | "api" | "api_plus" | "grpc";
+  /** Where the price of a simulated buy / the interval checks / a sale comes from: pump.fun's SDK quote or the token's trade list (the local gRPC API). null/absent = follow the tracking method. Not used by "logs" wallets. See db/simulation/apiPlus.js. */
+  buyPriceSource?: PriceSource | null;
+  checkPriceSource?: PriceSource | null;
+  exitPriceSource?: PriceSource | null;
   /** Panic level in dollars (a positive loss amount); null/absent = off. See db/walletPanic.js. */
   panicLossUsd?: number | null;
 };

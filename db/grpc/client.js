@@ -60,8 +60,8 @@ export class LocalTradesClient {
     this.stats = { requests: 0, failures: 0 };
   }
 
-  // The same dust floor and venue the backtest reads pump.fun with (BacktestSettings.minSolAmount / program), so a live run and a backtest of
-  // the same trade see the same trades.
+  // The same dust floor the backtest reads pump.fun with (BacktestSettings.minSolAmount), so a live run and a backtest of the same trade see the same
+  // trades. (Not its `program`: see fetchRange.)
   async #settings() {
     if (this.settings && Date.now() - this.refreshedAt < SETTINGS_REFRESH_MS) return this.settings;
     try {
@@ -119,7 +119,9 @@ export class LocalTradesClient {
     const s = await this.#settings();
     const params = { from: String(fromSec), to: String(toSec) };
     if (s.minSolAmount > 0) params.minSol = String(s.minSolAmount);
-    if (s.program === "pump") params.venue = "pump";
+    // No `venue` filter on purpose: a token trades on its bonding curve (pump) AND, after it graduates - or when it is bought straight from a PumpSwap
+    // pool - in the AMM (pump_amm), and its price has to come from whichever it trades on. The backtest's "program" setting only narrows what pump.fun's
+    // own API returns; applying it here made every PumpSwap token unpriceable (no trades, no price -> the buy was skipped).
     const json = await this.#get(`/trades/${CHAIN}/${encodeURIComponent(mint)}`, params);
     const trades = (json.trades || []).map(normalizeTrade).sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const prior = json.prior ? normalizeTrade(json.prior) : null;

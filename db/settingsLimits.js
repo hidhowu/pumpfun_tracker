@@ -6,6 +6,9 @@
  * number was saved that wasn't.
  */
 
+/** Where a wallet's prices may come from (Wallet.settings.buyPriceSource / checkPriceSource / exitPriceSource): see db/simulation/apiPlus.js priceSources. */
+export const PRICE_SOURCES = ["sdk", "api"];
+
 /** Hard caps the owner chose: the most a single fill may pay. */
 export const MAX_PUMP_FEE_PERCENT = 2;
 export const MAX_JITO_FEE_USD = 1;

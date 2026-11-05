@@ -1,10 +1,11 @@
 import { getSystemSettings } from "../models/SystemSettings.js";
 import { sweepPhase } from "../backtest/simulator.js";
 import { tokenTradesClient } from "./apiClients.js";
+import { PRICE_SOURCES } from "../settingsLimits.js";
 
 /**
- * The "api_plus" tracking method (Wallet.settings.trackingMethod): trades are detected through pump.fun's user-trades API like "api", but every
- * price - the buy fill, each stop-loss / take-profit / trailing-stop check, the sale fill - is read from the token's trade list, the way the
+ * The trade-list ("api") way of pricing, the default of the "api_plus" and "grpc" tracking methods (see priceSources below for the per-wallet choice):
+ * every price - the buy fill, each stop-loss / take-profit / trailing-stop check, the sale fill - is read from the token's trade list, the way the
  * backtest does it (db/backtest/simulator.js), so a live run and a backtest of the same trade see the same prices at the same moments:
  *
  *   fill      = the pool price at Te - the pre-trade price of the first trade at or after Te (Te = the moment the buy is due)
@@ -21,10 +22,30 @@ const WINDOW_SEC = 30; // how far past the moment trades are read - only the fir
 
 export { INDEX_LAG_SEC };
 
-/** Tracking methods whose prices are read the API Plus way ("grpc" detects trades through the gRPC tracking server, then prices exactly like "api_plus"). */
-export const usesApiPlusPricing = (trackingMethod) => trackingMethod === "api_plus" || trackingMethod === "grpc";
+/**
+ * Where a wallet's prices come from, one choice for each of the three moments a price is needed (Wallet.settings.buyPriceSource / checkPriceSource /
+ * exitPriceSource):
+ *   buy    the price a simulated buy fills at
+ *   check  the price the stop-loss / take-profit / trailing-stop checks judge a position on
+ *   exit   the price a sale (the trader's sell, or an exit this wallet decided) fills at
+ * each one of
+ *   "sdk"  pump.fun's / PumpSwap's SDK quote (db/simulation/sdkQuote.js): what the program would pay right now, fee and price impact included. Needs nothing
+ *          to be tracked - any token on a curve or in a PumpSwap pool can be quoted at once.
+ *   "api"  the token's own trade list (pump.fun's API, or the local gRPC tracking server when GRPC_TRACKER_URL is set): the pool price at the backtest's
+ *          moments, so a live run and a backtest of the same trade agree. The server has to be following the token (it starts when a tracked wallet buys it
+ *          or the app first asks for it).
+ * A choice left unset follows the wallet's tracking method, which is how every wallet behaved before the choices existed: "api" -> the SDK throughout,
+ * "api_plus" / "grpc" -> the trade list throughout. A "logs" wallet has no choice: it fills and checks at the spot price ("spot").
+ */
+const METHOD_DEFAULT_SOURCE = { api: "sdk", api_plus: "api", grpc: "api" };
 
-export const isApiPlusWallet = (wallet) => usesApiPlusPricing(wallet?.settings?.trackingMethod);
+/** @returns {{ buy: "sdk"|"api"|"spot", check: "sdk"|"api"|"spot", exit: "sdk"|"api"|"spot" }} */
+export function priceSources(settings) {
+  const fallback = METHOD_DEFAULT_SOURCE[settings?.trackingMethod ?? "logs"];
+  if (!fallback) return { buy: "spot", check: "spot", exit: "spot" };
+  const pick = (value) => (PRICE_SOURCES.includes(value) ? value : fallback);
+  return { buy: pick(settings?.buyPriceSource), check: pick(settings?.checkPriceSource), exit: pick(settings?.exitPriceSource) };
+}
 
 /** The sweep interval a position gets, frozen at its open (the backtest freezes it per run). Never below 1 second. */
 export async function apiPlusIntervalSeconds() {

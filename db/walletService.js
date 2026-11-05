@@ -11,7 +11,7 @@ import { todayUtcString } from "./simulation/snapshot.js";
 import { walletPanic } from "./walletPanic.js";
 import { BacktestView } from "./models/BacktestView.js";
 import { BacktestRunTrader } from "./models/BacktestRunTrader.js";
-import { validateField, validateSettingsPatch, validateTrailingStops } from "./settingsLimits.js";
+import { PRICE_SOURCES, validateField, validateSettingsPatch, validateTrailingStops } from "./settingsLimits.js";
 import { assertWalletSimulation, isLive, LiveModeError } from "./mode.js";
 
 /** Creates a Wallet with its starting balance as both startingBalanceUsd (reference) and balanceUsd (current, spendable). */
@@ -47,6 +47,7 @@ const NUMBER_FIELDS = [
 const NULLABLE_NUMBER_FIELDS = ["stopLossPercent", "takeProfitPercent", "panicLossUsd"];
 const BOOLEAN_FIELDS = ["autoResetBalanceDaily"];
 export const TRACKING_METHODS = ["logs", "api", "api_plus", "grpc"];
+const PRICE_SOURCE_FIELDS = ["buyPriceSource", "checkPriceSource", "exitPriceSource"]; // see db/simulation/apiPlus.js priceSources; null = follow the tracking method
 
 /** Validates a settings object (or partial patch) and returns only the accepted keys. THROWS an Error naming the first bad setting - callers turn that into a 400. */
 export function validateWalletSettings(patch) {
@@ -62,6 +63,12 @@ export function validateWalletSettings(patch) {
   if ("trackingMethod" in patch && patch.trackingMethod !== undefined) {
     if (!TRACKING_METHODS.includes(patch.trackingMethod)) throw new Error(`trackingMethod must be one of: ${TRACKING_METHODS.join(", ")}`);
     out.trackingMethod = patch.trackingMethod;
+  }
+  for (const key of PRICE_SOURCE_FIELDS) {
+    if (key in patch && patch[key] !== undefined) {
+      if (patch[key] !== null && !PRICE_SOURCES.includes(patch[key])) throw new Error(`${key} must be one of: ${PRICE_SOURCES.join(", ")} (or null to follow the tracking method)`);
+      out[key] = patch[key];
+    }
   }
   if ("trailingStops" in patch) {
     const rules = validateTrailingStops(patch.trailingStops);

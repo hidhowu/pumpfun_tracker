@@ -82,6 +82,13 @@ const WalletSchema = new Schema({
     //    their wallets over Yellowstone gRPC and pushes each trade to the tracker's webhook (db/grpc/receiver.js) the moment it lands.
     // Per wallet: a trader in two wallets is followed both ways, each wallet by its own method.
     trackingMethod: { type: String, enum: ["logs", "api", "api_plus", "grpc"], default: "logs" },
+    // Where each of this wallet's prices comes from (db/simulation/apiPlus.js priceSources): "sdk" = pump.fun's / PumpSwap's SDK quote, "api" = the token's
+    // trade list (the local gRPC tracking server, or pump.fun's API). One choice for the price a buy fills at, one for the interval checks (stop-loss /
+    // take-profit / trailing stops; frozen on a position when it opens) and one for the price a sale fills at. null = follow the tracking method
+    // ("api" -> sdk, "api_plus" / "grpc" -> api). Not used by "logs" wallets (spot prices).
+    buyPriceSource: { type: String, enum: ["sdk", "api", null], default: null },
+    checkPriceSource: { type: String, enum: ["sdk", "api", null], default: null },
+    exitPriceSource: { type: String, enum: ["sdk", "api", null], default: null },
     // Panic level: how deep a loss stretch (in dollars, a positive number) this wallet may reach before it counts as doing worse than
     // expected - normally a bit beyond the "deepest point" its backtest showed. null = off. Display only (db/walletPanic.js): it
     // never stops or changes a trade.

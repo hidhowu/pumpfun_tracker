@@ -13,10 +13,10 @@ import { mirrorExit } from "../live/trading/mirror.js";
 import { TradeError } from "../live/trading/pumpSwap.js";
 import { priceBuy, priceSell, valueMany } from "./sdkQuote.js";
 import { CONFIRMED_EXITS, buildTrigger, confirmExit, recoveryLevel, triggerHolds } from "./exitTrigger.js";
-import { INDEX_LAG_SEC, apiPlusIntervalSeconds, apiPlusSchedule, isApiPlusWallet, poolPriceAt } from "./apiPlus.js";
+import { INDEX_LAG_SEC, apiPlusIntervalSeconds, apiPlusSchedule, poolPriceAt, priceSources } from "./apiPlus.js";
 
-/** Wallets that follow their traders through pump.fun's API (Wallet.settings.trackingMethod) fill and are checked at SDK quotes, not spot prices. */
-const isApiWallet = (wallet) => wallet?.settings?.trackingMethod === "api";
+// Where each wallet's prices come from (SDK quote, the token's trade list, or - "logs" wallets - the spot price) is decided per wallet and per moment
+// (buy fill / interval checks / sale fill) by priceSources() in db/simulation/apiPlus.js.
 
 /**
  * The fee settings a fill is charged with. pump.fun takes its fee ON TOP of a buy, out of the wallet (the program puts budget / (1 + fee) into the
@@ -128,7 +128,10 @@ async function executeWalletBuy(pending) {
     let tokenAmount;
     let method = "spot";
     let apiPlus = null;
-    if (isApiPlusWallet(walletDoc)) {
+    const sources = priceSources(walletDoc.settings);
+    // The moment this buy is due: what an "api" fill takes the pool price of, and where the schedule of "api" price checks starts from.
+    pending.priceAtSec ??= pending.triggerAt.getTime() / 1000;
+    if (sources.buy === "api") {
       // The fill is the pool price at the moment the buy was due - what the backtest fills at.
       const price = await apiPlusFillPrice(pending);
       if (price === "wait") return;
@@ -136,9 +139,8 @@ async function executeWalletBuy(pending) {
       priceUsd = price.priceUsd;
       tokenAmount = spendUsd / priceUsd;
       method = "api_plus";
-      apiPlus = apiPlusSchedule({ mint: pending.mint, signature: pending.sourceSignature, fillAtSec: price.atSec, intervalSec: await apiPlusIntervalSeconds() });
-    } else if (isApiWallet(walletDoc)) {
-      // The fill is what pump.fun's SDK says buying the trade size's worth of tokens costs right now; its fee is booked on top, below.
+    } else if (sources.buy === "sdk") {
+      // The fill is what pump.fun's / PumpSwap's SDK says buying the trade size's worth of tokens costs right now; its fee is booked on top, below.
       const quote = await priceBuy(pending.mint, spendUsd, { feePercent: walletDoc.settings.pumpFeePercent ?? DEFAULT_PUMP_FEE_PERCENT }).catch((err) => {
         if (err instanceof TradeError) return err;
         throw err;
@@ -151,6 +153,10 @@ async function executeWalletBuy(pending) {
       if (!price?.priceUsd) return retryWithoutPrice(pending);
       priceUsd = price.priceUsd;
       tokenAmount = spendUsd / priceUsd;
+    }
+    // Checks on the trade list ("api") follow a schedule of their own, anchored at the fill and frozen now (like the interval); the others are swept (checkWalletRiskExits).
+    if (sources.check === "api") {
+      apiPlus = apiPlusSchedule({ mint: pending.mint, signature: pending.sourceSignature, fillAtSec: pending.priceAtSec, intervalSec: await apiPlusIntervalSeconds() });
     }
     const buyFees = computeTradeFees(spendUsd, buyFeeSettings(walletDoc));
     const totalCost = spendUsd + buyFees.totalFeeUsd;
@@ -366,14 +372,15 @@ async function executeWalletSell(pending) {
   if (!plan) {
     let priceUsd;
     let method = "spot";
-    if (position.apiPlus) {
-      // Opened by an "api_plus" wallet: sold at the pool price at the moment the exit was due (a decided exit: the check moment + the execution delay).
+    const sources = priceSources(walletDoc.settings);
+    if (sources.exit === "api") {
+      // Sold at the pool price at the moment the exit was due (a decided exit: the check moment + the execution delay; a copied sell: the moment it is due).
       const price = await apiPlusFillPrice(pending);
       if (price === "wait") return;
       if (!price) return retryWithoutPrice(pending);
       priceUsd = price.priceUsd;
       method = "api_plus";
-    } else if (isApiWallet(walletDoc)) {
+    } else if (sources.exit === "sdk") {
       // What pump.fun's SDK says selling the whole position pays out right now (the sale's fee is already in it).
       const quote = await priceSell(pending.mint, position.tokenAmount).catch((err) => {
         if (err instanceof TradeError) return null; // can't be priced at all: retried like a missing price, then skipped
@@ -388,7 +395,7 @@ async function executeWalletSell(pending) {
     }
 
     // A stop-loss / trailing stop is only carried out while the price at the fill still breaches its level (db/simulation/exitTrigger.js).
-    // (not for an api_plus position: the backtest acts on the sampled price alone, and so does this.)
+    // (not for a sale priced from the trade list: the backtest acts on the sampled price alone, and so does this.)
     if (pending.trigger && CONFIRMED_EXITS.has(pending.closeReason) && method !== "api_plus") {
       const { unrealizedPercent } = computeUnrealized(position.tokenAmount * priceUsd, position.costBasisUsd + position.buyFeeUsd);
       if (!triggerHolds(pending.trigger, unrealizedPercent)) {
@@ -515,7 +522,7 @@ export async function processDueWalletExecutions() {
  * intra-trade peak/dip gets missed between checks.
  */
 export async function checkWalletRiskExits() {
-  const openPositions = await WalletPosition.find({ status: "open", apiPlus: null }); // api_plus positions have their own schedule: checkApiPlusExits
+  const openPositions = await WalletPosition.find({ status: "open", apiPlus: null }); // positions checked on the trade list have their own schedule: checkApiPlusExits
 
   // Same reasoning as checkRiskExits: warm the cache for every distinct
   // mint in bounded batches before the per-position fan-out below, instead
@@ -525,9 +532,10 @@ export async function checkWalletRiskExits() {
     walletCache.set(walletId, (await Wallet.findById(walletId)) ?? null);
   }
 
-  // An API wallet's positions are valued at what pump.fun's SDK says selling them pays out right now (one batched read for all of
-  // them, nothing cached between sweeps); the others at the spot price, warmed in one batch below.
-  const apiPositions = openPositions.filter((p) => isApiWallet(walletCache.get(String(p.walletId))));
+  // The positions of every wallet but a "logs" one are valued at what pump.fun's / PumpSwap's SDK says selling them pays out right now (one batched
+  // read for all of them, nothing cached between sweeps); a "logs" wallet's at the spot price, warmed in one batch below. (A position that is checked on
+  // the trade list has its own schedule and is not here at all.)
+  const apiPositions = openPositions.filter((p) => priceSources(walletCache.get(String(p.walletId))?.settings).check !== "spot");
   const apiValues = await valueMany(apiPositions.map((p) => ({ id: String(p._id), mint: p.mint, tokenAmount: p.tokenAmount })));
   const apiIds = new Set(apiPositions.map((p) => String(p._id)));
   await prefetchPrices(

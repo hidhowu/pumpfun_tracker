@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { TrailingStopsEditor } from "@/components/trailing-stops-editor";
 import { resetWallet, resetWalletBalance, updateWalletSettings } from "@/lib/api";
-import type { TrailingStop, WalletSettings, WalletView } from "@/lib/types";
+import type { PriceSource, TrailingStop, WalletSettings, WalletView } from "@/lib/types";
 
 type Props = {
   walletId: string;
@@ -31,6 +31,57 @@ type Props = {
   onUpdated: (settings: WalletSettings, wallet?: WalletView) => void;
   onReset?: (wallet: WalletView) => void;
 };
+
+/** What a price source is when the wallet has not chosen one: it follows the tracking method (the same rule as priceSources() in db/simulation/apiPlus.js). */
+const defaultPriceSource = (trackingMethod: WalletSettings["trackingMethod"]): PriceSource => (trackingMethod === "api" ? "sdk" : "api");
+
+const PRICE_SOURCE_ROWS: { key: "buyPriceSource" | "checkPriceSource" | "exitPriceSource"; label: string; description: string }[] = [
+  {
+    key: "buyPriceSource",
+    label: "Buy price",
+    description: "The price a simulated buy fills at.",
+  },
+  {
+    key: "checkPriceSource",
+    label: "Interval price check",
+    description:
+      "The price the stop-loss, take-profit and trailing stops are judged on, every risk-check interval. Fixed for a position when it opens - a change applies from the next buy.",
+  },
+  {
+    key: "exitPriceSource",
+    label: "Final sell price",
+    description: "The price a sale fills at - the trader's own sell, or an exit this wallet decided.",
+  },
+];
+
+function PriceSourceRow({
+  label,
+  description,
+  value,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  value: PriceSource;
+  onChange: (value: PriceSource) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex min-w-0 flex-col">
+        <span className="text-sm font-medium">{label}</span>
+        <span className="text-xs text-muted-foreground">{description}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant={value === "sdk" ? "default" : "outline"} onClick={() => value !== "sdk" && onChange("sdk")}>
+          pump SDK
+        </Button>
+        <Button size="sm" variant={value === "api" ? "default" : "outline"} onClick={() => value !== "api" && onChange("api")}>
+          Local API
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function NumberField({
   id,
@@ -238,7 +289,7 @@ export function WalletSettingsPanel({ walletId, settings, lastAutoResetAt, onUpd
             </div>
             <p className="text-xs text-muted-foreground">
               {trackingMethod === "grpc"
-                ? "Traders are followed over Yellowstone gRPC by the standalone tracking server, which pushes each of their trades to the tracker the moment it lands - no pump.fun API, no proxies. Everything after the detection works exactly like pump.fun API+: every price comes from the token's own trade list (also served by the tracking server), checked at the backtest's moments, a buy fills at the pool price when it is due, and an exit fills the execution delay after the moment it was decided. The pump fee below is charged on buys and sells."
+                ? "Traders are followed over Yellowstone gRPC by the standalone tracking server, which pushes each of their trades to the tracker the moment it lands - no pump.fun API, no proxies. Where the prices come from is set below under Price sources - by default (like pump.fun API+) every price comes from the token's own trade list (also served by the tracking server), checked at the backtest's moments; the pump SDK can be picked for any of the three instead. The pump fee below is charged on every buy, and on a sale unless it is priced by an SDK quote (its fee is already inside)."
                 : trackingMethod === "api_plus"
                 ? "Traders are detected through pump.fun's user-trades API like \"pump.fun API\", but every price comes from the token's own trade list, checked exactly the way a backtest checks it: a buy fills at the pool price when it is due, the stop-loss / take-profit / trailing stops are judged on the pool price at fixed moments (every risk-check interval from the fill), and an exit fills the execution delay after the moment it was decided. A run here and a backtest of the same trade agree. The pump fee below is charged on buys and sells. A connected live wallet that follows this wallet's exits gets the same exits; its own exit styles use the same price."
                 : trackingMethod === "api"
@@ -246,6 +297,38 @@ export function WalletSettingsPanel({ walletId, settings, lastAutoResetAt, onUpd
                 : "This wallet's traders are followed through the tracker's RPC log subscription, and priced at the token's spot price plus the pump fee below."}
             </p>
           </div>
+        </div>
+
+        <Separator />
+
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Coins className="size-3.5" /> PRICE SOURCES
+          </div>
+          {trackingMethod === "logs" ? (
+            <p className="rounded-lg border border-border/60 bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
+              A wallet that follows its traders through RPC logs fills and checks at the token&apos;s spot price. Switch the trade detection above to pump.fun API,
+              pump.fun API+ or gRPC to choose where each price comes from.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-4 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+              {PRICE_SOURCE_ROWS.map((row) => (
+                <PriceSourceRow
+                  key={row.key}
+                  label={row.label}
+                  description={row.description}
+                  value={settings[row.key] ?? defaultPriceSource(trackingMethod)}
+                  onChange={(value) => save({ [row.key]: value })}
+                />
+              ))}
+              <p className="text-xs text-muted-foreground">
+                <strong>pump SDK</strong> quotes what pump.fun / PumpSwap would pay right now - any token on a curve or in a PumpSwap pool can be priced at once,
+                nothing needs to be tracked first. <strong>Local API</strong> reads the token&apos;s own trade list from the gRPC tracking server (the pool price at the
+                backtest&apos;s moments, so a run here and a backtest agree); the server follows a token from the moment a tracked wallet buys it, so the very first
+                price can take a few seconds to exist. The three are independent: for example buy with the SDK, check on the Local API, sell with the SDK.
+              </p>
+            </div>
+          )}
         </div>
 
         <Separator />
