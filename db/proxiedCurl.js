@@ -32,7 +32,7 @@ async function runCurl(url, proxyUrl, timeoutSec) {
 
 /**
  * GET through curl, rotating through the proxies managed from the /proxies UI. Used for pump.fun's frontend API (db/pumpFunApi.js)
- * and for the price sources that rate-limit a single IP (Jupiter, DexScreener - db/onchainPrice.js, db/live/dexscreener.js).
+ * and for the price sources that rate-limit a single IP (DexScreener - db/onchainPrice.js, db/live/dexscreener.js).
  *
  * pump.fun's frontend API blocks Node's own `fetch` (undici) outright -
  * confirmed by testing: `curl` gets HTTP 200 reliably, while Node's `fetch`

@@ -5,8 +5,9 @@ import { getDexScreenerTokens } from "./dexscreener.js";
 /**
  * What a live wallet holds right now, read straight from the chain: SOL, every token account (classic SPL Token and
  * Token-2022), and a USD price for each token that has one. Token prices come from the same on-chain reads the rest of
- * the app uses (bonding curve / PumpSwap pool); Jupiter's price API covers tokens those can't price (USDC, other DEXes),
- * and DexScreener covers whatever is left that trades in a pool with real liquidity. A token with no live market stays unpriced.
+ * the app uses (bonding curve / PumpSwap pool); DexScreener covers whatever those can't price (USDC, other DEXes) that trades in a
+ * pool with real liquidity. SOL itself is priced from DexScreener's busiest SOL/USD pair (db/onchainPrice.js getSolUsd). Jupiter's
+ * price API is not used - it rate-limits hard. A token with no live market stays unpriced.
  */
 
 const TOKEN_PROGRAMS = [
@@ -35,22 +36,6 @@ async function tokenAccountsOf(address, programId) {
   });
 }
 
-async function jupiterPrices(mints) {
-  const out = new Map();
-  for (let i = 0; i < mints.length; i += 50) {
-    const chunk = mints.slice(i, i + 50);
-    try {
-      const res = await fetch(`https://lite-api.jup.ag/price/v3?ids=${chunk.join(",")}`, { signal: AbortSignal.timeout(5000) });
-      if (!res.ok) continue;
-      const body = await res.json();
-      for (const mint of chunk) if (Number.isFinite(body?.[mint]?.usdPrice)) out.set(mint, body[mint].usdPrice);
-    } catch {
-      // unpriced tokens just show no value
-    }
-  }
-  return out;
-}
-
 async function load(address) {
   const [lamports, accountLists, solUsd] = await Promise.all([
     rpc("getBalance", [address, { commitment: "confirmed" }]),
@@ -70,9 +55,7 @@ async function load(address) {
     })
   );
   const unpriced = heldMints.filter((m) => !prices.has(m));
-  if (unpriced.length) for (const [mint, price] of await jupiterPrices(unpriced)) prices.set(mint, price);
-  const stillUnpriced = heldMints.filter((m) => !prices.has(m));
-  if (stillUnpriced.length) for (const [mint, t] of await getDexScreenerTokens(stillUnpriced)) if (t.priceUsd) prices.set(mint, t.priceUsd);
+  if (unpriced.length) for (const [mint, t] of await getDexScreenerTokens(unpriced)) if (t.priceUsd) prices.set(mint, t.priceUsd);
 
   const meta = await getTokenMeta([...new Set(accounts.map((a) => a.mint))]);
 
