@@ -3,22 +3,22 @@ import { UserRound } from "lucide-react";
 import { getSessionUser } from "@/lib/auth/session";
 import { ChangePasswordForm } from "@/components/auth/change-password-form";
 import { TwoFactorCard } from "@/components/auth/two-factor-card";
+import { DialogIcon } from "@/components/ui/dialog-parts";
 
 export default async function AccountPage() {
   const user = await getSessionUser();
   if (!user) redirect("/login");
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-6 pb-16">
-      <div className="flex min-w-0 items-center gap-2">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
-          <UserRound className="size-4.5" />
-        </div>
-        <div className="min-w-0">
-          <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Account</h1>
-          <p className="text-sm text-muted-foreground">
-            Signed in as <span className="font-medium text-foreground">{user.username}</span>. Accounts are created and
-            reset from the server shell - see <code className="font-mono text-xs">npm run user</code>.
+    <div className="mx-auto flex w-full min-w-0 max-w-[760px] flex-col gap-4 pb-16 md:gap-6">
+      <div className="flex min-w-0 items-center gap-3">
+        <DialogIcon>
+          <UserRound className="size-5" />
+        </DialogIcon>
+        <div className="flex min-w-0 flex-col gap-1">
+          <h1 className="text-[22px] leading-7 font-semibold tracking-[-0.02em] md:text-[28px] md:leading-[34px] md:tracking-[-0.025em]">Account</h1>
+          <p className="text-sm text-text-2">
+            Signed in as <b className="font-semibold text-foreground">{user.username}</b>. Accounts are created and reset from the server shell - see <code className="font-mono text-xs">npm run user</code>.
           </p>
         </div>
       </div>

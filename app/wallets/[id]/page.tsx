@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft, History, LineChart, SlidersHorizontal, Trash2, Users, Wallet as WalletIcon } from "lucide-react";
+import { ChevronLeft, History, LineChart, Loader2, Pencil, SlidersHorizontal, Trash2, TriangleAlert, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,7 +18,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { WalletPerformanceTab } from "@/components/wallets/wallet-performance-tab";
 import { WalletTradersTab } from "@/components/wallets/wallet-traders-tab";
@@ -26,12 +25,21 @@ import { WalletTradeHistory } from "@/components/wallets/wallet-trade-history";
 import { WalletSettingsPanel } from "@/components/wallets/wallet-settings-panel";
 import { LinkedLiveCard } from "@/components/wallets/linked-live-card";
 import { PanicBar } from "@/components/wallets/panic-bar";
-import { cn } from "@/lib/utils";
+import { traderTint } from "@/components/traders/trader-avatar";
 import { ExportCsvDialog } from "@/components/export-csv-dialog";
 import { deleteWallet, getWallet, renameWallet } from "@/lib/api";
+import { formatRelativeTime, formatUsd } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { WalletView } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 10_000;
+
+const TABS = [
+  { value: "performance", label: "Performance", short: "Perf", icon: LineChart },
+  { value: "traders", label: "Traders Performance", short: "Traders", icon: Users },
+  { value: "history", label: "Trade History", short: "History", icon: History },
+  { value: "settings", label: "Settings", short: "Settings", icon: SlidersHorizontal },
+] as const;
 
 export default function WalletDetailPage() {
   const params = useParams<{ id: string }>();
@@ -43,6 +51,7 @@ export default function WalletDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -71,7 +80,7 @@ export default function WalletDetailPage() {
     }
     try {
       const { wallet: updated } = await renameWallet(id, trimmed);
-      setWallet(updated);
+      setWallet((prev) => (prev ? { ...prev, ...updated, traderCount: prev.traderCount } : updated));
       toast.success("Wallet renamed");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to rename wallet");
@@ -93,108 +102,118 @@ export default function WalletDetailPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <Button variant="ghost" size="sm" asChild className="w-fit -ml-2 text-muted-foreground">
-        <Link href="/wallets">
-          <ArrowLeft className="size-4" /> Back to wallets
-        </Link>
-      </Button>
+    <div className="mx-auto flex w-full min-w-0 max-w-[1360px] flex-col gap-4 md:gap-6">
+      <Link href="/wallets" className="flex w-fit items-center gap-1.5 text-[13px] text-text-2 hover:text-foreground">
+        <ChevronLeft className="size-3.5" /> Back to wallets
+      </Link>
 
       {loading && !wallet ? (
         <div className="flex flex-col gap-4">
-          <Skeleton className="h-16 w-full rounded-xl" />
-          <Skeleton className="h-64 w-full rounded-xl" />
+          <Skeleton className="h-14 w-full rounded-[20px]" />
+          <Skeleton className="h-64 w-full rounded-[20px]" />
         </div>
       ) : error && !wallet ? (
-        <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-6 text-sm text-destructive">{error}</div>
+        <div role="alert" className="flex items-center gap-3 rounded-[14px] border border-destructive/30 bg-neg-soft p-4 text-sm text-[#ffc9d0]">
+          <TriangleAlert className="size-4 shrink-0 text-destructive" />
+          {error}
+        </div>
       ) : wallet ? (
         <>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/15 text-primary">
-                <WalletIcon className="size-4.5" />
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+            <div className="flex min-w-0 items-center gap-3 md:gap-4">
+              <span
+                aria-hidden
+                className="inline-flex size-12 shrink-0 items-center justify-center rounded-[15px] font-mono text-sm font-semibold text-primary-foreground md:size-16 md:rounded-[20px] md:text-lg"
+                style={{ background: traderTint(wallet.name) }}
+              >
+                {wallet.name
+                  .split(/\s+/)
+                  .map((w) => w[0])
+                  .join("")
+                  .slice(0, 2)
+                  .toUpperCase()}
+              </span>
+              <div className="flex min-w-0 flex-col gap-1">
+                {editingName ? (
+                  <Input
+                    autoFocus
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onBlur={handleRename}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleRename();
+                      if (e.key === "Escape") setEditingName(false);
+                    }}
+                    aria-label="Wallet name"
+                    className="h-9 w-56"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    aria-label="Rename wallet"
+                    title="Click to rename"
+                    onClick={() => {
+                      setNameDraft(wallet.name);
+                      setEditingName(true);
+                    }}
+                    className="group flex min-w-0 items-center gap-2 text-left text-[22px] leading-7 font-semibold tracking-[-0.02em] hover:text-primary md:text-[28px] md:leading-[34px]"
+                  >
+                    <span className="truncate">{wallet.name}</span>
+                    <Pencil className="size-4 shrink-0 text-text-3 group-hover:text-primary" />
+                  </button>
+                )}
+                <span className="text-xs text-text-3">
+                  {wallet.traderCount ?? 0} trader{wallet.traderCount === 1 ? "" : "s"} · started {formatUsd(wallet.startingBalanceUsd)} · created {formatRelativeTime(wallet.createdAt)}
+                </span>
               </div>
-              {editingName ? (
-                <Input
-                  autoFocus
-                  value={nameDraft}
-                  onChange={(e) => setNameDraft(e.target.value)}
-                  onBlur={handleRename}
-                  onKeyDown={(e) => e.key === "Enter" && handleRename()}
-                  className="h-8 w-56"
-                />
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setNameDraft(wallet.name);
-                    setEditingName(true);
-                  }}
-                  className="text-lg font-semibold tracking-tight hover:text-primary"
-                >
-                  {wallet.name}
-                </button>
-              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-            <ExportCsvDialog
-              endpoint={`/api/wallets/${wallet._id}/export`}
-              title={`Export wallet "${wallet.name}"`}
-              description="Every trader's trades on this wallet since they were added - per hour, per day, or per trade, with a per-trader summary (win rate, P&L, win/loss days)."
-            />
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="ghost" size="sm" disabled={deleting} className="text-muted-foreground hover:text-negative">
-                  <Trash2 className="size-4" /> Delete wallet
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Delete &quot;{wallet.name}&quot;?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This permanently deletes this wallet, every trader assignment, position, and trade history under
-                    it. This cannot be undone. The assigned traders&apos; own tracking (and any Profile simulation) is
-                    untouched.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction className="bg-negative text-negative-foreground hover:bg-negative/90" onClick={handleDelete}>
-                    Delete
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+              <ExportCsvDialog
+                endpoint={`/api/wallets/${wallet._id}/export`}
+                title={`Export wallet "${wallet.name}"`}
+                description="Every trader's trades on this wallet since they were added - per hour, per day, or per trade, with a per-trader summary (win rate, P&L, win/loss days)."
+              />
+              <Button variant="ghost" disabled={deleting} onClick={() => setConfirmDelete(true)} className="gap-1.5 text-text-2 hover:text-negative">
+                <Trash2 className="size-4" /> Delete wallet
+              </Button>
             </div>
           </div>
 
           {wallet.panic && (
-            <div
+            <section
               className={cn(
-                "rounded-xl border px-4 py-3",
-                wallet.panic.panic ? "border-negative/60 bg-negative/10 shadow-[0_0_0_1px_var(--negative)]" : "border-border/60 bg-card/40"
+                "rounded-[20px] border p-4 md:p-5",
+                wallet.panic.panic ? "border-destructive/50 bg-neg-soft shadow-[0_0_0_1px_rgba(255,107,123,0.35)]" : "border-border bg-card"
               )}
             >
               <PanicBar panic={wallet.panic} />
-            </div>
+            </section>
           )}
 
           <LinkedLiveCard walletId={wallet._id} />
 
-          <Tabs defaultValue="performance" className="flex flex-col gap-4">
-            <TabsList>
-              <TabsTrigger value="performance" className="gap-1.5">
-                <LineChart className="size-3.5" /> Performance
-              </TabsTrigger>
-              <TabsTrigger value="traders" className="gap-1.5">
-                <Users className="size-3.5" /> Traders Performance
-              </TabsTrigger>
-              <TabsTrigger value="history" className="gap-1.5">
-                <History className="size-3.5" /> Trade History
-              </TabsTrigger>
-              <TabsTrigger value="settings" className="gap-1.5">
-                <SlidersHorizontal className="size-3.5" /> Settings
-              </TabsTrigger>
+          <Tabs defaultValue="performance" className="flex flex-col gap-4 md:gap-5">
+            {/* Wide screens: underlined tabs with icons (and how many traders). */}
+            <TabsList variant="line" className="hidden h-11 w-full gap-1 border-b border-border p-0 md:flex">
+              {TABS.map((t) => (
+                <TabsTrigger
+                  key={t.value}
+                  value={t.value}
+                  className="h-11 flex-none gap-2 rounded-none px-3.5 text-sm font-medium after:inset-x-2.5 group-data-horizontal/tabs:after:bottom-0 data-active:text-foreground group-data-[variant=line]/tabs-list:data-active:after:bg-primary"
+                >
+                  <t.icon className="size-3.5" />
+                  {t.label}
+                  {t.value === "traders" ? <span className="rounded-full bg-surface-3 px-1.5 py-px text-[11px] font-normal text-text-2">{wallet.traderCount ?? 0}</span> : null}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {/* Phone: four equal buttons. */}
+            <TabsList className="grid h-auto w-full grid-cols-4 md:hidden">
+              {TABS.map((t) => (
+                <TabsTrigger key={t.value} value={t.value} className="h-11 justify-center px-0">
+                  {t.short}
+                </TabsTrigger>
+              ))}
             </TabsList>
 
             <TabsContent value="performance">
@@ -202,7 +221,7 @@ export default function WalletDetailPage() {
             </TabsContent>
 
             <TabsContent value="traders">
-              <WalletTradersTab walletId={wallet._id} />
+              <WalletTradersTab walletId={wallet._id} onChanged={refresh} />
             </TabsContent>
 
             <TabsContent value="history">
@@ -215,10 +234,35 @@ export default function WalletDetailPage() {
                 settings={wallet.settings}
                 lastAutoResetAt={wallet.lastAutoResetAt}
                 onUpdated={(settings, updated) => setWallet((prev) => (prev ? { ...prev, settings, panic: updated ? updated.panic : prev.panic } : prev))}
-                onReset={(updated) => setWallet(updated)}
+                onReset={(updated) => setWallet((prev) => (prev ? { ...prev, ...updated, traderCount: prev.traderCount } : updated))}
               />
             </TabsContent>
           </Tabs>
+
+          <AlertDialog open={confirmDelete} onOpenChange={(open) => !deleting && setConfirmDelete(open)}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete &quot;{wallet.name}&quot;?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Permanently deletes this wallet with all its trader assignments, positions and history. Cannot be undone. The assigned traders&apos; own tracking (and any Profile simulation) is untouched.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={deleting}
+                  className="bg-negative font-semibold text-negative-foreground hover:bg-negative/90"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void handleDelete();
+                  }}
+                >
+                  {deleting && <Loader2 className="animate-spin" />}
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </>
       ) : null}
     </div>

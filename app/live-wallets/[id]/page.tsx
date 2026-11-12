@@ -4,9 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, ChevronLeft, Copy, Eye, EyeOff, KeyRound, Pencil, RefreshCw, TrendingUp } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronLeft, Copy, Eye, EyeOff, Info, KeyRound, Layers, LineChart, Pencil, RefreshCw, ScrollText, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -18,6 +17,7 @@ import { SendDialog } from "@/components/live-wallets/send-dialog";
 import { TokenSheet } from "@/components/live-wallets/token-sheet";
 import { TradingPanel } from "@/components/live-wallets/trading-panel";
 import { StuckSellsBanner } from "@/components/live-wallets/stuck-sells";
+import { LiveModeStrip } from "@/components/live-wallets/live-mode-strip";
 import { ViewKeyDialog } from "@/components/live-wallets/view-key-dialog";
 import { PnlCard, PortfolioCard, SecurityNote } from "@/components/live-wallets/wallet-panels";
 import { AddressChip, PnlPill, signedUsd, toneClass, WalletAvatar } from "@/components/live-wallets/shared";
@@ -30,17 +30,25 @@ import { cn } from "@/lib/utils";
 const POLL_INTERVAL_MS = 15_000;
 const HIDDEN = "••••";
 
-/** A round action button with its label underneath - the phone layout's row of Receive / Copy / Refresh / Key. */
+const TABS = [
+  { value: "holdings", label: "Tokens", icon: Layers },
+  { value: "activity", label: "Activity", icon: ScrollText },
+  { value: "accounts", label: "Accounts", icon: Layers },
+  { value: "trading", label: "Trading", icon: Zap },
+  { value: "pnl", label: "P&L", icon: LineChart },
+] as const;
+
+/** A round action button with its label underneath - the phone layout's row of Receive / Send / Copy / Refresh / Key. */
 function CircleAction({ label, icon: Icon, onClick, spinning, primary, ...rest }: { label: string; icon: typeof Copy; onClick?: () => void; spinning?: boolean; primary?: boolean } & React.ComponentProps<"button">) {
   return (
-    <button type="button" onClick={onClick} className="group flex flex-col items-center gap-2 text-[13px] font-bold outline-none" {...rest}>
+    <button type="button" onClick={onClick} className="group flex flex-col items-center gap-2 text-xs font-medium text-text-2 outline-none" {...rest}>
       <span
         className={cn(
-          "flex size-14 items-center justify-center rounded-full border transition-colors group-focus-visible:ring-3 group-focus-visible:ring-ring/50",
-          primary ? "border-primary bg-primary text-primary-foreground group-hover:bg-primary/90" : "border-border bg-secondary text-foreground group-hover:bg-accent"
+          "flex size-[52px] items-center justify-center rounded-full border transition-colors group-focus-visible:ring-3 group-focus-visible:ring-ring/50",
+          primary ? "border-primary bg-primary text-primary-foreground group-hover:bg-primary/90" : "border-border bg-surface-2 text-foreground group-hover:border-line-2"
         )}
       >
-        <Icon className={cn("size-[22px]", spinning && "animate-spin")} />
+        <Icon className={cn("size-5", spinning && "animate-spin")} />
       </span>
       {label}
     </button>
@@ -49,9 +57,9 @@ function CircleAction({ label, icon: Icon, onClick, spinning, primary, ...rest }
 
 function HeroStat({ label, value, className }: { label: string; value: string; className?: string }) {
   return (
-    <div className="min-w-0">
-      <div className="text-xs font-semibold text-[#c9c2ff]">{label}</div>
-      <div className={cn("mt-1 text-xl font-extrabold tabular-nums", className)}>{value}</div>
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="text-xs text-text-3">{label}</span>
+      <b className={cn("text-[20px] leading-6 font-semibold tabular-nums", className)}>{value}</b>
     </div>
   );
 }
@@ -119,34 +127,34 @@ export default function LiveWalletDetailPage() {
   const hide = (text: string) => (masked ? HIDDEN : text);
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+    <div className="mx-auto flex w-full min-w-0 max-w-[1360px] flex-col gap-4 md:gap-6">
       {loading && !detail ? (
         <div className="flex flex-col gap-4">
           <Skeleton className="h-12 w-72 rounded-xl" />
-          <Skeleton className="h-40 w-full rounded-3xl" />
-          <Skeleton className="h-72 w-full rounded-2xl" />
+          <Skeleton className="h-40 w-full rounded-[20px]" />
+          <Skeleton className="h-72 w-full rounded-[20px]" />
         </div>
       ) : error && !detail ? (
         <div className="flex flex-col items-start gap-3">
-          <Button variant="ghost" size="sm" asChild className="-ml-2 text-muted-foreground">
-            <Link href="/live-wallets">
-              <ChevronLeft className="size-4" /> Wallets
-            </Link>
-          </Button>
-          <div className="w-full rounded-2xl border border-destructive/30 bg-destructive/10 p-6 text-sm text-destructive">{error}</div>
+          <Link href="/live-wallets" className="flex w-fit items-center gap-1.5 text-[13px] text-text-2 hover:text-foreground">
+            <ChevronLeft className="size-3.5" /> Wallets
+          </Link>
+          <div role="alert" className="w-full rounded-xl border border-destructive/30 bg-neg-soft p-5 text-sm text-[#ffc9d0]">
+            {error}
+          </div>
         </div>
       ) : wallet && detail ? (
         <>
           {/* Header */}
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
-            <div className="flex min-w-0 items-center gap-3 sm:gap-3.5">
-              <Button variant="outline" size="icon" asChild aria-label="Back to wallets" className="shrink-0">
+            <div className="flex min-w-0 items-center gap-3 md:gap-3.5">
+              <Button variant="outline" size="icon" asChild aria-label="Back to wallets" className="shrink-0 max-md:size-10">
                 <Link href="/live-wallets">
-                  <ChevronLeft className="size-5" />
+                  <ChevronLeft />
                 </Link>
               </Button>
-              <WalletAvatar address={wallet.address} className="size-11" />
-              <div className="min-w-0">
+              <WalletAvatar address={wallet.address} name={wallet.name} />
+              <div className="flex min-w-0 flex-col gap-1">
                 {editingName ? (
                   <Input
                     autoFocus
@@ -155,7 +163,7 @@ export default function LiveWalletDetailPage() {
                     onChange={(e) => setNameDraft(e.target.value)}
                     onBlur={handleRename}
                     onKeyDown={(e) => e.key === "Enter" && handleRename()}
-                    className="h-9 w-full max-w-64 text-lg font-bold"
+                    className="h-9 w-full max-w-64 text-lg font-semibold"
                     aria-label="Wallet name"
                   />
                 ) : (
@@ -168,21 +176,21 @@ export default function LiveWalletDetailPage() {
                     className="group flex max-w-full items-center gap-2 text-left"
                     aria-label="Rename wallet"
                   >
-                    <span className="truncate text-xl font-extrabold tracking-tight sm:text-2xl">{wallet.name}</span>
-                    <Pencil className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+                    <span className="truncate text-[20px] leading-7 font-semibold tracking-[-0.015em] md:text-[24px] md:leading-8">{wallet.name}</span>
+                    <Pencil className="size-3.5 shrink-0 text-text-3 group-hover:text-primary" />
                   </button>
                 )}
-                <AddressChip value={wallet.address} label="wallet address" chars={5} />
+                <AddressChip value={wallet.address} label="wallet address" chars={4} />
               </div>
             </div>
 
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="icon" onClick={() => setMasked((v) => !v)} aria-label={masked ? "Show balances" : "Hide balances"} aria-pressed={masked}>
-                {masked ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              <Button variant="outline" size="icon" onClick={() => setMasked((v) => !v)} aria-label={masked ? "Show balances" : "Hide balances"} aria-pressed={masked} className="max-md:size-10">
+                {masked ? <EyeOff /> : <Eye />}
               </Button>
-              <div className="hidden items-center gap-2 md:flex">
-                <Button variant="outline" className="gap-2" onClick={handleManualRefresh} disabled={refreshing}>
-                  <RefreshCw className={cn("size-4", refreshing && "animate-spin")} /> Refresh
+              <div className="flex items-center gap-2 max-md:hidden">
+                <Button variant="outline" className="gap-1.5" onClick={handleManualRefresh} disabled={refreshing}>
+                  <RefreshCw className={cn(refreshing && "animate-spin")} /> Refresh
                 </Button>
                 <ReceiveDialog name={wallet.name} address={wallet.address} />
                 <SendDialog wallet={wallet} twoFactorEnabled={detail.twoFactorEnabled} solBalance={chain?.solBalance ?? null} onSent={handleManualRefresh} />
@@ -192,39 +200,41 @@ export default function LiveWalletDetailPage() {
           </div>
 
           {detail.chainError ? (
-            <div className="rounded-2xl border border-border bg-card/60 px-4 py-3 text-sm text-muted-foreground">
-              Couldn&apos;t read this wallet from the chain right now ({detail.chainError}). Retrying automatically.
+            <div className="flex items-start gap-2.5 rounded-xl border border-line-2 bg-card px-3.5 py-3 text-[13px] leading-5 text-text-2">
+              <Info className="mt-0.5 size-4 shrink-0 text-text-3" />
+              <span>Couldn&apos;t read this wallet from the chain right now ({detail.chainError}). Retrying automatically.</span>
             </div>
           ) : null}
 
           <StuckSellsBanner walletId={wallet._id} refreshKey={refreshKey} />
+          <LiveModeStrip walletId={wallet._id} refreshKey={refreshKey} onChanged={handleManualRefresh} />
 
-          <div className="flex flex-col gap-6 xl:flex-row xl:items-start">
-            <div className="flex min-w-0 flex-1 flex-col gap-6">
+          <div className="flex flex-col gap-4 md:gap-6 xl:flex-row xl:items-start">
+            <div className="flex min-w-0 flex-1 flex-col gap-4 md:gap-5">
               {/* Hero: total balance */}
-              <Card className="border-[#38307f] bg-linear-to-br from-[#221c5e] via-card to-card">
-                <div className="flex flex-col items-center gap-6 px-5 py-2 text-center sm:flex-row sm:justify-between sm:px-7 sm:text-left">
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-semibold text-[#c9c2ff]">Total balance</div>
-                    <div className="mt-1 text-5xl font-extrabold tracking-tight tabular-nums sm:text-[44px] lg:text-5xl">{chain ? hide(formatUsd(chain.totalValueUsd)) : "-"}</div>
-                    <div className="mt-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 sm:justify-start">
-                      <span className="text-sm text-[#c9c2ff] tabular-nums">{chain ? hide(`≈ ${formatSol(chain.solBalance)}`) : "waiting for the chain"}</span>
+              <section className="rounded-[20px] border border-volt-line bg-gradient-to-br from-volt-soft via-card to-card px-5 py-5 md:px-7 md:py-6">
+                <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+                  <div className="flex min-w-0 flex-col gap-1.5">
+                    <span className="text-sm text-text-2">Total balance</span>
+                    <b className="truncate text-[40px] leading-[44px] font-semibold tracking-[-0.03em] tabular-nums md:text-[48px] md:leading-[52px]">{chain ? hide(formatUsd(chain.totalValueUsd)) : "—"}</b>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                      <span className="text-sm text-text-2 tabular-nums">{chain ? hide(`≈ ${formatSol(chain.solBalance)}`) : "waiting for the chain"}</span>
                       {pnl ? (
-                        <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-muted-foreground">
+                        <span className="inline-flex items-center gap-1.5 text-xs text-text-3">
                           <PnlPill usd={masked ? null : pnl.realizedPnlUsd} />
                           {masked ? HIDDEN : null} realized
                         </span>
                       ) : null}
                     </div>
                   </div>
-                  <div className="hidden gap-8 sm:flex">
-                    <HeroStat label="SOL" value={chain ? hide(chain.solBalance.toFixed(3)) : "-"} />
-                    <HeroStat label="Tokens" value={chain ? String(chain.tokens.length) : "-"} />
-                    <HeroStat label="Unrealized" value={pnl ? hide(signedUsd(pnl.unrealizedPnlUsd)) : "-"} className={masked ? undefined : toneClass(pnl?.unrealizedPnlUsd)} />
+                  <div className="flex gap-8 max-md:hidden">
+                    <HeroStat label="SOL" value={chain ? hide(chain.solBalance.toFixed(3)) : "—"} />
+                    <HeroStat label="Tokens" value={chain ? String(chain.tokens.length) : "—"} />
+                    <HeroStat label="Unrealized" value={pnl ? hide(signedUsd(pnl.unrealizedPnlUsd)) : "—"} className={masked ? undefined : toneClass(pnl?.unrealizedPnlUsd)} />
                   </div>
                 </div>
-                {chain ? <div className="px-5 text-center text-xs text-[#c9c2ff]/70 sm:px-7 sm:text-left">Updated {formatRelativeTime(chain.fetchedAt)}</div> : null}
-              </Card>
+                {chain ? <span className="mt-3 block text-xs text-text-3">Updated {formatRelativeTime(chain.fetchedAt)}</span> : null}
+              </section>
 
               {/* Phone actions */}
               <div className="grid grid-cols-5 gap-2 md:hidden">
@@ -235,24 +245,41 @@ export default function LiveWalletDetailPage() {
                 <ViewKeyDialog wallet={wallet} twoFactorEnabled={detail.twoFactorEnabled} trigger={<CircleAction label="Key" icon={KeyRound} />} />
               </div>
 
-              <Tabs defaultValue="holdings" className="gap-4">
-                <TabsList className="w-full sm:w-fit">
-                  <TabsTrigger value="holdings">Tokens</TabsTrigger>
-                  <TabsTrigger value="activity">Activity</TabsTrigger>
-                  <TabsTrigger value="accounts">Accounts</TabsTrigger>
-                  <TabsTrigger value="trading">Trading</TabsTrigger>
-                  <TabsTrigger value="pnl" className="xl:hidden">
-                    <TrendingUp className="size-4 max-sm:hidden" /> P&amp;L
-                  </TabsTrigger>
+              <Tabs defaultValue="holdings" className="flex flex-col gap-4 md:gap-5">
+                {/* Wide screens: underlined tabs (P&L only below the width where the right rail is shown). */}
+                <TabsList variant="line" className="hidden h-11 w-full justify-start gap-1 border-b border-border p-0 md:flex">
+                  {TABS.map((t) => (
+                    <TabsTrigger
+                      key={t.value}
+                      value={t.value}
+                      className={cn(
+                        "h-11 flex-none gap-2 rounded-none px-3.5 text-sm font-medium after:inset-x-2.5 group-data-horizontal/tabs:after:bottom-0 data-active:text-foreground group-data-[variant=line]/tabs-list:data-active:after:bg-primary",
+                        t.value === "pnl" && "xl:hidden"
+                      )}
+                    >
+                      <t.icon className="size-3.5" />
+                      {t.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+                {/* Phone: five equal buttons. */}
+                <TabsList className="grid h-auto w-full grid-cols-5 md:hidden">
+                  {TABS.map((t) => (
+                    <TabsTrigger key={t.value} value={t.value} className="h-11 justify-center px-0 text-[13px]">
+                      {t.label}
+                    </TabsTrigger>
+                  ))}
                 </TabsList>
 
-                <TabsContent value="holdings">{chain ? <HoldingsTable chain={chain} onSelect={setSelectedMint} masked={masked} /> : <Skeleton className="h-48 w-full rounded-2xl" />}</TabsContent>
+                <TabsContent value="holdings">{chain ? <HoldingsTable chain={chain} onSelect={setSelectedMint} masked={masked} /> : <Skeleton className="h-48 w-full rounded-[20px]" />}</TabsContent>
                 <TabsContent value="activity">
                   <ActivityTable walletId={wallet._id} onSelectToken={setSelectedMint} refreshKey={refreshKey} showSummary={false} />
                 </TabsContent>
-                <TabsContent value="accounts">{chain ? <TokenAccountsTable walletId={wallet._id} accounts={chain.accounts} onSelect={setSelectedMint} onChanged={handleManualRefresh} /> : <Skeleton className="h-48 w-full rounded-2xl" />}</TabsContent>
+                <TabsContent value="accounts">
+                  {chain ? <TokenAccountsTable walletId={wallet._id} accounts={chain.accounts} onSelect={setSelectedMint} onChanged={handleManualRefresh} /> : <Skeleton className="h-48 w-full rounded-[20px]" />}
+                </TabsContent>
                 <TabsContent value="trading">
-                  <TradingPanel walletId={wallet._id} twoFactorEnabled={detail.twoFactorEnabled} refreshKey={refreshKey} />
+                  <TradingPanel walletId={wallet._id} twoFactorEnabled={detail.twoFactorEnabled} refreshKey={refreshKey} funding={chain ? { solBalance: chain.solBalance, solUsd: chain.solUsd } : null} />
                 </TabsContent>
                 <TabsContent value="pnl" className="xl:hidden">
                   <div className="grid gap-4 md:grid-cols-2">
@@ -262,7 +289,7 @@ export default function LiveWalletDetailPage() {
                 </TabsContent>
               </Tabs>
 
-              {detail.syncError ? <p className="text-xs text-muted-foreground">Transaction sync: {detail.syncError}</p> : null}
+              {detail.syncError ? <p className="text-xs text-text-3">Transaction sync: {detail.syncError}</p> : null}
             </div>
 
             {/* Right rail, wide screens only (below that the same panels live in the P&L tab) */}

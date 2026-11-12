@@ -91,8 +91,8 @@ export function CreateProfileDialog({ open, onOpenChange, onCreated }: { open: b
                 type="button"
                 onClick={() => setMode("fresh")}
                 className={cn(
-                  "rounded-lg border px-3 py-2 text-left transition-colors",
-                  mode === "fresh" ? "border-primary bg-primary/10" : "border-border/60 hover:bg-muted/40"
+                  "rounded-xl border px-3 py-2 text-left transition-colors",
+                  mode === "fresh" ? "border-volt-line bg-volt-soft" : "border-line-2 hover:bg-surface-2"
                 )}
               >
                 <div className="text-sm font-medium">Fresh</div>
@@ -102,8 +102,8 @@ export function CreateProfileDialog({ open, onOpenChange, onCreated }: { open: b
                 type="button"
                 onClick={() => setMode("clone")}
                 className={cn(
-                  "rounded-lg border px-3 py-2 text-left transition-colors",
-                  mode === "clone" ? "border-primary bg-primary/10" : "border-border/60 hover:bg-muted/40"
+                  "rounded-xl border px-3 py-2 text-left transition-colors",
+                  mode === "clone" ? "border-volt-line bg-volt-soft" : "border-line-2 hover:bg-surface-2"
                 )}
               >
                 <div className="text-sm font-medium">Clone</div>
@@ -194,7 +194,7 @@ export function DeleteProfileDialog({
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            className="bg-negative text-negative-foreground hover:bg-negative/90"
+            className="bg-negative font-semibold text-negative-foreground hover:bg-negative/90"
             disabled={submitting}
             onClick={handleDelete}
           >
@@ -221,9 +221,9 @@ export function ProfileSwitcher() {
     <>
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="gap-1.5">
+          <Button variant="outline" className="h-10 gap-2 rounded-full bg-card px-3 sm:h-9" aria-label="Switch profile">
             <span className="max-w-[5rem] truncate sm:max-w-[10rem]">{currentProfile?.name ?? "Select profile"}</span>
-            <ChevronsUpDown className="size-3.5 text-muted-foreground" />
+            <ChevronsUpDown className="size-3.5 text-text-3" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-56">

@@ -76,7 +76,7 @@ export function BlacklistDialog({
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            className="bg-negative text-negative-foreground hover:bg-negative/90"
+            className="bg-negative font-semibold text-negative-foreground hover:bg-negative/90"
             disabled={busy}
             onClick={(e) => {
               e.preventDefault();

@@ -1,7 +1,6 @@
 "use client";
 
 import { AlertTriangle, CheckCircle2, CircleDashed, Loader2, PauseCircle, XCircle } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { formatUsd } from "@/lib/format";
 import type { BacktestRunTraderView, BacktestStage, BacktestStatus, BacktestStrategy } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
@@ -43,14 +42,27 @@ export function formatDateTime(input: string | Date | number | null | undefined)
   });
 }
 
+const PILL = "inline-flex h-[22px] shrink-0 items-center gap-1 rounded-full border px-2 text-[11.5px] font-medium whitespace-nowrap";
+const PILL_NEUTRAL = "border-line-2 bg-surface-3 text-text-2";
+const PILL_VOLT = "border-volt-line bg-volt-soft text-primary";
+const PILL_POS = "border-positive/30 bg-pos-soft text-positive";
+const PILL_NEG = "border-destructive/30 bg-neg-soft text-destructive";
+const PILL_WARN = "border-warn/30 bg-warn-soft text-warn";
+
 const STATUS_META: Record<BacktestStatus, { label: string; className: string; icon: typeof Loader2; spin?: boolean }> = {
-  queued: { label: "Queued", className: "border-border/60 text-muted-foreground", icon: CircleDashed },
-  running: { label: "Running", className: "border-primary/30 bg-primary/10 text-primary", icon: Loader2, spin: true },
-  paused: { label: "Paused", className: "border-border/60 text-muted-foreground", icon: PauseCircle },
-  completed: { label: "Completed", className: "border-positive/30 bg-positive/10 text-positive", icon: CheckCircle2 },
-  cancelled: { label: "Cancelled", className: "border-border/60 text-muted-foreground", icon: XCircle },
-  failed: { label: "Failed", className: "border-negative/30 bg-negative/10 text-negative", icon: AlertTriangle },
+  queued: { label: "Queued", className: PILL_NEUTRAL, icon: CircleDashed },
+  running: { label: "Running", className: PILL_VOLT, icon: Loader2, spin: true },
+  paused: { label: "Paused", className: PILL_NEUTRAL, icon: PauseCircle },
+  completed: { label: "Completed", className: PILL_POS, icon: CheckCircle2 },
+  cancelled: { label: "Cancelled", className: PILL_NEUTRAL, icon: XCircle },
+  failed: { label: "Failed", className: PILL_NEG, icon: AlertTriangle },
 };
+
+/** A small rounded label in one of the design's tones ("Combined", "Done", "default"...). */
+export function Pill({ tone = "neutral", className, children }: { tone?: "neutral" | "volt" | "pos" | "neg" | "warn"; className?: string; children: React.ReactNode }) {
+  const toneClass = tone === "volt" ? PILL_VOLT : tone === "pos" ? PILL_POS : tone === "neg" ? PILL_NEG : tone === "warn" ? PILL_WARN : PILL_NEUTRAL;
+  return <span className={cn(PILL, toneClass, className)}>{children}</span>;
+}
 
 /**
  * Backtests are worked one at a time. `queuePosition` (from the run's progress): 0 = being worked on / next to be picked up,
@@ -70,10 +82,10 @@ export function RunStatusBadge({ status, control, queuePosition }: { status: Bac
       : STATUS_META[status];
   const Icon = meta.icon;
   return (
-    <Badge variant="outline" className={cn("gap-1", meta.className)}>
+    <span className={cn(PILL, meta.className)}>
       <Icon className={cn("size-3", "spin" in meta && meta.spin && !pending && "animate-spin")} />
       {meta.label}
-    </Badge>
+    </span>
   );
 }
 
@@ -83,7 +95,7 @@ export function ProgressBar({
   className,
 }: {
   percent: number;
-  tone?: "primary" | "positive" | "negative" | "muted";
+  tone?: "primary" | "positive" | "negative" | "warn" | "muted";
   className?: string;
 }) {
   const clamped = Math.max(0, Math.min(100, percent));
@@ -93,7 +105,7 @@ export function ProgressBar({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(clamped)}
-      className={cn("h-1.5 w-full overflow-hidden rounded-full bg-muted", className)}
+      className={cn("h-2 w-full overflow-hidden rounded-full bg-surface-4", className)}
     >
       <div
         className={cn(
@@ -101,7 +113,8 @@ export function ProgressBar({
           tone === "primary" && "bg-primary",
           tone === "positive" && "bg-positive",
           tone === "negative" && "bg-negative",
-          tone === "muted" && "bg-muted-foreground/50"
+          tone === "warn" && "bg-warn",
+          tone === "muted" && "bg-text-3"
         )}
         style={{ width: `${clamped}%` }}
       />
@@ -132,21 +145,8 @@ export function stageDescription(t: BacktestRunTraderView): string {
 }
 
 export function StageBadge({ stage }: { stage: BacktestStage }) {
-  const className =
-    stage === "done"
-      ? "border-positive/30 text-positive"
-      : stage === "failed"
-        ? "border-negative/30 text-negative"
-        : stage === "skipped"
-          ? "border-amber-500/30 text-amber-500"
-          : stage === "pending"
-          ? "border-border/60 text-muted-foreground"
-          : "border-primary/30 text-primary";
-  return (
-    <Badge variant="outline" className={cn("whitespace-nowrap", className)}>
-      {STAGE_LABEL[stage]}
-    </Badge>
-  );
+  const className = stage === "done" ? PILL_POS : stage === "failed" ? PILL_NEG : stage === "skipped" ? PILL_WARN : stage === "pending" ? PILL_NEUTRAL : PILL_VOLT;
+  return <span className={cn(PILL, className)}>{STAGE_LABEL[stage]}</span>;
 }
 
 /** The strategy a backtest follows, as short readable chips. */
@@ -167,9 +167,9 @@ export function StrategyChips({ settings }: { settings: BacktestStrategy }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {chips.map((chip) => (
-        <Badge key={chip} variant="outline" className="border-border/60 font-normal text-muted-foreground">
+        <span key={chip} className="inline-flex h-[22px] items-center rounded-full border border-line-2 bg-surface-3 px-2 text-[11.5px] whitespace-nowrap text-text-2">
           {chip}
-        </Badge>
+        </span>
       ))}
     </div>
   );

@@ -4,9 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, CalendarDays, Layers, ListPlus, CheckCheck, Clock, Coins, Loader2, PauseCircle, PlayCircle, Pencil, RotateCcw, RefreshCcw, Target, Trash2, TrendingUp, ShieldBan, UserPlus, Users, Wallet, XCircle } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { CalendarDays, ChevronDown, ChevronLeft, CheckCheck, Coins, EllipsisVertical, Layers, ListPlus, Loader2, PauseCircle, PlayCircle, Pencil, RotateCcw, RefreshCcw, Settings2, Target, Trash2, TrendingUp, Users, Wallet, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -22,10 +22,12 @@ import {
 import { StatTile } from "@/components/traders/stat-tile";
 import { controlBacktestRun, deleteBacktestAddressesBatched, deleteBacktestRun, getBacktestRun } from "@/lib/backtest-api";
 import { formatUsd } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { BacktestRunDetail } from "@/lib/backtest-types";
 import { CombinedWalletPanel } from "./combined-wallet-panel";
 import { DailyGrid } from "./daily-grid";
 import { EquityChart } from "./equity-chart";
+import { Panel } from "./parts";
 import { PositionsTable } from "./positions-table";
 import { RunTradersTable } from "./run-traders-table";
 import { ViewsTab } from "./views-tab";
@@ -35,7 +37,7 @@ import { EditRunDialog } from "./edit-run-dialog";
 import { RestartRunDialog } from "./restart-run-dialog";
 import { AddToRunDialog } from "./add-to-run-dialog";
 import { PromoteDialog } from "./promote-dialog";
-import { ProgressBar, RunStatusBadge, StrategyChips, formatDate, formatDuration, formatSignedPercent, waitingInQueue } from "./shared";
+import { Pill, ProgressBar, RunStatusBadge, StrategyChips, formatDate, formatDuration, formatSignedPercent, waitingInQueue } from "./shared";
 
 const ACTIVE = new Set(["queued", "running"]);
 // The chart, daily grid, trade list and combined wallet each read a lot of data, so while a backtest runs they refresh on this slower beat
@@ -59,6 +61,8 @@ export function RunDashboard({ runId }: { runId: string }) {
   const [addOpen, setAddOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [restartOpen, setRestartOpen] = useState(false);
+  const [strategyOpen, setStrategyOpen] = useState(false);
+  const [viewCount, setViewCount] = useState<number | null>(null);
   const lastStatus = useRef<string | null>(null);
   const lastHeavy = useRef(0);
   const forceHeavy = useRef(false); // something changed the results (restart, edit, remove): the heavy panels re-read at the next poll
@@ -140,23 +144,21 @@ export function RunDashboard({ runId }: { runId: string }) {
 
   if (notFound) {
     return (
-      <div className="flex flex-col items-start gap-3">
-        <Button variant="ghost" size="sm" asChild className="-ml-2 text-muted-foreground">
-          <Link href="/backtest">
-            <ArrowLeft className="size-4" /> Back to backtests
-          </Link>
-        </Button>
-        <p className="text-sm text-muted-foreground">This backtest doesn&apos;t exist (it may have been deleted).</p>
+      <div className="mx-auto flex w-full max-w-[1360px] flex-col items-start gap-3">
+        <Link href="/backtest" className="flex w-fit items-center gap-1.5 text-[13px] text-text-2 hover:text-foreground">
+          <ChevronLeft className="size-3.5" /> All backtests
+        </Link>
+        <p className="text-sm text-text-2">This backtest doesn&apos;t exist (it may have been deleted).</p>
       </div>
     );
   }
 
   if (!detail) {
     return (
-      <div className="flex flex-col gap-4">
+      <div className="mx-auto flex w-full max-w-[1360px] flex-col gap-4">
         <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-64 w-full" />
+        <Skeleton className="h-24 w-full rounded-[20px]" />
+        <Skeleton className="h-64 w-full rounded-[20px]" />
       </div>
     );
   }
@@ -173,168 +175,196 @@ export function RunDashboard({ runId }: { runId: string }) {
   const settled = !running && run.status !== "paused";
   const pct = progress.percent;
   const isCombined = run.mode === "combined" && !!run.combined;
+  const s = run.settings;
+  const strategySummary = [
+    "Frozen when this backtest started",
+    `${formatUsd(s.tradeSizeUsd)} / trade`,
+    s.stopLossPercent != null ? `stop-loss ${Math.abs(s.stopLossPercent)}%` : null,
+    `${s.executionDelaySeconds} s delay`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const retrySkipped = (run.status === "completed" || run.status === "failed") && progress.addressesSkipped > 0;
+  const retryFailed = settled && failedCount > 0;
 
   return (
-    <div className="flex flex-col gap-6">
-      <Button variant="ghost" size="sm" asChild className="-ml-2 w-fit text-muted-foreground">
-        <Link href="/backtest">
-          <ArrowLeft className="size-4" /> Back to backtests
-        </Link>
-      </Button>
+    <div className="mx-auto flex w-full min-w-0 max-w-[1360px] flex-col gap-4 md:gap-6">
+      <Link href="/backtest" className="flex w-fit items-center gap-1.5 text-[13px] text-text-2 hover:text-foreground">
+        <ChevronLeft className="size-3.5" /> All backtests
+      </Link>
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="min-w-0 truncate text-xl font-extrabold tracking-tight sm:text-2xl">{run.name}</h1>
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+        <div className="flex min-w-0 flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <h1 className="min-w-0 truncate text-[22px] leading-7 font-semibold tracking-[-0.02em] md:text-[28px] md:leading-[34px]">{run.name}</h1>
             <RunStatusBadge status={run.status} control={run.control} queuePosition={progress.queuePosition} />
-            {isCombined && (
-              <Badge variant="outline" className="gap-1 border-primary/30 bg-primary/10 font-normal text-primary">
-                <Wallet className="size-3" /> Combined wallet
-              </Badge>
-            )}
+            {isCombined && <Pill tone="volt">Combined wallet</Pill>}
           </div>
-          <p className="text-sm text-muted-foreground">
+          <span className="text-[13px] text-text-2">
             {run.days}-day window ({formatDate(run.windowStart)} – {formatDate(run.windowEnd)}) · following &quot;{run.profileName}&quot; · {run.addressCount.toLocaleString()} address
             {run.addressCount === 1 ? "" : "es"}
-          </p>
+          </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {canPause && (
-            <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => act("pause")}>
-              <PauseCircle className="size-4" /> Pause
+            <Button variant="outline" className="gap-1.5 max-md:h-11" disabled={busy !== null} onClick={() => act("pause")}>
+              {busy === "pause" ? <Loader2 className="animate-spin" /> : <PauseCircle />} Pause
             </Button>
           )}
           {canResume && (
-            <Button size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => act("resume")}>
-              <PlayCircle className="size-4" /> Resume
+            <Button className="gap-1.5 max-md:h-11" disabled={busy !== null} onClick={() => act("resume")}>
+              {busy === "resume" ? <Loader2 className="animate-spin" /> : <PlayCircle />} Resume
             </Button>
           )}
-          {(run.status === "completed" || run.status === "failed") && progress.addressesSkipped > 0 && (
-            <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => act("retry_skipped")}>
-              <RotateCcw className="size-4" /> Retry {progress.addressesSkipped} skipped
+          {retrySkipped && (
+            <Button variant="outline" className="gap-1.5 max-md:h-11" disabled={busy !== null} onClick={() => act("retry_skipped")}>
+              <RotateCcw /> Retry {progress.addressesSkipped} skipped
             </Button>
           )}
-          <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => setAddOpen(true)}>
-            <ListPlus className="size-4" /> Add addresses
+          {retryFailed && (
+            <Button variant="outline" className="gap-1.5 max-md:h-11" disabled={busy !== null} onClick={() => act("retry_failed")}>
+              <RotateCcw /> Retry {failedCount} failed
+            </Button>
+          )}
+          <Button variant="outline" className="gap-1.5 max-md:h-11" disabled={busy !== null} onClick={() => setAddOpen(true)}>
+            <ListPlus /> Add addresses
           </Button>
-          <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => setEditOpen(true)}>
-            <Pencil className="size-4" /> Edit
+          <Button variant="outline" className="gap-1.5 max-md:hidden" disabled={busy !== null} onClick={() => setEditOpen(true)}>
+            <Pencil /> Edit
           </Button>
-          {canRestart && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              disabled={busy !== null}
-              onClick={() => setRestartOpen(true)}
-            >
-              <RefreshCcw className="size-4" /> Restart
-            </Button>
-          )}
-          {settled && failedCount > 0 && (
-            <Button variant="outline" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => act("retry_failed")}>
-              <RotateCcw className="size-4" /> Retry {failedCount} failed
-            </Button>
-          )}
-          {canCancel && (
-            <Button variant="outline" size="sm" className="gap-1.5 text-negative hover:text-negative" disabled={busy !== null} onClick={() => setConfirm("cancel")}>
-              <XCircle className="size-4" /> Cancel
-            </Button>
-          )}
-          {!running && (
-            <Button variant="outline" size="sm" className="gap-1.5 text-muted-foreground hover:text-negative" disabled={busy !== null} onClick={() => setConfirm("delete")}>
-              <Trash2 className="size-4" /> Delete
-            </Button>
-          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon" className="max-md:size-11 max-md:rounded-xl" aria-label="More actions">
+                <EllipsisVertical />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <DropdownMenuItem className="min-h-10 gap-2.5 md:hidden" onSelect={() => setEditOpen(true)}>
+                <Pencil className="size-4" /> Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem className="min-h-10 justify-between gap-2.5" disabled={!canRestart || busy !== null} onSelect={() => setRestartOpen(true)}>
+                <span className="flex items-center gap-2.5">
+                  <RefreshCcw className="size-4" /> Restart
+                </span>
+                {!canRestart ? <span className="text-xs text-text-3">pause first</span> : null}
+              </DropdownMenuItem>
+              {canCancel && (
+                <DropdownMenuItem className="min-h-10 gap-2.5" disabled={busy !== null} onSelect={() => setConfirm("cancel")}>
+                  <XCircle className="size-4" /> Cancel backtest
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" className="min-h-10 justify-between gap-2.5" disabled={running || busy !== null} onSelect={() => setConfirm("delete")}>
+                <span className="flex items-center gap-2.5">
+                  <Trash2 className="size-4" /> Delete
+                </span>
+                {running ? <span className="text-xs opacity-70">not while running</span> : null}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
-      {running && <WorkerStatus />}
+      {running && <WorkerStatus showOnline detail="working on this backtest" />}
 
-      <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-card/50 p-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <span className="text-2xl font-semibold tabular-nums tracking-tight">{pct.toFixed(pct >= 99.95 || pct === 0 ? 0 : 1)}%</span>
-          <span className="text-sm text-muted-foreground">
-            {progress.addressesDone.toLocaleString()}/{progress.addressesTotal.toLocaleString()} addresses done{failedCount > 0 ? ` · ${failedCount} failed` : ""}{progress.addressesSkipped > 0 ? ` · ${progress.addressesSkipped} skipped` : ""}
+      <div className="flex flex-col gap-3 rounded-[20px] border border-border bg-card p-4 md:p-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <span className="text-[28px] leading-8 font-semibold tracking-[-0.02em] tabular-nums">{pct.toFixed(pct >= 99.95 || pct === 0 ? 0 : 1)}%</span>
+          <span className="text-[13px] text-text-2">
+            {progress.addressesDone.toLocaleString()} / {progress.addressesTotal.toLocaleString()} addresses done
+            {failedCount > 0 ? ` · ${failedCount} failed` : ""}
+            {progress.addressesSkipped > 0 ? ` · ${progress.addressesSkipped} skipped` : ""}
           </span>
         </div>
-        <ProgressBar percent={pct} tone={run.status === "failed" ? "negative" : run.status === "completed" ? "positive" : "primary"} className="h-2" />
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <ProgressBar percent={pct} tone={run.status === "failed" ? "negative" : run.status === "completed" ? "positive" : run.status === "paused" || run.status === "cancelled" ? "warn" : "primary"} />
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-3">
           <span>Worked for {formatDuration(run.activeMs)}</span>
           {waitingInQueue(run.status, progress.queuePosition) ? (
             <span>
-              Waiting in the queue - {progress.queuePosition === 1 ? "next in line" : `${progress.queuePosition - 1} backtests ahead of the next one`}. It starts by itself when the one running finishes.
+              Waiting in the queue — {progress.queuePosition === 1 ? "next in line" : `${progress.queuePosition - 1} backtests ahead of the next one`}. It starts by itself when the one running finishes.
             </span>
           ) : (
             running && <span>{progress.etaMs != null ? `About ${formatDuration(progress.etaMs)} left` : "Estimating time left…"}</span>
           )}
-          {run.status === "paused" && <span>Paused - resume to continue where it stopped</span>}
-          {run.status === "cancelled" && <span>Cancelled - resume to continue with the addresses that are not finished</span>}
+          {run.status === "paused" && <span>Paused — resume to continue where it stopped</span>}
+          {run.status === "cancelled" && <span>Cancelled — resume to continue with the addresses that are not finished</span>}
           {run.error && <span className="text-negative">{run.error}</span>}
         </div>
-        <p className="text-xs text-muted-foreground">Results below update as trades finish - you can leave this page and come back, the backtest keeps running.</p>
+        <span className="text-xs text-text-3">Results update as trades finish. You can leave this page.</span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <StatTile label="Realized P&L" value={formatUsd(stats.realizedPnlUsd)} icon={Coins} tone={stats.realizedPnlUsd > 0 ? "positive" : stats.realizedPnlUsd < 0 ? "negative" : "default"} hint={stats.open > 0 ? `${formatUsd(stats.unrealizedUsd)} unrealized on ${stats.open} open` : undefined} />
         <StatTile label="Combined return" value={formatSignedPercent(stats.combinedPercent, 0)} icon={TrendingUp} tone={stats.combinedPercent > 0 ? "positive" : stats.combinedPercent < 0 ? "negative" : "default"} hint={stats.avgPercent != null ? `${formatSignedPercent(stats.avgPercent)} avg per trade` : undefined} />
         <StatTile label="Win rate" value={stats.winRatePercent != null ? `${stats.winRatePercent.toFixed(0)}%` : "—"} icon={Target} hint={`${stats.wins}W / ${stats.losses}L`} />
         <StatTile label="Closed trades" value={stats.closed.toLocaleString()} icon={CheckCheck} hint={stats.skipped > 0 ? `${stats.skipped.toLocaleString()} signals not traded` : undefined} />
       </div>
 
-      <div className="flex flex-col gap-2">
-        <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-          <Clock className="size-3.5" /> Strategy followed (frozen when this backtest started)
-        </span>
-        <StrategyChips settings={run.settings} />
-        <p className="text-xs text-muted-foreground">
-          {run.collectMethod === "rpc"
-            ? "Trades are read from the chain over RPC (slow, reaches further back)."
-            : "Trades are read from pump.fun's user-trades API (fast, limited history)."}
-        </p>
-        {run.maxSignatures ? (
-          <p className="text-xs text-muted-foreground">Addresses with more than {run.maxSignatures.toLocaleString()} signatures in the window are skipped.</p>
-        ) : null}
-        {run.earlyStop && (run.earlyStop.lossDays > 0 || run.earlyStop.dayLossPercent > 0 || (run.earlyStop.negativeBalanceEvents ?? 0) > 0 || run.earlyStop.lossAtProgressPercent > 0) ? (
-          <p className="text-xs text-muted-foreground">
-            A trader is dropped as a loss trader{" "}
-            {[
-              run.earlyStop.lossDays > 0 ? `after ${run.earlyStop.lossDays} losing day${run.earlyStop.lossDays === 1 ? "" : "s"}` : null,
-              run.earlyStop.dayLossPercent > 0 ? `when one day loses ${run.earlyStop.dayLossPercent}% or more` : null,
-              (run.earlyStop.negativeBalanceEvents ?? 0) > 0 ? `once its balance has gone negative ${run.earlyStop.negativeBalanceEvents} times` : null,
-              run.earlyStop.lossAtProgressPercent > 0 ? `if still in loss after ${run.earlyStop.lossAtProgressPercent}% of its tokens` : null,
-            ]
-              .filter(Boolean)
-              .join(", or ")}
-            {progress.addressesStoppedEarly ? ` (${progress.addressesStoppedEarly} dropped so far)` : ""}.
-          </p>
-        ) : null}
-        {run.daysAtOnce ? <p className="text-xs text-muted-foreground">Working on {run.daysAtOnce} day{run.daysAtOnce === 1 ? "" : "s"} of an address at a time.</p> : null}
-        {run.addressParallelism ? <p className="text-xs text-muted-foreground">Working on {run.addressParallelism} address{run.addressParallelism === 1 ? "" : "es"} at a time.</p> : null}
-      </div>
+      {/* Strategy followed: closed, with a one-line summary; opens to every setting. */}
+      <section className="overflow-hidden rounded-[16px] border border-border bg-card">
+        <button type="button" onClick={() => setStrategyOpen((v) => !v)} aria-expanded={strategyOpen} className="flex min-h-[56px] w-full items-center gap-3 px-4 py-3 text-left">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-surface-3 text-primary">
+            <Settings2 className="size-4" />
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <b className="text-[15px] font-semibold">Strategy followed</b>
+            <span className="truncate text-xs text-text-3">{strategySummary}</span>
+          </span>
+          <ChevronDown className={cn("size-4 shrink-0 text-text-3 transition-transform", strategyOpen && "rotate-180")} />
+        </button>
+        {strategyOpen && (
+          <div className="flex flex-col gap-3 border-t border-border px-4 pt-3 pb-4">
+            <StrategyChips settings={run.settings} />
+            <div className="flex flex-col gap-1.5 text-xs text-text-2">
+              <span>
+                {run.collectMethod === "rpc"
+                  ? "Trades are read from the chain over RPC (slow, reaches further back)."
+                  : "Trades are read from pump.fun's user-trades API (fast, limited history)."}
+              </span>
+              {run.maxSignatures ? <span>Addresses with more than {run.maxSignatures.toLocaleString()} signatures in the window are skipped.</span> : null}
+              {run.earlyStop && (run.earlyStop.lossDays > 0 || run.earlyStop.dayLossPercent > 0 || (run.earlyStop.negativeBalanceEvents ?? 0) > 0 || run.earlyStop.lossAtProgressPercent > 0) ? (
+                <span>
+                  A trader is dropped as a loss trader{" "}
+                  {[
+                    run.earlyStop.lossDays > 0 ? `after ${run.earlyStop.lossDays} losing day${run.earlyStop.lossDays === 1 ? "" : "s"}` : null,
+                    run.earlyStop.dayLossPercent > 0 ? `when one day loses ${run.earlyStop.dayLossPercent}% or more` : null,
+                    (run.earlyStop.negativeBalanceEvents ?? 0) > 0 ? `once its balance has gone negative ${run.earlyStop.negativeBalanceEvents} times` : null,
+                    run.earlyStop.lossAtProgressPercent > 0 ? `if still in loss after ${run.earlyStop.lossAtProgressPercent}% of its tokens` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(", or ")}
+                  {progress.addressesStoppedEarly ? ` (${progress.addressesStoppedEarly} dropped so far)` : ""}.
+                </span>
+              ) : null}
+              {run.daysAtOnce ? <span>Working on {run.daysAtOnce} day{run.daysAtOnce === 1 ? "" : "s"} of an address at a time.</span> : null}
+              {run.addressParallelism ? <span>Working on {run.addressParallelism} address{run.addressParallelism === 1 ? "" : "es"} at a time.</span> : null}
+            </div>
+          </div>
+        )}
+      </section>
 
-      <Tabs defaultValue={isCombined ? "wallet" : "addresses"} className="flex flex-col gap-4">
-        <TabsList>
-          {isCombined && (
-            <TabsTrigger value="wallet" className="gap-1.5">
-              <Wallet className="size-3.5" /> Combined wallet
+      <Tabs defaultValue={isCombined ? "wallet" : "addresses"} className="flex flex-col gap-4 md:gap-5">
+        <TabsList variant="line" className="h-11 w-full justify-start gap-1 border-b border-border p-0">
+          {(
+            [
+              ...(isCombined ? [{ value: "wallet", label: "Combined wallet", icon: Wallet, count: null as number | null }] : []),
+              { value: "addresses", label: "Addresses", icon: Users, count: run.addressCount as number | null },
+              { value: "daily", label: "Daily", icon: CalendarDays, count: null },
+              { value: "performance", label: "Performance", icon: TrendingUp, count: null },
+              { value: "trades", label: "Trades", icon: Coins, count: null },
+              { value: "views", label: "Combined views", icon: Layers, count: viewCount },
+            ] as { value: string; label: string; icon: typeof Wallet; count: number | null }[]
+          ).map((t) => (
+            <TabsTrigger
+              key={t.value}
+              value={t.value}
+              className="h-11 flex-none gap-2 rounded-none px-3.5 text-sm font-medium after:inset-x-2.5 group-data-horizontal/tabs:after:bottom-0 data-active:text-foreground group-data-[variant=line]/tabs-list:data-active:after:bg-primary"
+            >
+              <t.icon className="size-3.5 max-md:hidden" />
+              {t.label}
+              {t.count !== null ? <span className="rounded-full bg-surface-3 px-1.5 py-px text-[11px] font-normal text-text-2">{t.count.toLocaleString()}</span> : null}
             </TabsTrigger>
-          )}
-          <TabsTrigger value="addresses" className="gap-1.5">
-            <Users className="size-3.5" /> Addresses
-          </TabsTrigger>
-          <TabsTrigger value="daily" className="gap-1.5">
-            <CalendarDays className="size-3.5" /> Daily
-          </TabsTrigger>
-          <TabsTrigger value="performance" className="gap-1.5">
-            <TrendingUp className="size-3.5" /> Performance
-          </TabsTrigger>
-          <TabsTrigger value="trades" className="gap-1.5">
-            <Coins className="size-3.5" /> Trades
-          </TabsTrigger>
-          <TabsTrigger value="views" className="gap-1.5">
-            <Layers className="size-3.5" /> Combined views
-          </TabsTrigger>
+          ))}
         </TabsList>
 
         {isCombined && (
@@ -343,37 +373,31 @@ export function RunDashboard({ runId }: { runId: string }) {
           </TabsContent>
         )}
 
-        <TabsContent value="addresses" className="flex flex-col gap-3">
-          {selected.size > 0 && (
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
-              <span className="text-sm font-medium">{selected.size} selected</span>
-              <div className="ml-auto flex flex-wrap items-center gap-2">
-                <Button size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => setPromoteOpen(true)}>
-                  <UserPlus className="size-4" />
-                  Add to live Traders
-                </Button>
-                <Button size="sm" variant="outline" className="gap-1.5 text-negative hover:text-negative" disabled={busy !== null} onClick={() => setBlacklistOpen(true)}>
-                  <ShieldBan className="size-4" /> Blacklist
-                </Button>
-                <Button size="sm" variant="outline" className="gap-1.5 text-negative hover:text-negative" disabled={busy !== null} onClick={() => setConfirm("remove-addresses")}>
-                  <Trash2 className="size-4" /> Remove from backtest list
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
-                  Clear
-                </Button>
-              </div>
-            </div>
-          )}
-          <RunTradersTable runId={runId} active={running} selected={selected} onSelectedChange={setSelected} onOpen={(address) => window.open(`/backtest/${runId}/${address}`, "_blank", "noopener,noreferrer")} />
+        <TabsContent value="addresses">
+          <RunTradersTable
+            runId={runId}
+            active={running}
+            selected={selected}
+            onSelectedChange={setSelected}
+            onOpen={(address) => window.open(`/backtest/${runId}/${address}`, "_blank", "noopener,noreferrer")}
+            onPromote={() => setPromoteOpen(true)}
+            onBlacklist={() => setBlacklistOpen(true)}
+            onRemove={() => setConfirm("remove-addresses")}
+            busy={busy !== null}
+          />
         </TabsContent>
 
         <TabsContent value="daily">
           <DailyGrid runId={runId} refreshKey={refreshKey} />
         </TabsContent>
 
-        <TabsContent value="performance" className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">Cumulative realized P&amp;L - all addresses</h3>
-          <EquityChart runId={runId} refreshKey={refreshKey} />
+        <TabsContent value="performance">
+          <Panel
+            title="Cumulative realized P&L — all addresses"
+            help="Re-prices this backtest's stored trades as other wallets (address group, trade amount, fees, balance) without simulating again."
+          >
+            <EquityChart runId={runId} refreshKey={refreshKey} />
+          </Panel>
         </TabsContent>
 
         <TabsContent value="trades">
@@ -381,7 +405,7 @@ export function RunDashboard({ runId }: { runId: string }) {
         </TabsContent>
 
         <TabsContent value="views">
-          <ViewsTab runId={runId} suggestedBalanceUsd={run.combined?.startingBalanceUsd ?? run.settings.allocationUsd ?? 100} refreshKey={refreshKey} />
+          <ViewsTab runId={runId} suggestedBalanceUsd={run.combined?.startingBalanceUsd ?? run.settings.allocationUsd ?? 100} refreshKey={refreshKey} onCount={setViewCount} />
         </TabsContent>
       </Tabs>
 
@@ -448,7 +472,7 @@ export function RunDashboard({ runId }: { runId: string }) {
           <AlertDialogFooter>
             <AlertDialogCancel>Keep</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-negative text-negative-foreground hover:bg-negative/90"
+              className="bg-negative font-semibold text-negative-foreground hover:bg-negative/90"
               onClick={() => (confirm === "cancel" ? act("cancel") : confirm === "delete" ? remove() : removeAddresses())}
             >
               {confirm === "cancel" ? "Cancel backtest" : confirm === "delete" ? "Delete" : "Remove"}

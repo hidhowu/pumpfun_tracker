@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Copy, ShieldCheck, ShieldOff } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Copy, Loader2, ShieldCheck, ShieldOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/dialog-parts";
+import { HelpTip } from "@/components/ui/help-tip";
+import { Input } from "@/components/ui/input";
 
 type Status = { enabled: boolean; enabledAt: string | null; recoveryCodesRemaining: number; available: boolean };
 type Setup = { secret: string; otpauthUrl: string; qrSvg: string };
@@ -20,13 +20,12 @@ async function post<T>(url: string, payload: unknown): Promise<T> {
 
 function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void }) {
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-amber-400/30 bg-amber-400/10 p-4">
-      <p className="text-sm font-medium">Save these recovery codes now</p>
-      <p className="text-xs text-muted-foreground">
-        Each code works once, in place of an authenticator code, if you lose your phone. They are shown only this one time - store
-        them somewhere safe and separate from your password.
+    <div className="flex flex-col gap-3 rounded-2xl border border-warn/40 bg-warn-soft p-4">
+      <b className="text-sm font-semibold">Save these recovery codes now</b>
+      <p className="text-xs leading-[18px] text-text-2">
+        Each code works once, in place of an authenticator code, if you lose your phone. They are shown only this one time - store them somewhere safe and separate from your password.
       </p>
-      <div className="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-sm">
+      <div className="grid max-w-[360px] grid-cols-2 gap-x-6 gap-y-1.5 font-mono text-[13px]">
         {codes.map((c) => (
           <span key={c}>{c}</span>
         ))}
@@ -36,11 +35,12 @@ function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void 
           type="button"
           variant="outline"
           size="sm"
+          className="max-md:h-11 max-md:flex-1"
           onClick={() => navigator.clipboard.writeText(codes.join("\n")).then(() => toast.success("Recovery codes copied"))}
         >
           <Copy /> Copy
         </Button>
-        <Button type="button" size="sm" onClick={onDone}>
+        <Button type="button" size="sm" className="max-md:h-11 max-md:flex-1" onClick={onDone}>
           I&apos;ve saved them
         </Button>
       </div>
@@ -135,128 +135,130 @@ export function TwoFactorCard() {
     });
   };
 
+  const errorLine = error ? (
+    <p role="alert" className="text-[13px] text-destructive">
+      {error}
+    </p>
+  ) : null;
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          {status?.enabled ? <ShieldCheck className="size-4 text-primary" /> : <ShieldOff className="size-4 text-muted-foreground" />}
+    <section className="flex min-w-0 flex-col gap-4 rounded-[20px] border border-border bg-card p-4 md:p-6">
+      <h2 className="flex items-center gap-2 text-[17px] leading-6 font-semibold">
+        {status?.enabled ? <ShieldCheck className="size-[18px] text-primary" /> : <ShieldOff className="size-[18px] text-text-3" />}
+        <span>
           Two-factor sign-in
-        </CardTitle>
-        <CardDescription>
-          Asks for a 6-digit code from an authenticator app (Google Authenticator, Authy, 1Password...) after your password, so a stolen or guessed password alone is not
-          enough.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {recoveryCodes && <RecoveryCodes codes={recoveryCodes} onDone={() => setRecoveryCodes(null)} />}
+          <HelpTip>Asks for a 6-digit code from an authenticator app (Google Authenticator, Authy, 1Password...) after your password, so a stolen or guessed password alone is not enough.</HelpTip>
+        </span>
+      </h2>
 
-        {!status && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {recoveryCodes && <RecoveryCodes codes={recoveryCodes} onDone={() => setRecoveryCodes(null)} />}
 
-        {status && !status.enabled && !setup && (
-          <form onSubmit={startSetup} className="flex flex-col gap-3">
-            <p className="text-sm text-muted-foreground">Currently <span className="font-medium text-foreground">off</span>. Confirm your password to set it up.</p>
-            {!status.available && (
-              <p className="text-sm text-negative">This server has no TOTP_ENCRYPTION_KEY set, so two-factor can&apos;t be turned on yet (see .env.example).</p>
-            )}
-            <div className="flex max-w-xs flex-col gap-1.5">
-              <Label htmlFor="tf-password">Password</Label>
-              <Input id="tf-password" type="password" autoComplete="current-password" required maxLength={128} value={password} onChange={(e) => setPassword(e.target.value)} />
-            </div>
-            {error && <p role="alert" className="text-sm text-negative">{error}</p>}
-            <div>
-              <Button type="submit" disabled={busy || !status.available}>
-                {busy ? "Working…" : "Set up two-factor"}
-              </Button>
-            </div>
-          </form>
-        )}
+      {!status && <p className="text-sm text-text-3">Loading…</p>}
 
-        {status && !status.enabled && setup && (
-          <form onSubmit={finishSetup} className="flex flex-col gap-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                alt="QR code for your authenticator app"
-                width={176}
-                height={176}
-                className="rounded-md border border-border bg-white p-1"
-                src={`data:image/svg+xml;utf8,${encodeURIComponent(setup.qrSvg)}`}
+      {status && !status.enabled && !setup && (
+        <form onSubmit={startSetup} className="flex flex-col gap-4">
+          <p className="text-sm text-text-2">
+            Currently <b className="font-semibold text-foreground">off</b>. Confirm your password to set it up.
+          </p>
+          <Field label="Password" htmlFor="tf-password" className="md:max-w-xs">
+            <Input id="tf-password" type="password" autoComplete="current-password" required maxLength={128} value={password} onChange={(e) => setPassword(e.target.value)} className="max-md:h-11" />
+          </Field>
+          {!status.available && <p className="text-[13px] text-destructive">This server has no TOTP_ENCRYPTION_KEY set, so two-factor can&apos;t be turned on yet (see .env.example).</p>}
+          {errorLine}
+          <div>
+            <Button type="submit" disabled={busy || !status.available} className="max-md:h-11 max-md:w-full">
+              {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+              {busy ? "Working…" : "Set up two-factor"}
+            </Button>
+          </div>
+        </form>
+      )}
+
+      {status && !status.enabled && setup && (
+        <form onSubmit={finishSetup} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:gap-5">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              alt="QR code for your authenticator app"
+              width={176}
+              height={176}
+              className="shrink-0 self-center rounded-xl bg-white p-2"
+              src={`data:image/svg+xml;utf8,${encodeURIComponent(setup.qrSvg)}`}
+            />
+            <div className="flex min-w-0 flex-1 flex-col gap-2.5 text-sm">
+              <p>1. Scan this with your authenticator app, or enter the key by hand:</p>
+              <code className="rounded-xl border border-border bg-surface-2 px-3 py-2 font-mono text-xs break-all">{setup.secret}</code>
+              <p>2. Type the 6-digit code the app shows to finish:</p>
+              <Input
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                required
+                autoFocus
+                placeholder="123456"
+                aria-label="6-digit code"
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                className="font-mono tracking-[0.3em] max-md:h-[52px] max-md:text-center max-md:text-2xl max-md:font-semibold max-md:tracking-[0.5em] md:max-w-40"
               />
-              <div className="flex min-w-0 flex-col gap-2 text-sm">
-                <p>1. Scan this with your authenticator app, or enter the key by hand:</p>
-                <code className="break-all rounded bg-muted px-2 py-1 font-mono text-xs">{setup.secret}</code>
-                <p>2. Type the 6-digit code the app shows to finish:</p>
-                <Input
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  pattern="[0-9]{6}"
-                  maxLength={6}
-                  required
-                  autoFocus
-                  placeholder="123456"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-                  className="max-w-40 font-mono tracking-widest"
-                />
-              </div>
-            </div>
-            {error && <p role="alert" className="text-sm text-negative">{error}</p>}
-            <div className="flex gap-2">
-              <Button type="submit" disabled={busy || code.length !== 6}>
-                {busy ? "Checking…" : "Turn on"}
-              </Button>
-              <Button type="button" variant="ghost" onClick={reset}>
-                Cancel
-              </Button>
-            </div>
-          </form>
-        )}
-
-        {status?.enabled && mode === "idle" && (
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-muted-foreground">
-              Currently <span className="font-medium text-foreground">on</span>
-              {status.enabledAt ? ` since ${new Date(status.enabledAt).toLocaleDateString()}` : ""}. Recovery codes left:{" "}
-              <span className="font-medium text-foreground">{status.recoveryCodesRemaining}</span>.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" onClick={() => setMode("recovery")}>
-                New recovery codes
-              </Button>
-              <Button type="button" variant="outline" onClick={() => setMode("disable")}>
-                Turn off
-              </Button>
             </div>
           </div>
-        )}
+          {errorLine}
+          <div className="flex gap-2">
+            <Button type="submit" disabled={busy || code.length !== 6} className="max-md:h-11 max-md:flex-1">
+              {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+              {busy ? "Checking…" : "Turn on"}
+            </Button>
+            <Button type="button" variant="ghost" onClick={reset} className="max-md:h-11 max-md:flex-1">
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
 
-        {status?.enabled && mode !== "idle" && (
-          <form onSubmit={mode === "disable" ? disable : regenerate} className="flex flex-col gap-3">
-            <p className="text-sm text-muted-foreground">
-              {mode === "disable" ? "Turning it off needs your password and a current code." : "The old recovery codes stop working. Confirm with your password and a current code."}
-            </p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="tf-password2">Password</Label>
-                <Input id="tf-password2" type="password" autoComplete="current-password" required maxLength={128} value={password} onChange={(e) => setPassword(e.target.value)} />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="tf-code2">Authenticator or recovery code</Label>
-                <Input id="tf-code2" autoComplete="one-time-code" required maxLength={16} value={code} onChange={(e) => setCode(e.target.value)} className="font-mono" />
-              </div>
-            </div>
-            {error && <p role="alert" className="text-sm text-negative">{error}</p>}
-            <div className="flex gap-2">
-              <Button type="submit" variant={mode === "disable" ? "destructive" : "default"} disabled={busy}>
-                {busy ? "Working…" : mode === "disable" ? "Turn off two-factor" : "Generate new codes"}
-              </Button>
-              <Button type="button" variant="ghost" onClick={reset}>
-                Cancel
-              </Button>
-            </div>
-          </form>
-        )}
-      </CardContent>
-    </Card>
+      {status?.enabled && mode === "idle" && (
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-text-2">
+            Currently <b className="font-semibold text-foreground">on</b>
+            {status.enabledAt ? ` since ${new Date(status.enabledAt).toLocaleDateString()}` : ""}. Recovery codes left: <b className="font-semibold text-foreground">{status.recoveryCodesRemaining}</b>.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => setMode("recovery")} className="max-md:h-11 max-md:flex-1">
+              New recovery codes
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setMode("disable")} className="max-md:h-11 max-md:flex-1">
+              Turn off
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {status?.enabled && mode !== "idle" && (
+        <form onSubmit={mode === "disable" ? disable : regenerate} className="flex flex-col gap-4">
+          <p className="text-sm text-text-2">
+            {mode === "disable" ? "Turning it off needs your password and a current code." : "The old recovery codes stop working. Confirm with your password and a current code."}
+          </p>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label="Password" htmlFor="tf-password2">
+              <Input id="tf-password2" type="password" autoComplete="current-password" required maxLength={128} value={password} onChange={(e) => setPassword(e.target.value)} className="max-md:h-11" />
+            </Field>
+            <Field label="Authenticator or recovery code" htmlFor="tf-code2">
+              <Input id="tf-code2" autoComplete="one-time-code" required maxLength={16} value={code} onChange={(e) => setCode(e.target.value)} className="font-mono max-md:h-11" />
+            </Field>
+          </div>
+          {errorLine}
+          <div className="flex gap-2">
+            <Button type="submit" variant={mode === "disable" ? "destructive" : "default"} disabled={busy} className="max-md:h-11 max-md:flex-1">
+              {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+              {busy ? "Working…" : mode === "disable" ? "Turn off two-factor" : "Generate new codes"}
+            </Button>
+            <Button type="button" variant="ghost" onClick={reset} className="max-md:h-11 max-md:flex-1">
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
+    </section>
   );
 }

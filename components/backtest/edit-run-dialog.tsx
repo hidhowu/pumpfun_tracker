@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { Loader2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SettingsList, SettingsRow } from "@/components/ui/settings-row";
+import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
+import { DialogHead, Field, Group, Notice } from "./dialog-parts";
 import { updateBacktestRun } from "@/lib/backtest-api";
 import { useProfile } from "@/lib/profile-context";
 import type { BacktestRunDefinition } from "@/lib/backtest-types";
@@ -141,42 +142,48 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
     }
   }
 
+  const combinedSummary = combinedNumbers ? `$${combinedNumbers.startingBalanceUsd} start · $${combinedNumbers.tradeSizeUsd}/trade · ${combinedNumbers.pumpFeePercent}% + $${combinedNumbers.jitoFeeUsd}${combinedNumbers.resetDaily ? " · daily reset" : ""}` : undefined;
+  const timingSummary = timingNumbers ? `Delay ${timingNumbers.executionDelaySeconds}s · checks ${timingNumbers.riskCheckIntervalSeconds}s · +${timingNumbers.fillLatencySeconds}s` : undefined;
+  const speedSummary = `Addresses at once ${screening.addressParallelism || "auto"} · days at once ${screening.daysAtOnce || 0}`;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90vh] flex-col overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Edit backtest</DialogTitle>
-          <DialogDescription>
-            {locked ? "Pause the backtest to change its settings - only the name can be edited while it runs." : "Changes apply when you resume or re-run the backtest."}
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="sm:max-w-[600px]">
+        <DialogHead
+          icon={<Pencil className="size-5" />}
+          title={<>Edit &quot;{run.name}&quot;</>}
+          help={locked ? "Pause the backtest to change its settings - only the name can be edited while it runs." : "Changes apply when you resume or re-run the backtest."}
+          description="Rename the backtest or change its settings."
+        />
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="edit-bt-name">Name</Label>
-            <Input id="edit-bt-name" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
+        {locked && <Notice tone="info">It is running: only the name, the combined wallet balance and the speed can change. Pause it to edit the rest.</Notice>}
 
-          <div className="space-y-1.5">
-            <Label htmlFor="edit-bt-max">Skip addresses with more signatures than</Label>
-            <Input
-              id="edit-bt-max"
-              inputMode="numeric"
-              disabled={locked}
-              value={maxSignatures}
-              onChange={(e) => setMaxSignatures(e.target.value.replace(/[^0-9]/g, ""))}
-              className={cn("w-32", !limitValid && "border-negative")}
-              aria-invalid={!limitValid}
-            />
-            <p className="text-xs text-muted-foreground">
-              0 = no limit. {looser ? "Addresses that were skipped for being over the old limit are queued again." : "Raising it queues the addresses skipped for being over the old limit again."}
-            </p>
-          </div>
+        <div className="flex flex-col gap-4">
+          <Field label="Name" htmlFor="edit-bt-name">
+            <Input id="edit-bt-name" value={name} onChange={(e) => setName(e.target.value)} className="max-md:h-11" />
+          </Field>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="edit-bt-profile">Strategy</Label>
+          <SettingsList>
+            <SettingsRow
+              label="Skip addresses with more signatures than"
+              help={`0 = no limit. ${looser ? "Addresses that were skipped for being over the old limit are queued again." : "Raising it queues the addresses skipped for being over the old limit again."}`}
+              htmlFor="edit-bt-max"
+            >
+              <Input
+                id="edit-bt-max"
+                inputMode="numeric"
+                disabled={locked}
+                value={maxSignatures}
+                onChange={(e) => setMaxSignatures(e.target.value.replace(/[^0-9]/g, ""))}
+                className={cn("w-[140px] text-right", !limitValid && "border-negative")}
+                aria-invalid={!limitValid}
+              />
+            </SettingsRow>
+          </SettingsList>
+
+          <Field label="Strategy" htmlFor="edit-bt-profile">
             <Select value={profileId} onValueChange={setProfileId} disabled={locked}>
-              <SelectTrigger id="edit-bt-profile" className="w-full">
+              <SelectTrigger id="edit-bt-profile" className="w-full max-md:h-11">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -188,49 +195,26 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
                 ))}
               </SelectContent>
             </Select>
-            {recopy && (
-              <p className="flex items-start gap-1.5 text-xs text-amber-500">
-                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                Results so far were simulated with the old settings, so they are cleared and every address is simulated again. Transactions already collected are reused, so this is much faster than the first run.
-              </p>
-            )}
-          </div>
-        </div>
+          </Field>
+          {recopy && <Notice>Results so far were simulated with the old settings, so they are cleared and every address is simulated again. Transactions already collected are reused, so this is much faster than the first run.</Notice>}
 
-        {combined && (
-          <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
-            <p className="text-sm font-medium">Combined wallet and fees</p>
-            <CombinedFields values={combined} onChange={setCombined} lockedKeys={locked ? ["tradeSizeUsd", "pumpFeePercent", "jitoFeeUsd"] : []} idPrefix="edit-bt-combined" />
-            {feesChanged && !locked && (
-              <p className="flex items-start gap-1.5 text-xs text-amber-500">
-                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                Changing the trade amount or the fees clears the results so far and every address is simulated again (collected transactions are reused).
-              </p>
-            )}
-            {walletChanged && !feesChanged && <p className="text-xs text-muted-foreground">The wallet is added up again from the finished trades - nothing is simulated again.</p>}
-          </div>
-        )}
-
-        <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
-          <p className="text-sm font-medium">Timing</p>
-          <TimingFields values={timing} onChange={setTiming} disabled={locked} />
-          {timingChanged && !recopy && (
-            <p className="flex items-start gap-1.5 text-xs text-amber-500">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              Changing the timing clears the results so far and every address is simulated again (collected transactions are reused).
-            </p>
+          {combined && (
+            <Group title="Combined wallet and fees" summary={combinedSummary}>
+              <CombinedFields values={combined} onChange={setCombined} lockedKeys={locked ? ["tradeSizeUsd", "pumpFeePercent", "jitoFeeUsd"] : []} idPrefix="edit-bt-combined" />
+              {feesChanged && !locked && <Notice>Changing the trade amount or the fees clears the results so far and every address is simulated again (collected transactions are reused).</Notice>}
+              {walletChanged && !feesChanged && <Notice tone="info">The wallet is added up again from the finished trades - nothing is simulated again.</Notice>}
+            </Group>
           )}
-        </div>
 
-        <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
-          <p className="text-sm font-medium">{isCombined ? "Speed" : "Speed and loss traders"}</p>
-          <ScreeningFields values={screening} onChange={setScreening} disabled={locked} disabledKeys={["addressParallelism", "daysAtOnce"]} speedOnly={isCombined} />
-          {stopChanged && !locked && (
-            <p className="flex items-start gap-1.5 text-xs text-amber-500">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              Traders already stopped early are queued again and judged on the new rules; results so far are kept.
-            </p>
-          )}
+          <Group title="Timing" summary={timingSummary} note={locked ? "Locked while it runs." : undefined}>
+            <TimingFields values={timing} onChange={setTiming} disabled={locked} />
+            {timingChanged && !recopy && <Notice>Changing the timing clears the results so far and every address is simulated again (collected transactions are reused).</Notice>}
+          </Group>
+
+          <Group title={isCombined ? "Speed" : "Speed and loss traders"} summary={speedSummary} note={locked ? "The address and day counts can change while it runs." : undefined}>
+            <ScreeningFields values={screening} onChange={setScreening} disabled={locked} disabledKeys={["addressParallelism", "daysAtOnce"]} speedOnly={isCombined} />
+            {stopChanged && !locked && <Notice>Traders already stopped early are queued again and judged on the new rules; results so far are kept.</Notice>}
+          </Group>
         </div>
 
         <DialogFooter>
@@ -238,7 +222,7 @@ export function EditRunDialog({ run, open, onOpenChange, onSaved }: Props) {
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
           <Button onClick={save} disabled={saving || !dirty || !limitValid || !timingNumbers || !screeningNumbers || (!!combined && !combinedNumbers)}>
-            {saving && <Loader2 className="size-4 animate-spin" />}
+            {saving && <Loader2 className="animate-spin" />}
             Save
           </Button>
         </DialogFooter>

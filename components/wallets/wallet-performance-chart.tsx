@@ -70,17 +70,17 @@ function ChartTooltip({ active, payload, mode }: { active?: boolean; payload?: A
   if (!active || !payload?.length) return null;
   const p = payload[0].payload;
   return (
-    <div className="rounded-lg border border-border/60 bg-popover px-3 py-2 text-xs shadow-md">
-      <div className="font-medium text-foreground">{p.title}</div>
-      <div className="mt-1 flex flex-col gap-0.5 text-muted-foreground">
+    <div className="rounded-xl border border-line-2 bg-popover px-3 py-2.5 text-xs shadow-[0_12px_32px_rgba(0,0,0,0.5)]">
+      <div className="text-[13px] font-medium text-foreground">{p.title}</div>
+      <div className="mt-1 flex flex-col gap-0.5 text-text-2">
         {mode === "value" ? (
           <span>
-            Value: <span className="text-foreground">{p.value !== null ? formatUsd(p.value) : "—"}</span>
+            Value: <b className="font-semibold text-foreground tabular-nums">{p.value !== null ? formatUsd(p.value) : "—"}</b>
             {p.valueEstimated && <span className="ml-1 opacity-70">(estimated)</span>}
           </span>
         ) : (
           <span>
-            P&amp;L: <span className={p.pnl > 0 ? "text-positive" : p.pnl < 0 ? "text-negative" : "text-foreground"}>{formatUsd(p.pnl)}</span>
+            P&amp;L: <b className={`font-semibold tabular-nums ${p.pnl > 0 ? "text-positive" : p.pnl < 0 ? "text-negative" : "text-foreground"}`}>{formatUsd(p.pnl)}</b>
           </span>
         )}
         {p.trades > 0 ? (
@@ -101,7 +101,7 @@ function ChartTooltip({ active, payload, mode }: { active?: boolean; payload?: A
   );
 }
 
-const axisTick = { fill: "var(--muted-foreground)", fontSize: 11 };
+const axisTick = { fill: "var(--text-3)", fontSize: 11 };
 const margin = { top: 8, right: 8, left: 0, bottom: 0 };
 
 /**
@@ -120,13 +120,13 @@ export function WalletPerformanceChart({ points, mode }: { points: ChartPoint[];
       <div className="h-56 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={points} margin={margin}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-            <XAxis dataKey="tick" tick={axisTick} axisLine={{ stroke: "var(--border)" }} tickLine={false} minTickGap={12} interval={tickInterval} />
+            <CartesianGrid strokeDasharray="0" stroke="var(--line)" vertical={false} />
+            <XAxis dataKey="tick" tick={axisTick} axisLine={{ stroke: "var(--line-2)" }} tickLine={false} minTickGap={12} interval={tickInterval} />
             <YAxis tickFormatter={(v: number) => formatUsd(v)} tick={axisTick} axisLine={false} tickLine={false} width={64} />
-            <ReferenceLine y={0} stroke="var(--border)" />
-            <Tooltip content={<ChartTooltip mode="pnl" />} cursor={{ fill: "var(--muted)", opacity: 0.4 }} />
-            <Bar dataKey="gain" stackId="pnl" fill="var(--positive)" radius={[3, 3, 0, 0]} />
-            <Bar dataKey="loss" stackId="pnl" fill="var(--negative)" radius={[0, 0, 3, 3]} />
+            <ReferenceLine y={0} stroke="var(--line-2)" />
+            <Tooltip content={<ChartTooltip mode="pnl" />} cursor={{ fill: "var(--surface-3)", opacity: 0.5 }} />
+            <Bar dataKey="gain" stackId="pnl" fill="var(--positive)" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="loss" stackId="pnl" fill="var(--negative)" radius={[0, 0, 4, 4]} />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -151,8 +151,8 @@ export function WalletPerformanceChart({ points, mode }: { points: ChartPoint[];
               <stop offset="100%" stopColor={color} stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-          <XAxis dataKey="tick" tick={axisTick} axisLine={{ stroke: "var(--border)" }} tickLine={false} minTickGap={12} interval={tickInterval} />
+          <CartesianGrid strokeDasharray="0" stroke="var(--line)" vertical={false} />
+          <XAxis dataKey="tick" tick={axisTick} axisLine={{ stroke: "var(--line-2)" }} tickLine={false} minTickGap={12} interval={tickInterval} />
           <YAxis
             domain={["auto", "auto"]}
             tickFormatter={(v: number) => formatUsd(v)}
@@ -161,7 +161,7 @@ export function WalletPerformanceChart({ points, mode }: { points: ChartPoint[];
             tickLine={false}
             width={64}
           />
-          <Tooltip content={<ChartTooltip mode="value" />} />
+          <Tooltip content={<ChartTooltip mode="value" />} cursor={{ stroke: "var(--line-3)", strokeDasharray: "3 4" }} />
           <Area
             type="monotone"
             dataKey="value"
@@ -170,6 +170,7 @@ export function WalletPerformanceChart({ points, mode }: { points: ChartPoint[];
             fill="url(#walletValueGradient)"
             connectNulls={false}
             dot={plotted.length <= 3 ? { r: 3, fill: color } : false}
+            activeDot={{ r: 5, fill: color, stroke: "var(--card)", strokeWidth: 2 }}
           />
         </AreaChart>
       </ResponsiveContainer>
@@ -178,5 +179,5 @@ export function WalletPerformanceChart({ points, mode }: { points: ChartPoint[];
 }
 
 function EmptyState({ children }: { children: React.ReactNode }) {
-  return <div className="flex h-56 items-center justify-center px-4 text-center text-sm text-muted-foreground">{children}</div>;
+  return <div className="flex h-56 items-center justify-center px-4 text-center text-sm text-text-2">{children}</div>;
 }

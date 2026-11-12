@@ -1,15 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Coins, RefreshCw, RotateCcw, ShieldAlert, SlidersHorizontal, Timer, Wallet } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Check, Info, RotateCcw, Timer, TriangleAlert, Waves, Wallet, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,11 +16,13 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
+  AlertDialogMedia,
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { resetTrader, updateTraderSettings } from "@/lib/api";
 import { useProfile } from "@/lib/profile-context";
+import { cn } from "@/lib/utils";
 import type { EffectiveSettings, TraderDetail, TraderSimSettings, TrailingStop } from "@/lib/types";
 import { TrailingStopsEditor } from "@/components/trailing-stops-editor";
 
@@ -34,10 +34,22 @@ type Props = {
   onReset?: (trader: TraderDetail) => void;
 };
 
+/** "Profile default" / "Overridden" tag on the right of a field's label. */
+function SourceBadge({ overridden }: { overridden: boolean }) {
+  return overridden ? (
+    <span className="inline-flex h-[22px] items-center gap-1.5 rounded-full border border-volt-line bg-volt-soft px-2 text-[11.5px] font-medium text-primary">
+      <span className="size-[7px] rounded-full bg-primary shadow-[0_0_0_3px_var(--volt-soft)]" />
+      Overridden
+    </span>
+  ) : (
+    <span className="inline-flex h-[22px] items-center rounded-full border border-line-2 bg-surface-3 px-2 text-[11.5px] font-medium text-text-2">Profile default</span>
+  );
+}
+
 function OverrideField({
   id,
   label,
-  description,
+  help,
   override,
   effective,
   onSave,
@@ -49,7 +61,7 @@ function OverrideField({
 }: {
   id: string;
   label: string;
-  description: string;
+  help: string;
   override: number | null;
   effective: number;
   onSave: (value: number) => void;
@@ -60,11 +72,12 @@ function OverrideField({
   min?: number;
 }) {
   const [draft, setDraft] = useState<string>(override !== null ? String(override) : "");
+  const inputRef = useRef<HTMLInputElement>(null);
   const isOverridden = override !== null;
 
   function commit() {
     if (draft === "") {
-      onClear();
+      if (isOverridden) onClear(); // emptying an overridden field goes back to the profile default
       return;
     }
     const num = Number(draft);
@@ -72,40 +85,22 @@ function OverrideField({
       setDraft(override !== null ? String(override) : "");
       return;
     }
-    onSave(num);
+    if (num !== override) onSave(num);
   }
 
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <Label htmlFor={id}>{label}</Label>
-        {isOverridden ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={() => {
-                  setDraft("");
-                  onClear();
-                }}
-                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary"
-              >
-                <RotateCcw className="size-3" /> reset to default
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>Clears the override and inherits the global default again</TooltipContent>
-          </Tooltip>
-        ) : (
-          <span className="text-[11px] text-muted-foreground">inherited: {prefix ?? ""}{effective}{suffix ?? ""}</span>
-        )}
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor={id}>
+          {label}
+          <HelpTip>{help}</HelpTip>
+        </Label>
+        <SourceBadge overridden={isOverridden} />
       </div>
       <div className="relative">
-        {prefix && (
-          <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-            {prefix}
-          </span>
-        )}
+        {prefix && <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-text-3">{prefix}</span>}
         <Input
+          ref={inputRef}
           id={id}
           type="number"
           step={step}
@@ -115,15 +110,68 @@ function OverrideField({
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => e.key === "Enter" && commit()}
-          className={`${prefix ? "pl-7" : ""} ${suffix ? "pr-10" : ""} ${isOverridden ? "border-primary/50" : ""}`}
+          className={cn(prefix && "pl-7", suffix && "pr-11", isOverridden ? "border-primary" : "placeholder:text-text-3")}
         />
-        {suffix && (
-          <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
-            {suffix}
-          </span>
+        {suffix && <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[13px] text-text-3">{suffix}</span>}
+      </div>
+      <div className="flex items-center justify-between">
+        {isOverridden ? (
+          <button
+            type="button"
+            onClick={() => {
+              setDraft("");
+              onClear();
+            }}
+            className="inline-flex min-h-6 items-center gap-1 text-xs font-medium text-text-2 hover:text-primary"
+          >
+            <RotateCcw className="size-3" /> Reset to default
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(String(effective));
+              inputRef.current?.focus();
+            }}
+            className="inline-flex min-h-6 items-center text-xs font-medium text-primary hover:text-[var(--volt-hover)]"
+          >
+            Override
+          </button>
         )}
       </div>
-      <p className="text-xs text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
+/** A switch row: the stop-loss / take-profit / negative-balance style of setting. */
+function ToggleRow({ title, status, children }: { title: string; status: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-[14px] border border-border bg-surface-2 px-3.5 py-3">
+      <div className="flex min-w-0 flex-col">
+        <b className="text-[13px] font-semibold">{title}</b>
+        <span className="text-xs text-text-3">{status}</span>
+      </div>
+      <div className="flex shrink-0 items-center gap-2.5">{children}</div>
+    </div>
+  );
+}
+
+function PercentInput({ defaultValue, onCommit, label }: { defaultValue: number | null; onCommit: (n: number) => void; label: string }) {
+  return (
+    <div className="relative w-24">
+      <Input
+        type="number"
+        step={5}
+        min={1}
+        aria-label={label}
+        className="h-9 rounded-lg border-primary pr-7 text-[13px] md:text-[13px]"
+        defaultValue={defaultValue ?? undefined}
+        onBlur={(e) => {
+          const num = Number(e.target.value);
+          if (Number.isFinite(num) && num !== defaultValue) onCommit(num);
+        }}
+      />
+      <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs text-text-3">%</span>
     </div>
   );
 }
@@ -153,41 +201,85 @@ function TrailingStopsOverride({
   }, [override, effective, dirty]);
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col">
-          <span className="text-sm font-medium">Trailing stops</span>
-          <span className="text-xs text-muted-foreground">
-            {isOverridden
-              ? "Overridden for this trader"
-              : `Inherited from global default (${effective.length} rule${effective.length === 1 ? "" : "s"})`}
-          </span>
+    <section id="settings-trailing" className="scroll-mt-24 overflow-hidden rounded-[20px] border border-border bg-card">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3.5 md:px-5 md:py-4">
+        <h3 className="flex items-center gap-2 text-[15px] font-semibold">
+          <Waves className="size-4 text-primary" /> Trailing stops
+        </h3>
+        <div className="flex items-center gap-2.5">
+          <SourceBadge overridden={isOverridden} />
+          <Switch
+            aria-label="Override trailing stops"
+            checked={isOverridden}
+            onCheckedChange={(checked) => {
+              if (checked) {
+                setDraft(effective);
+                onSave(effective); // starts the override as a copy of the current effective list
+              } else {
+                onClear();
+              }
+            }}
+          />
         </div>
-        <Switch
-          checked={isOverridden}
-          onCheckedChange={(checked) => {
-            if (checked) {
-              setDraft(effective);
-              onSave(effective); // starts the override as a copy of the current effective list
-            } else {
-              onClear();
-            }
-          }}
-        />
       </div>
-      <TrailingStopsEditor value={draft} onChange={setDraft} disabled={!isOverridden} />
-      {isOverridden && dirty && (
-        <Button size="sm" className="w-fit" onClick={() => onSave(draft)}>
-          Save rules
-        </Button>
-      )}
-    </div>
+      <div className="flex flex-col gap-3 p-4 md:p-5">
+        {!isOverridden && <span className="text-xs text-text-3">Inherited from the profile ({effective.length} rule{effective.length === 1 ? "" : "s"}). Turn the switch on to set your own for this trader.</span>}
+        <div className={cn(!isOverridden && "opacity-60")}>
+          <TrailingStopsEditor
+            value={draft}
+            onChange={setDraft}
+            disabled={!isOverridden}
+            actions={
+              isOverridden && dirty ? (
+                <>
+                  <Button size="sm" onClick={() => onSave(draft)}>
+                    Save rules
+                  </Button>
+                  <span className="text-xs text-warn">unsaved edits</span>
+                </>
+              ) : null
+            }
+          />
+        </div>
+      </div>
+    </section>
   );
 }
 
+function SectionCard({ id, icon: Icon, title, children, danger }: { id: string; icon: typeof Wallet; title: string; children: React.ReactNode; danger?: boolean }) {
+  return (
+    <section id={id} className={cn("scroll-mt-24 overflow-hidden rounded-[20px] border bg-card", danger ? "border-destructive/35" : "border-border")}>
+      <div className="border-b border-border px-4 py-3.5 md:px-5 md:py-4">
+        <h3 className={cn("flex items-center gap-2 text-[15px] font-semibold", danger && "text-negative")}>
+          <Icon className={cn("size-4", danger ? "text-negative" : "text-primary")} /> {title}
+        </h3>
+      </div>
+      <div className="flex flex-col gap-5 p-4 md:p-5">{children}</div>
+    </section>
+  );
+}
+
+const SECTIONS = [
+  { id: "settings-capital", label: "Capital", icon: Wallet },
+  { id: "settings-filters", label: "Buy / sell filters", icon: Filter },
+  { id: "settings-risk", label: "Risk exits", icon: TriangleAlert },
+  { id: "settings-execution", label: "Execution & fees", icon: Timer },
+  { id: "settings-danger", label: "Danger zone", icon: TriangleAlert, danger: true },
+] as const;
+
 export function TraderSettingsPanel({ address, settings, effectiveSettings, onUpdated, onReset }: Props) {
-  const { currentProfileId } = useProfile();
+  const { currentProfileId, currentProfile } = useProfile();
   const [resetting, setResetting] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [activeSection, setActiveSection] = useState<string>(SECTIONS[0].id);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+    },
+    []
+  );
 
   async function save(patch: Partial<TraderSimSettings>) {
     if (!currentProfileId) return;
@@ -195,6 +287,9 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
       const result = await updateTraderSettings(currentProfileId, address, patch);
       onUpdated(result);
       toast.success("Trader setting updated");
+      setSaved(true);
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSaved(false), 3000);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update setting");
     }
@@ -214,26 +309,56 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
     }
   }
 
+  function goTo(id: string) {
+    setActiveSection(id);
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   const stopLossOverridden = settings.stopLossPercent !== null;
   const takeProfitOverridden = settings.takeProfitPercent !== null;
   const negBalanceOverridden = settings.allowNegativeBalance !== null;
+  const profileName = currentProfile?.name ?? "the profile";
 
   return (
-    <Card className="border-border/60">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <SlidersHorizontal className="size-4 text-primary" /> Trader settings
-        </CardTitle>
-        <CardDescription>
-          Overrides for this trader only. Anything left blank inherits the global default from Settings.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-5">
-        <div>
-          <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Wallet className="size-3.5" /> CAPITAL
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-3 rounded-[14px] border border-info/30 bg-info-soft px-4 py-3 text-[13px] leading-5 text-[#c7e2ff]">
+        <Info className="size-4 shrink-0 text-info" />
+        <span className="min-w-0 flex-1">
+          Everything inherits from <b>{profileName}</b> until you override it. Each field saves as you leave it.
+        </span>
+        {saved && (
+          <span className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-full border border-positive/30 bg-pos-soft px-2 text-[11.5px] font-medium text-positive max-sm:hidden">
+            <Check className="size-3" /> Trader setting updated
+          </span>
+        )}
+      </div>
+
+      <div className="grid items-start gap-4 lg:grid-cols-[220px_1fr] lg:gap-8">
+        {/* Section links: a sticky list beside the cards on wide screens, a row of chips on phones. */}
+        <nav aria-label="Settings sections" className="flex gap-2 overflow-x-auto max-lg:-mx-4 max-lg:px-4 lg:sticky lg:top-24 lg:flex-col lg:gap-0.5 lg:overflow-visible">
+          {SECTIONS.map((s) => {
+            const danger = "danger" in s && s.danger;
+            const active = activeSection === s.id;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => goTo(s.id)}
+                className={cn(
+                  "flex h-10 shrink-0 items-center gap-2.5 rounded-full border px-4 text-sm whitespace-nowrap transition-colors lg:h-[38px] lg:rounded-[10px] lg:border-transparent lg:px-3",
+                  active ? "border-volt-line bg-volt-soft text-primary lg:bg-surface-3 lg:text-foreground" : "border-line-2 bg-card text-text-2 hover:text-foreground lg:bg-transparent",
+                  danger && "text-negative hover:text-negative"
+                )}
+              >
+                <s.icon className={cn("size-4", active && !danger && "lg:text-primary")} />
+                {s.label}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="flex min-w-0 flex-col gap-4">
+          <SectionCard id="settings-capital" icon={Wallet} title="Capital">
             <OverrideField
               id="ov-allocation"
               label="Starting allocation"
@@ -244,7 +369,7 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
               effective={effectiveSettings.allocationUsd}
               onSave={(v) => save({ allocationUsd: v })}
               onClear={() => save({ allocationUsd: null })}
-              description="Only takes effect before this trader's balance has been initialized."
+              help="Only takes effect before this trader's balance has been initialized."
             />
             <OverrideField
               id="ov-tradeSize"
@@ -256,18 +381,11 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
               effective={effectiveSettings.tradeSizeUsd}
               onSave={(v) => save({ tradeSizeUsd: v })}
               onClear={() => save({ tradeSizeUsd: null })}
-              description="USD spent per simulated buy for this trader."
+              help="USD spent per simulated buy for this trader."
             />
-          </div>
-        </div>
+          </SectionCard>
 
-        <Separator />
-
-        <div>
-          <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Coins className="size-3.5" /> BUY / SELL FILTERS
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <SectionCard id="settings-filters" icon={Filter} title="Buy / sell filters">
             <OverrideField
               id="ov-dustBuy"
               label="Dust-buy threshold"
@@ -278,7 +396,7 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
               effective={effectiveSettings.dustBuyUsd}
               onSave={(v) => save({ dustBuyUsd: v })}
               onClear={() => save({ dustBuyUsd: null })}
-              description="Ignore this trader's buys below this USD value."
+              help="Ignore this trader's buys below this USD value."
             />
             <OverrideField
               id="ov-dustSell"
@@ -290,81 +408,38 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
               effective={effectiveSettings.dustSellFractionPercent}
               onSave={(v) => save({ dustSellFractionPercent: v })}
               onClear={() => save({ dustSellFractionPercent: null })}
-              description="Ignore a sell under this % of their total bought amount."
+              help="Ignore a sell under this % of their total bought amount."
             />
-          </div>
-        </div>
+          </SectionCard>
 
-        <Separator />
+          <SectionCard id="settings-risk" icon={TriangleAlert} title="Risk exits">
+            <ToggleRow
+              title="Stop-loss"
+              status={
+                stopLossOverridden
+                  ? "Overridden for this trader"
+                  : effectiveSettings.stopLossPercent !== null
+                    ? `Inherited from profile: ${effectiveSettings.stopLossPercent}%`
+                    : "Inherited from profile: disabled"
+              }
+            >
+              {stopLossOverridden && <PercentInput label="Stop-loss percent" defaultValue={settings.stopLossPercent} onCommit={(n) => save({ stopLossPercent: n })} />}
+              <Switch aria-label="Override stop-loss" checked={stopLossOverridden} onCheckedChange={(checked) => save({ stopLossPercent: checked ? (effectiveSettings.stopLossPercent ?? 60) : null })} />
+            </ToggleRow>
 
-        <div>
-          <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <ShieldAlert className="size-3.5" /> RISK
-          </div>
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-              <div className="flex min-w-0 flex-col">
-                <span className="text-sm font-medium">Stop-loss</span>
-                <span className="text-xs text-muted-foreground">
-                  {stopLossOverridden
-                    ? `Overridden for this trader: ${settings.stopLossPercent}%`
-                    : effectiveSettings.stopLossPercent !== null
-                      ? `Inherited from global default: ${effectiveSettings.stopLossPercent}%`
-                      : "Inherited from global default: disabled"}
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                {stopLossOverridden && (
-                  <Input
-                    type="number"
-                    step={5}
-                    min={1}
-                    className="h-8 w-20"
-                    defaultValue={settings.stopLossPercent ?? undefined}
-                    onBlur={(e) => {
-                      const num = Number(e.target.value);
-                      if (Number.isFinite(num)) save({ stopLossPercent: num });
-                    }}
-                  />
-                )}
-                <Switch
-                  checked={stopLossOverridden}
-                  onCheckedChange={(checked) => save({ stopLossPercent: checked ? effectiveSettings.stopLossPercent ?? 60 : null })}
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-              <div className="flex min-w-0 flex-col">
-                <span className="text-sm font-medium">Take-profit</span>
-                <span className="text-xs text-muted-foreground">
-                  {takeProfitOverridden
-                    ? `Overridden for this trader: ${settings.takeProfitPercent}%`
-                    : effectiveSettings.takeProfitPercent !== null
-                      ? `Inherited from global default: ${effectiveSettings.takeProfitPercent}%`
-                      : "Inherited from global default: disabled"}
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                {takeProfitOverridden && (
-                  <Input
-                    type="number"
-                    step={5}
-                    min={1}
-                    className="h-8 w-20"
-                    defaultValue={settings.takeProfitPercent ?? undefined}
-                    onBlur={(e) => {
-                      const num = Number(e.target.value);
-                      if (Number.isFinite(num)) save({ takeProfitPercent: num });
-                    }}
-                  />
-                )}
-                <Switch
-                  checked={takeProfitOverridden}
-                  onCheckedChange={(checked) => save({ takeProfitPercent: checked ? effectiveSettings.takeProfitPercent ?? 80 : null })}
-                />
-              </div>
-            </div>
+            <ToggleRow
+              title="Take-profit"
+              status={
+                takeProfitOverridden
+                  ? "Overridden for this trader"
+                  : effectiveSettings.takeProfitPercent !== null
+                    ? `Inherited from profile: ${effectiveSettings.takeProfitPercent}%`
+                    : "Inherited from profile: disabled"
+              }
+            >
+              {takeProfitOverridden && <PercentInput label="Take-profit percent" defaultValue={settings.takeProfitPercent} onCommit={(n) => save({ takeProfitPercent: n })} />}
+              <Switch aria-label="Override take-profit" checked={takeProfitOverridden} onCheckedChange={(checked) => save({ takeProfitPercent: checked ? (effectiveSettings.takeProfitPercent ?? 80) : null })} />
+            </ToggleRow>
 
             <OverrideField
               id="ov-maxTradeTime"
@@ -376,55 +451,22 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
               effective={effectiveSettings.maxTradeTimeSeconds / 60}
               onSave={(v) => save({ maxTradeTimeSeconds: Math.max(0, v) * 60 })}
               onClear={() => save({ maxTradeTimeSeconds: null })}
-              description="0 = no limit. e.g. 30 force-sells after 30 minutes if the trader still hasn't sold."
+              help="0 = no limit. e.g. 30 force-sells after 30 minutes if the trader still hasn't sold."
             />
 
-            <TrailingStopsOverride
-              override={settings.trailingStops}
-              effective={effectiveSettings.trailingStops}
-              onSave={(rules) => save({ trailingStops: rules })}
-              onClear={() => save({ trailingStops: null })}
-            />
+            <ToggleRow title="Allow negative balance" status={`${negBalanceOverridden ? "Overridden" : "Inherited from profile"} — ${effectiveSettings.allowNegativeBalance ? "on" : "off"}`}>
+              <Switch aria-label="Allow negative balance" checked={effectiveSettings.allowNegativeBalance} onCheckedChange={(checked) => save({ allowNegativeBalance: checked })} />
+              {negBalanceOverridden && (
+                <Button variant="ghost" size="icon-sm" onClick={() => save({ allowNegativeBalance: null })} aria-label="Reset to profile default" title="Reset to profile default">
+                  <RotateCcw />
+                </Button>
+              )}
+            </ToggleRow>
+          </SectionCard>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-              <div className="flex min-w-0 flex-col">
-                <span className="text-sm font-medium">Allow negative balance</span>
-                <span className="text-xs text-muted-foreground">
-                  {negBalanceOverridden ? "Overridden for this trader" : "Inherited from global default"} —{" "}
-                  {effectiveSettings.allowNegativeBalance ? "on" : "off"}
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                <Switch
-                  checked={effectiveSettings.allowNegativeBalance}
-                  onCheckedChange={(checked) => save({ allowNegativeBalance: checked })}
-                />
-                {negBalanceOverridden && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={() => save({ allowNegativeBalance: null })}
-                        className="text-muted-foreground hover:text-primary"
-                      >
-                        <RotateCcw className="size-3.5" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>Reset to global default</TooltipContent>
-                  </Tooltip>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
+          <TrailingStopsOverride override={settings.trailingStops} effective={effectiveSettings.trailingStops} onSave={(rules) => save({ trailingStops: rules })} onClear={() => save({ trailingStops: null })} />
 
-        <Separator />
-
-        <div>
-          <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Timer className="size-3.5" /> EXECUTION &amp; FEES
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <SectionCard id="settings-execution" icon={Timer} title="Execution & fees">
             <OverrideField
               id="ov-delay"
               label="Execution delay"
@@ -435,69 +477,68 @@ export function TraderSettingsPanel({ address, settings, effectiveSettings, onUp
               effective={effectiveSettings.executionDelaySeconds}
               onSave={(v) => save({ executionDelaySeconds: v })}
               onClear={() => save({ executionDelaySeconds: null })}
-              description="Simulated latency before our fill, for this trader."
+              help="Simulated latency before our fill, for this trader."
             />
-            <div className="hidden sm:block" />
-            <OverrideField
-              id="ov-pumpFee"
-              label="Pump fee"
-              suffix="%"
-              step={0.05}
-              min={0}
-              override={settings.pumpFeePercent ?? null}
-              effective={effectiveSettings.pumpFeePercent}
-              onSave={(v) => save({ pumpFeePercent: v })}
-              onClear={() => save({ pumpFeePercent: null })}
-              description="% of trade value, charged on every buy and sell for this trader."
-            />
-            <OverrideField
-              id="ov-jitoFee"
-              label="Jito fee per transaction"
-              prefix="$"
-              step={0.01}
-              min={0}
-              override={settings.jitoFeeUsd ?? null}
-              effective={effectiveSettings.jitoFeeUsd}
-              onSave={(v) => save({ jitoFeeUsd: v })}
-              onClear={() => save({ jitoFeeUsd: null })}
-              description="Flat USD per buy and per sell for this trader."
-            />
-          </div>
-        </div>
+            <div className="grid gap-5 sm:grid-cols-2 sm:gap-4">
+              <OverrideField
+                id="ov-pumpFee"
+                label="Pump fee"
+                suffix="%"
+                step={0.05}
+                min={0}
+                override={settings.pumpFeePercent ?? null}
+                effective={effectiveSettings.pumpFeePercent}
+                onSave={(v) => save({ pumpFeePercent: v })}
+                onClear={() => save({ pumpFeePercent: null })}
+                help="% of trade value, charged on every buy and sell for this trader."
+              />
+              <OverrideField
+                id="ov-jitoFee"
+                label="Jito fee per transaction"
+                prefix="$"
+                step={0.01}
+                min={0}
+                override={settings.jitoFeeUsd ?? null}
+                effective={effectiveSettings.jitoFeeUsd}
+                onSave={(v) => save({ jitoFeeUsd: v })}
+                onClear={() => save({ jitoFeeUsd: null })}
+                help="Flat USD per buy and per sell for this trader."
+              />
+            </div>
+          </SectionCard>
 
-        <Separator />
-
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-negative/30 bg-negative/10 px-4 py-3">
-          <div className="flex min-w-0 flex-col">
-            <span className="text-sm font-medium">Reset simulation</span>
-            <span className="text-xs text-muted-foreground">
-              Wipes this trader&apos;s positions and trade history, and resets balance back to their starting allocation.
-            </span>
-          </div>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm" disabled={resetting}>
-                <RefreshCw className="size-4" /> Reset
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Reset this trader&apos;s simulation?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This wipes this trader&apos;s positions, trade history, and P&amp;L back to their starting balance.
-                  This cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleReset} className="bg-negative text-negative-foreground hover:bg-negative/90">
-                  Reset
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          <SectionCard id="settings-danger" icon={TriangleAlert} title="Danger zone" danger>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 flex-col">
+                <b className="text-[13px] font-semibold">Reset simulation</b>
+                <span className="text-xs text-text-3">Wipes this trader&apos;s positions and trade history; balance returns to the starting allocation.</span>
+              </div>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" disabled={resetting}>
+                    Reset…
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogMedia className="bg-neg-soft text-negative">
+                      <RotateCcw />
+                    </AlertDialogMedia>
+                    <AlertDialogTitle>Reset this trader&apos;s simulation?</AlertDialogTitle>
+                    <AlertDialogDescription>Resets positions, trade history and P&amp;L to the starting balance. This cannot be undone.</AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleReset} className="bg-negative font-semibold text-negative-foreground hover:bg-negative/90">
+                      Reset
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          </SectionCard>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

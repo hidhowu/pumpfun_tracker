@@ -14,7 +14,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
+import { CheckMark, DialogHead } from "@/components/ui/dialog-parts";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,10 +24,12 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
+  AlertDialogMedia,
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   addTradersToList,
   deleteTraderList,
@@ -35,6 +38,7 @@ import {
   removeTradersFromList,
 } from "@/lib/api";
 import type { TraderListView } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 /** Rename/delete surface for every list - reachable from the per-row menu below, mirrors the /proxies page's row-delete pattern. */
 function ManageListsDialog({
@@ -67,39 +71,37 @@ function ManageListsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Manage lists</DialogTitle>
-          <DialogDescription>Deleting a list removes it from every trader tagged with it.</DialogDescription>
-        </DialogHeader>
+      <DialogContent className="sm:max-w-[400px]">
+        <DialogHead icon={<Tag className="size-5" />} title="Manage lists" description="Deleting a list removes it from every trader tagged with it." />
+        <p className="-mt-2 text-sm text-text-2">Deleting a list removes it from every trader tagged with it.</p>
         <div className="flex flex-col gap-1">
           {loading ? (
-            Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-9 w-full" />)
+            Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-11 w-full rounded-[10px]" />)
           ) : lists.length === 0 ? (
-            <p className="py-4 text-center text-sm text-muted-foreground">No lists yet.</p>
+            <p className="py-4 text-center text-sm text-text-3">No lists yet.</p>
           ) : (
             lists.map((list) => (
-              <div key={list._id} className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40">
+              <div key={list._id} className="flex min-h-11 items-center justify-between gap-2 rounded-[10px] px-2 even:bg-transparent odd:bg-surface-2">
                 <span className="min-w-0 truncate text-sm">
-                  {list.name} <span className="text-xs text-muted-foreground">({list.memberCount})</span>
+                  {list.name} <span className="text-xs text-text-3">({list.memberCount})</span>
                 </span>
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
-                    <Button variant="ghost" size="sm" disabled={pendingId === list._id} className="size-7 p-0 text-muted-foreground hover:text-negative">
-                      <Trash2 className="size-3.5" />
+                    <Button variant="ghost" size="icon-sm" disabled={pendingId === list._id} className="text-text-3 hover:text-negative" aria-label={`Delete ${list.name}`}>
+                      <Trash2 className="size-4" />
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
+                      <AlertDialogMedia className="bg-neg-soft text-negative">
+                        <Trash2 />
+                      </AlertDialogMedia>
                       <AlertDialogTitle>Delete &quot;{list.name}&quot;?</AlertDialogTitle>
                       <AlertDialogDescription>This removes it from every trader tagged with it.</AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction
-                        className="bg-negative text-negative-foreground hover:bg-negative/90"
-                        onClick={() => handleDelete(list)}
-                      >
+                      <AlertDialogAction className="bg-negative font-semibold text-negative-foreground hover:bg-negative/90" onClick={() => handleDelete(list)}>
                         Delete
                       </AlertDialogAction>
                     </AlertDialogFooter>
@@ -115,22 +117,20 @@ function ManageListsDialog({
 }
 
 /**
- * Per-trader "add to list(s)" action - a dropdown of every list as a
- * checkbox (toggles membership immediately), an inline create-new-list
- * field, and a "Manage lists..." entry that opens a separate dialog for
- * renaming/deleting lists (kept out of this dropdown to avoid nesting an
- * AlertDialog inside a DropdownMenu, mirroring how the profile switcher's
- * "Create new profile" item already opens a sibling Dialog rather than
- * building the form inline).
+ * Per-trader "add to list(s)" action - on a desktop a dropdown of every list as a checkbox (toggles membership immediately), an inline
+ * create-new-list field, and a "Manage lists..." entry that opens a separate dialog for deleting lists (kept out of the dropdown to avoid
+ * nesting an AlertDialog inside a DropdownMenu). On a phone the same rows are a bottom sheet with a Done button.
  */
 export function ManageListsMenu({
   traderAddress,
   currentListIds,
   onChanged,
+  triggerClassName,
 }: {
   traderAddress: string;
   currentListIds: string[];
   onChanged: () => void;
+  triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
@@ -139,6 +139,7 @@ export function ManageListsMenu({
   const [pendingListId, setPendingListId] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+  const phone = !useMediaQuery("(min-width: 768px)");
 
   const refreshLists = () => {
     setLoading(true);
@@ -182,21 +183,96 @@ export function ManageListsMenu({
     }
   }
 
+  const trigger = (
+    <Button variant="ghost" size="sm" className={cn("size-7 p-0 text-text-2 hover:text-foreground", triggerClassName)} aria-label="Add to list" onClick={phone ? () => setOpen(true) : undefined}>
+      <Tag className="size-3.5" />
+    </Button>
+  );
+
+  const manageDialog = (
+    <ManageListsDialog
+      open={manageOpen}
+      onOpenChange={setManageOpen}
+      lists={lists}
+      loading={loading}
+      onListDeleted={(id) => {
+        setLists((prev) => prev.filter((l) => l._id !== id));
+        onChanged();
+      }}
+    />
+  );
+
+  if (phone) {
+    return (
+      <>
+        {trigger}
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogContent>
+            <DialogHead icon={<Tag className="size-5" />} title="Add to list" description="Tick the lists this trader belongs to." />
+            <div className="flex flex-col">
+              {loading && lists.length === 0 ? (
+                <Skeleton className="h-14 w-full rounded-[10px]" />
+              ) : lists.length === 0 ? (
+                <p className="py-3 text-sm text-text-3">No lists yet - create one below.</p>
+              ) : (
+                lists.map((list) => {
+                  const checked = (currentListIds ?? []).includes(list._id);
+                  return (
+                    <button
+                      key={list._id}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={checked}
+                      disabled={pendingListId === list._id}
+                      onClick={() => toggle(list, !checked)}
+                      className="flex min-h-14 items-center gap-3 border-b border-border text-left text-[15px] last:border-b-0"
+                    >
+                      <CheckMark checked={checked} className="size-[22px]" />
+                      <span className="min-w-0 flex-1 truncate">{list.name}</span>
+                      {pendingListId === list._id ? <Loader2 className="size-4 shrink-0 animate-spin text-text-3" /> : <span className="text-xs text-text-3">{list.memberCount}</span>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Input value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleCreate()} placeholder="New list name" aria-label="New list name" className="h-12 text-base" />
+              <Button variant="outline" size="icon-lg" className="size-12 shrink-0" disabled={creating || !newName.trim()} onClick={handleCreate} aria-label="Create list">
+                {creating ? <Loader2 className="animate-spin" /> : <Plus />}
+              </Button>
+            </div>
+            <DialogFooter className="flex-col">
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setOpen(false);
+                  setManageOpen(true);
+                }}
+              >
+                Manage lists…
+              </Button>
+              <Button size="lg" onClick={() => setOpen(false)}>
+                Done
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        {manageDialog}
+      </>
+    );
+  }
+
   return (
     <>
       <DropdownMenu open={open} onOpenChange={setOpen}>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="size-7 p-0 text-muted-foreground hover:text-foreground" aria-label="Add to list">
-            <Tag className="size-3.5" />
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
           <DropdownMenuLabel>Add to list</DropdownMenuLabel>
           <DropdownMenuSeparator />
           {loading ? (
-            <div className="px-2 py-1.5 text-xs text-muted-foreground">Loading…</div>
+            <div className="px-2 py-1.5 text-xs text-text-3">Loading…</div>
           ) : lists.length === 0 ? (
-            <div className="px-2 py-1.5 text-xs text-muted-foreground">No lists yet - create one below.</div>
+            <div className="px-2 py-1.5 text-xs text-text-3">No lists yet - create one below.</div>
           ) : (
             lists.map((list) => (
               <DropdownMenuCheckboxItem
@@ -220,7 +296,7 @@ export function ManageListsMenu({
               placeholder="New list name"
               className="h-7 text-xs"
             />
-            <Button size="sm" variant="ghost" className="size-7 shrink-0 p-0" disabled={creating || !newName.trim()} onClick={handleCreate}>
+            <Button size="sm" variant="ghost" className="size-7 shrink-0 p-0" disabled={creating || !newName.trim()} onClick={handleCreate} aria-label="Create list">
               {creating ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
             </Button>
           </div>
@@ -231,23 +307,13 @@ export function ManageListsMenu({
               setOpen(false);
               setManageOpen(true);
             }}
-            className="text-muted-foreground"
+            className="text-text-2"
           >
             Manage lists…
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-
-      <ManageListsDialog
-        open={manageOpen}
-        onOpenChange={setManageOpen}
-        lists={lists}
-        loading={loading}
-        onListDeleted={(id) => {
-          setLists((prev) => prev.filter((l) => l._id !== id));
-          onChanged();
-        }}
-      />
+      {manageDialog}
     </>
   );
 }

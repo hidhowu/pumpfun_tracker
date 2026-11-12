@@ -2,7 +2,8 @@
 
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DialogFooter } from "@/components/ui/dialog";
+import { DialogHead } from "./dialog-parts";
 import { ProgressBar } from "./shared";
 
 export type BatchState = { done: number; total: number; lines: string[] };
@@ -15,21 +16,24 @@ export function BatchProgress({ title, note, state, stopping, onStop }: { title:
   const percent = state.total > 0 ? Math.min(100, (state.done / state.total) * 100) : 0;
   return (
     <>
-      <DialogHeader>
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{note}</DialogDescription>
-      </DialogHeader>
-      <div className="flex flex-col gap-3 py-2">
+      <DialogHead icon={<Loader2 className="size-5 animate-spin" />} title={title} help={note} description={note} />
+      <div className="flex flex-col gap-3 rounded-2xl border border-border bg-surface-2 p-4">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="flex items-center gap-2 text-sm font-medium">
-            <Loader2 className="size-4 animate-spin text-primary" />
+          <span className="text-sm font-medium tabular-nums">
             {state.done.toLocaleString()} of {state.total.toLocaleString()}
           </span>
-          <span className="text-sm tabular-nums text-muted-foreground">{Math.round(percent)}%</span>
+          <b className="text-sm font-semibold tabular-nums text-primary">{Math.round(percent)}%</b>
         </div>
         <ProgressBar percent={percent} className="h-2" />
-        {state.lines.length > 0 && <p className="text-xs text-muted-foreground">{state.lines.join(" · ")}</p>}
+        {state.lines.length > 0 && (
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-2">
+            {state.lines.map((line) => (
+              <span key={line}>{line}</span>
+            ))}
+          </div>
+        )}
       </div>
+      <p className="-mt-1 text-xs text-text-3">Closing is disabled while it works.</p>
       {onStop && (
         <DialogFooter>
           <Button variant="outline" disabled={stopping} onClick={onStop}>

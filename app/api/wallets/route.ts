@@ -3,6 +3,7 @@ import { connectDb } from "@/db/connect";
 import { requireApiSession } from "@/lib/auth/session";
 import { createWallet, listWallets } from "@/db/walletService";
 import { applyDailyBalanceResets } from "@/db/simulation/walletSnapshot";
+import { LiveWallet } from "@/db/models/LiveWallet";
 
 export async function GET() {
   const denied = await requireApiSession();
@@ -11,7 +12,10 @@ export async function GET() {
   // Backstop for the daemon's minute-by-minute check - see applyDailyBalanceResets.
   await applyDailyBalanceResets().catch(() => {});
   const wallets = await listWallets();
-  return NextResponse.json({ wallets: JSON.parse(JSON.stringify(wallets)) });
+  // Read-only flag for the list: which simulation wallets have a live wallet connected to them.
+  const linked = new Set((await LiveWallet.distinct("connectedWalletId")).filter(Boolean).map(String));
+  const withLink = JSON.parse(JSON.stringify(wallets)).map((w: { _id: string }) => ({ ...w, linkedLive: linked.has(String(w._id)) }));
+  return NextResponse.json({ wallets: withLink });
 }
 
 /** Body: { name: string, startingBalanceUsd: number } */

@@ -2,21 +2,13 @@
 
 import { useDeferredValue, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Plus } from "lucide-react";
+import { ListPlus, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { addBacktestAddresses, type AddressEntry } from "@/lib/backtest-api";
+import { cn } from "@/lib/utils";
+import { DialogHead, Field } from "./dialog-parts";
 import { ProgressBar } from "./shared";
 
 const ADDRESS_LIKE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -72,7 +64,7 @@ export function parseAddressInput(text: string): { entries: Array<{ address: str
   return { entries: out };
 }
 
-export function AddAddressesDialog({ onAdded }: { onAdded: () => void }) {
+export function AddAddressesDialog({ onAdded, triggerClassName }: { onAdded: () => void; triggerClassName?: string }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   // null = not adding. While a big paste is being sent the dialog shows a progress screen instead of the form.
@@ -170,40 +162,37 @@ export function AddAddressesDialog({ onAdded }: { onAdded: () => void }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !adding && setOpen(next)}>
       <DialogTrigger asChild>
-        <Button className="gap-1.5">
+        <Button className={cn("gap-1.5", triggerClassName)}>
           <Plus className="size-4" />
           Add addresses
         </Button>
       </DialogTrigger>
-      <DialogContent
-        className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-lg"
-        onInteractOutside={(e) => adding && e.preventDefault()}
-        onEscapeKeyDown={(e) => adding && e.preventDefault()}
-      >
+      <DialogContent className="sm:max-w-[560px]" onInteractOutside={(e) => adding && e.preventDefault()} onEscapeKeyDown={(e) => adding && e.preventDefault()}>
         {adding && tally ? (
           <>
-            <DialogHeader>
-              <DialogTitle>Adding addresses…</DialogTitle>
-              <DialogDescription>
-                Sent in batches of {BATCH_SIZE} so the page and the server stay responsive. Closing is disabled until it finishes or you stop it.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex flex-col gap-3 py-2">
+            <DialogHead icon={<Loader2 className="size-5 animate-spin" />} title="Adding addresses…" help={`Sent in batches of ${BATCH_SIZE.toLocaleString()} so the page and the server stay responsive.`} />
+            <div className="flex flex-col gap-3 rounded-2xl border border-border bg-surface-2 p-4">
               <div className="flex items-baseline justify-between gap-2">
-                <span className="flex items-center gap-2 text-sm font-medium">
-                  <Loader2 className="size-4 animate-spin text-primary" />
+                <span className="text-sm font-medium tabular-nums">
                   {tally.done.toLocaleString()} of {tally.total.toLocaleString()}
                 </span>
-                <span className="text-sm tabular-nums text-muted-foreground">{Math.round((tally.done / tally.total) * 100)}%</span>
+                <b className="text-sm font-semibold tabular-nums text-primary">{Math.round((tally.done / tally.total) * 100)}%</b>
               </div>
               <ProgressBar percent={(tally.done / tally.total) * 100} className="h-2" />
-              <p className="text-xs text-muted-foreground">
-                {tally.added.toLocaleString()} added · {tally.skipped.toLocaleString()} already on the list
-                {tally.updated ? ` · ${tally.updated.toLocaleString()} updated` : ""}
-                {tally.blacklisted ? ` · ${tally.blacklisted.toLocaleString()} blacklisted` : ""}
-                {tally.invalid.length ? ` · ${tally.invalid.length} invalid` : ""}
-              </p>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-2">
+                <span>{tally.added.toLocaleString()} added</span>
+                <span>{tally.skipped.toLocaleString()} already on the list</span>
+                {tally.updated ? <span>{tally.updated.toLocaleString()} updated</span> : null}
+                {tally.blacklisted || tally.invalid.length ? (
+                  <span>
+                    {tally.blacklisted ? `${tally.blacklisted.toLocaleString()} blacklisted` : ""}
+                    {tally.blacklisted && tally.invalid.length ? " · " : ""}
+                    {tally.invalid.length ? `${tally.invalid.length} invalid` : ""}
+                  </span>
+                ) : null}
+              </div>
             </div>
+            <p className="-mt-1 text-xs text-text-3">Closing is disabled while it works.</p>
             <DialogFooter>
               <Button
                 variant="outline"
@@ -219,17 +208,23 @@ export function AddAddressesDialog({ onAdded }: { onAdded: () => void }) {
           </>
         ) : (
           <>
-            <DialogHeader>
-              <DialogTitle>Add addresses to backtest</DialogTitle>
-              <DialogDescription>
-                Paste JSON with each wallet&apos;s pump.fun user ID if you have it - the trades come straight from pump.fun, and the address is tried as a backup.
-                Plain addresses (one per line, optionally followed by a label) work too: pump.fun accepts the wallet address in place of the user ID.
-                Pasting an address that is already listed with a user ID gives it that ID. Adding one never affects your Traders list. Thousands at once are
-                fine - they are sent in batches.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-1.5">
-              <Label htmlFor="backtest-addresses">Addresses</Label>
+            <DialogHead
+              icon={<ListPlus className="size-5" />}
+              title="Add addresses to backtest"
+              help="Paste JSON with each wallet's pump.fun user ID for faster reads, or plain addresses one per line (optionally followed by a label). An address already listed gets the user ID. Adding never affects your Traders list; thousands at once are sent in batches."
+              description="Paste the addresses to put on the backtest list."
+            />
+            <Field
+              label="Addresses"
+              htmlFor="backtest-addresses"
+              note={
+                <>
+                  {detected.entries.length.toLocaleString()} address(es) detected{detected.entries.length > 0 ? ` · ${withUserId.toLocaleString()} with a user ID` : ""}
+                  {detected.entries.length > BATCH_SIZE ? ` · will be sent in ${Math.ceil(detected.entries.length / BATCH_SIZE)} batches` : ""}
+                  {detected.error ? <span className="text-negative"> · {detected.error}</span> : null}
+                </>
+              }
+            >
               <Textarea
                 id="backtest-addresses"
                 value={text}
@@ -239,12 +234,7 @@ export function AddAddressesDialog({ onAdded }: { onAdded: () => void }) {
                 }
                 className="min-h-40 font-mono text-xs"
               />
-              <p className="text-xs text-muted-foreground">
-                {detected.entries.length.toLocaleString()} address(es) detected{detected.entries.length > 0 ? ` · ${withUserId.toLocaleString()} with a user ID` : ""}
-                {detected.entries.length > BATCH_SIZE ? ` · will be sent in ${Math.ceil(detected.entries.length / BATCH_SIZE)} batches` : ""}
-                {detected.error ? <span className="text-negative"> · {detected.error}</span> : null}
-              </p>
-            </div>
+            </Field>
             <DialogFooter>
               <DialogClose asChild>
                 <Button variant="ghost">Cancel</Button>

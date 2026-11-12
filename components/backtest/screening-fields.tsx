@@ -1,7 +1,7 @@
 "use client";
 
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { SettingsList, SettingsRow } from "@/components/ui/settings-row";
 import { cn } from "@/lib/utils";
 import type { EarlyStopRules } from "@/lib/backtest-api";
 
@@ -14,42 +14,42 @@ const FIELDS: Field[] = [
   {
     key: "addressParallelism",
     label: "Addresses at once",
-    help: "How many addresses are served first. As many again are kept on standby and take the capacity the front ones leave free while they wait for the last trades of a day (1 = one at a time gets every proxy first). Empty = automatic.",
+    help: "How many addresses run first; the same number wait on standby and take the capacity the front ones leave free. Empty = automatic.",
     max: 500,
     whole: true,
   },
   {
     key: "daysAtOnce",
     label: "Days at once (per address)",
-    help: "How many days of ONE address are worked on at the same time. 1 = a day is finished before the next one starts, so the loss-trader rules below judge a complete day and nothing is simulated for a trader about to be dropped. 0 = no limit: positions of any day are taken as soon as a slot is free, which is faster when you don't use those rules. May be changed while the backtest runs.",
+    help: "How many days of one address run at once. 1 = finish a day first, so the loss rules judge whole days. 0 = no limit, faster. Can change while it runs.",
     max: 1000,
     whole: true,
   },
   {
     key: "lossDays",
     label: "Stop after this many losing days",
-    help: "A trader is assumed a loss and dropped once this many full days closed in a loss (they need not follow each other), even if tokens are left. 0 = off.",
+    help: "Drops a trader after this many full days closed in a loss (they need not follow each other). 0 = off.",
     max: 1000,
     whole: true,
   },
   {
     key: "dayLossPercent",
     label: "Stop if one day loses more than (%)",
-    help: "Dropped as soon as a full day's combined result reaches this loss, e.g. 1000 for -1000% (the figure the daily breakdown shows). 0 = off.",
+    help: "Drops a trader when one full day's loss reaches this %, e.g. 1000 = -1000%. 0 = off.",
     max: 1_000_000,
     whole: false,
   },
   {
     key: "negativeBalanceEvents",
     label: "Stop after the balance goes negative this many times",
-    help: "Each buy that leaves the simulated wallet's cash below zero is one negative-balance event (the count the address page shows). Reaching this many marks the trader a loss, even if it would have recovered. Only applies when the profile allows a negative balance. 0 = off.",
+    help: "Drops a trader after this many negative-balance events (only when the profile allows a negative balance). 0 = off.",
     max: 100_000,
     whole: true,
   },
   {
     key: "lossAtProgressPercent",
     label: "Stop at this share of tokens if still losing (%)",
-    help: "Once this percent of the trader's tokens are processed, a trader whose realized P&L is still negative is dropped. e.g. 75. 0 = off.",
+    help: "After this % of the trader's tokens are done, a trader whose realized P&L is still negative is dropped, e.g. 75. 0 = off.",
     max: 100,
     whole: false,
   },
@@ -99,13 +99,12 @@ export function ScreeningFields({
   speedOnly?: boolean;
 }) {
   return (
-    <div className="space-y-3">
+    <SettingsList>
       {FIELDS.filter((f) => !speedOnly || f.key === "addressParallelism" || f.key === "daysAtOnce").map((f) => {
         const bad = invalid(f, values[f.key]);
         const locked = disabled && !disabledKeys.includes(f.key);
         return (
-          <div key={f.key} className="space-y-1">
-            <Label htmlFor={`bt-screen-${f.key}`}>{f.label}</Label>
+          <SettingsRow key={f.key} label={f.label} help={f.help} htmlFor={`bt-screen-${f.key}`}>
             <Input
               id={`bt-screen-${f.key}`}
               inputMode={f.whole ? "numeric" : "decimal"}
@@ -113,13 +112,12 @@ export function ScreeningFields({
               placeholder={f.key === "addressParallelism" && autoParallelism ? `auto (${autoParallelism})` : undefined}
               value={values[f.key]}
               onChange={(e) => onChange({ ...values, [f.key]: e.target.value.replace(f.whole ? /[^0-9]/g : /[^0-9.]/g, "") })}
-              className={cn("w-32", bad && "border-negative")}
+              className={cn("w-[110px] text-right", bad && "border-negative")}
               aria-invalid={bad}
             />
-            <p className="text-xs text-muted-foreground">{f.help}</p>
-          </div>
+          </SettingsRow>
         );
       })}
-    </div>
+    </SettingsList>
   );
 }

@@ -9,6 +9,8 @@ type Props = {
   value: TrailingStop[];
   onChange: (next: TrailingStop[]) => void;
   disabled?: boolean;
+  /** Extra controls shown on the same row as "Add rule" (e.g. a Save button). */
+  actions?: React.ReactNode;
 };
 
 let tempIdCounter = 0;
@@ -25,7 +27,7 @@ function tempId() {
  * changes flow, or behind its own explicit save for the per-trader panel -
  * see components/traders/trader-settings-panel.tsx).
  */
-export function TrailingStopsEditor({ value, onChange, disabled }: Props) {
+export function TrailingStopsEditor({ value, onChange, disabled, actions }: Props) {
   function updateRule(id: string, field: "armPercent" | "exitPercent", raw: number) {
     if (!Number.isFinite(raw)) return; // ignore a momentarily-empty input rather than writing NaN
     onChange(value.map((r) => (r._id === id ? { ...r, [field]: raw } : r)));
@@ -38,50 +40,34 @@ export function TrailingStopsEditor({ value, onChange, disabled }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      {value.length === 0 && <p className="text-xs text-muted-foreground">No trailing-stop rules configured.</p>}
+    <div className="flex flex-col gap-3">
+      {value.length === 0 && <p className="text-xs text-text-3">No trailing-stop rules configured.</p>}
       {value.map((rule) => (
-        <div key={rule._id} className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
-          <span className="text-xs text-muted-foreground">Arm at</span>
+        <div key={rule._id} className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
+          <span className="text-xs text-text-3">Arm at</span>
           <div className="relative w-24">
-            <Input
-              type="number"
-              step={5}
-              disabled={disabled}
-              value={rule.armPercent}
-              onChange={(e) => updateRule(rule._id, "armPercent", e.target.valueAsNumber)}
-              className="h-8 pr-6 text-sm"
-            />
-            <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs text-muted-foreground">%</span>
+            <Input type="number" step={5} disabled={disabled} value={rule.armPercent} onChange={(e) => updateRule(rule._id, "armPercent", e.target.valueAsNumber)} aria-label="Arm at percent gain" className="h-8 rounded-lg pr-6 text-[13px] md:text-[13px]" />
+            <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs text-text-3">%</span>
           </div>
-          <span className="text-xs text-muted-foreground">gain, exit if it falls back to</span>
+          <span className="text-xs text-text-3">gain, exit if it falls back to</span>
           <div className="relative w-24">
-            <Input
-              type="number"
-              step={5}
-              disabled={disabled}
-              value={rule.exitPercent}
-              onChange={(e) => updateRule(rule._id, "exitPercent", e.target.valueAsNumber)}
-              className="h-8 pr-6 text-sm"
-            />
-            <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs text-muted-foreground">%</span>
+            <Input type="number" step={5} disabled={disabled} value={rule.exitPercent} onChange={(e) => updateRule(rule._id, "exitPercent", e.target.valueAsNumber)} aria-label="Exit percent" className="h-8 rounded-lg pr-6 text-[13px] md:text-[13px]" />
+            <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs text-text-3">%</span>
           </div>
           {!disabled && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto text-muted-foreground hover:text-negative"
-              onClick={() => removeRule(rule._id)}
-            >
-              <Trash2 className="size-3.5" />
+            <Button variant="ghost" size="icon-sm" className="ml-auto text-text-3 hover:text-negative max-md:size-9" onClick={() => removeRule(rule._id)} aria-label="Remove rule">
+              <Trash2 />
             </Button>
           )}
         </div>
       ))}
       {!disabled && (
-        <Button variant="outline" size="sm" onClick={addRule} className="w-fit gap-1.5">
-          <Plus className="size-3.5" /> Add rule
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={addRule}>
+            <Plus className="size-3.5" /> Add rule
+          </Button>
+          {actions}
+        </div>
       )}
     </div>
   );

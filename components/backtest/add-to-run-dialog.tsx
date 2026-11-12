@@ -5,14 +5,19 @@ import { toast } from "sonner";
 import { ListPlus, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Segmented } from "@/components/ui/segmented";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { addAddressesToRunBatched, addBacktestAddresses, addListToRun, listBacktestAddresses, type AddressEntry, type AddToRunTotals } from "@/lib/backtest-api";
-import { cn } from "@/lib/utils";
 import { parseAddressInput } from "./add-addresses-dialog";
 import { BatchProgress, type BatchState } from "./batch-progress";
+import { DialogHead, Field, Notice } from "./dialog-parts";
 
 const BATCH = 5000;
+const SOURCES = [
+  { value: "list", label: "From the backtest list" },
+  { value: "paste", label: "Paste addresses" },
+] as const;
 
 type Props = {
   run: { _id: string; name: string; status: string };
@@ -129,11 +134,11 @@ export function AddToRunDialog({ run, open, onOpenChange, onAdded }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={(next) => !working && onOpenChange(next)}>
-      <DialogContent className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-lg" onInteractOutside={(e) => working && e.preventDefault()} onEscapeKeyDown={(e) => working && e.preventDefault()}>
+      <DialogContent className="sm:max-w-[520px]" onInteractOutside={(e) => working && e.preventDefault()} onEscapeKeyDown={(e) => working && e.preventDefault()}>
         {working && state ? (
           <BatchProgress
             title="Adding addresses to this backtest…"
-            note="Done in batches so the page and the server stay responsive. Closing is disabled until it finishes or you stop it."
+            note="Done in batches so the page and the server stay responsive."
             state={state}
             stopping={stopping}
             onStop={() => {
@@ -143,52 +148,40 @@ export function AddToRunDialog({ run, open, onOpenChange, onAdded }: Props) {
           />
         ) : (
           <>
-            <DialogHeader>
-              <DialogTitle>Add addresses to &quot;{run.name}&quot;</DialogTitle>
-              <DialogDescription>
-                Grow this backtest instead of starting another with the same settings. If it is running, the new addresses are picked up at once. If it has finished, it is
-                paused with the new ones waiting - press Resume and only they are processed. Addresses already in it are skipped.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" size="sm" variant={mode === "list" ? "default" : "outline"} onClick={() => setMode("list")}>
-                From the backtest list
-              </Button>
-              <Button type="button" size="sm" variant={mode === "paste" ? "default" : "outline"} onClick={() => setMode("paste")}>
-                Paste addresses
-              </Button>
-            </div>
+            <DialogHead
+              icon={<ListPlus className="size-5" />}
+              title={`Add addresses to "${run.name}"`}
+              help="Adds to this backtest instead of starting another. A running one picks them up at once; a finished one is paused with the new ones waiting - Resume processes only them. Addresses already in it are skipped."
+              description="Add addresses from the backtest list or paste new ones."
+            />
+            <Segmented options={SOURCES} value={mode} onChange={setMode} label="Where the addresses come from" block tall />
             {mode === "list" ? (
-              <div className="flex flex-col gap-2">
-                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                  Only addresses containing (optional)
-                  <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="leave empty for the whole list" className="h-9 font-mono text-xs" />
-                </label>
-                <p className="text-xs text-muted-foreground">
-                  Adds every address on the backtest list{search.trim() ? " that matches" : ""} that is not in this backtest yet.
-                  {listSize != null ? ` The list has ${listSize.toLocaleString()} address${listSize === 1 ? "" : "es"}.` : ""} To add only some, select them in the Addresses tab and use
-                  &quot;Add to a backtest&quot; there.
-                </p>
+              <div className="flex flex-col gap-3">
+                <Field label="Only addresses containing" optional htmlFor="add-run-search" note="Leave empty for the whole list.">
+                  <Input id="add-run-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="leave empty for the whole list" className="font-mono text-xs max-md:h-11" />
+                </Field>
+                <Notice tone="info">
+                  Adds all {listSize != null ? listSize.toLocaleString() : "…"} address{listSize === 1 ? "" : "es"} on the backtest list{search.trim() ? " that match" : ""} that are not in this one yet. To add only some,
+                  select them in the Addresses tab and use &quot;Add to a backtest&quot; there.
+                </Notice>
               </div>
             ) : (
-              <div className="flex flex-col gap-1.5">
+              <Field label="Addresses" htmlFor="add-run-paste" note={`${parsed.entries.length.toLocaleString()} address(es) detected - they are added to the backtest list as well, then to this backtest.`}>
                 <Textarea
+                  id="add-run-paste"
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   placeholder="One address per line (optionally followed by a label), or JSON with walletAddress / userId"
-                  className={cn("min-h-36 font-mono text-xs")}
+                  className="min-h-36 font-mono text-xs"
                 />
-                <p className="text-xs text-muted-foreground">
-                  {parsed.entries.length.toLocaleString()} address(es) detected - they are added to the backtest list as well, then to this backtest.
-                </p>
-              </div>
+              </Field>
             )}
             <DialogFooter>
               <DialogClose asChild>
                 <Button variant="ghost">Cancel</Button>
               </DialogClose>
               <Button className="gap-1.5" onClick={mode === "list" ? addFromList : addPasted} disabled={mode === "list" ? listSize === 0 : parsed.entries.length === 0}>
-                {mode === "list" && listSize === null ? <Loader2 className="size-4 animate-spin" /> : <ListPlus className="size-4" />}
+                {mode === "list" && listSize === null ? <Loader2 className="animate-spin" /> : <ListPlus />}
                 Add
               </Button>
             </DialogFooter>

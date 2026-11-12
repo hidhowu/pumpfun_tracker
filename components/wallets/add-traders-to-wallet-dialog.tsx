@@ -4,14 +4,15 @@ import { CopyButton } from "@/components/copy-button";
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Plus, Search } from "lucide-react";
+import { Loader2, Plus, Search, UserPlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { addTradersToWallet, listTraders } from "@/lib/api";
 import { useProfile } from "@/lib/profile-context";
@@ -108,113 +109,109 @@ export function AddTradersToWalletDialog({ walletId, existingAddresses, onAdded 
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="sm" className="gap-1.5">
-          <Plus className="size-4" />
-          Add traders
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Add traders to this wallet</DialogTitle>
-          <DialogDescription>
-            Every real buy/sell from an added trader is mirrored against this wallet&apos;s own balance and settings,
-            starting from zero. Blacklisted traders are never added.
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <Button size="sm" className="gap-1.5" onClick={() => setOpen(true)}>
+        <Plus className="size-4" strokeWidth={2.2} />
+        Add traders
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-md">
+          <DialogHeader className="flex-row items-center gap-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface-3 text-primary">
+              <UserPlus className="size-5" />
+            </span>
+            <DialogTitle>
+              Add traders to this wallet
+              <HelpTip>Every buy and sell from an added trader is mirrored on this wallet&apos;s own balance, starting from zero. Blacklisted traders are never added.</HelpTip>
+            </DialogTitle>
+            <DialogDescription className="sr-only">Pick tracked traders or paste addresses.</DialogDescription>
+          </DialogHeader>
 
-        <Tabs defaultValue="select">
-          <TabsList className="w-full">
-            <TabsTrigger value="select">Pick tracked</TabsTrigger>
-            <TabsTrigger value="paste">Paste addresses</TabsTrigger>
-          </TabsList>
+          <Tabs defaultValue="select">
+            <TabsList className="grid h-11 w-full grid-cols-2">
+              <TabsTrigger value="select">Pick tracked</TabsTrigger>
+              <TabsTrigger value="paste">Paste addresses</TabsTrigger>
+            </TabsList>
 
-          <TabsContent value="select" className="mt-3 flex flex-col gap-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="Search address or label" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-8" />
-            </div>
+            <TabsContent value="select" className="mt-4 flex flex-col gap-3">
+              <label className="flex h-11 items-center gap-2 rounded-[10px] border border-line-2 bg-card px-3 text-text-3 transition-colors focus-within:border-primary focus-within:ring-3 focus-within:ring-ring/50 hover:border-line-3">
+                <Search className="size-4 shrink-0" />
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search address or label" aria-label="Search address or label" className="min-w-0 flex-1 bg-transparent text-base text-foreground outline-none placeholder:text-text-3 md:text-[13px]" />
+                {search ? (
+                  <button type="button" onClick={() => setSearch("")} aria-label="Clear search" className="-mr-1 flex size-7 shrink-0 items-center justify-center rounded-lg hover:bg-surface-3 hover:text-foreground">
+                    <X className="size-3.5" />
+                  </button>
+                ) : null}
+              </label>
 
-            <div className="flex max-h-72 flex-col gap-1 overflow-y-auto">
-              {loading ? (
-                Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-9 w-full" />)
-              ) : candidates.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">
-                  {traders && traders.length > 0 ? "No matching traders (or all already assigned)." : "No active traders tracked yet."}
-                </p>
-              ) : (
-                candidates.map((trader) => (
-                  <label
-                    key={trader.address}
-                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selected.has(trader.address)}
-                      onChange={(e) => toggle(trader.address, e.target.checked)}
-                      className="size-4 rounded border-border accent-primary"
-                    />
-                    <span className="flex min-w-0 flex-col">
-                      <span className="flex min-w-0 items-center gap-1">
-                        <span className="truncate font-mono text-xs">{formatAddress(trader.address, 6)}</span>
-                        <CopyButton value={trader.address} />
+              <div className="flex max-h-72 flex-col gap-0.5 overflow-y-auto">
+                {loading ? (
+                  Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full rounded-xl" />)
+                ) : candidates.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-text-2">{traders && traders.length > 0 ? "No matching traders (or all already assigned)." : "No active traders tracked yet."}</p>
+                ) : (
+                  candidates.map((trader) => (
+                    <label key={trader.address} className="flex min-h-12 cursor-pointer items-center gap-3 rounded-xl px-2.5 hover:bg-surface-2">
+                      <Checkbox checked={selected.has(trader.address)} onCheckedChange={(checked) => toggle(trader.address, checked === true)} aria-label={`Select ${trader.label || formatAddress(trader.address, 6)}`} />
+                      <span className="flex min-w-0 flex-col">
+                        <span className="flex min-w-0 items-center gap-1">
+                          <span className="truncate font-mono text-xs">{formatAddress(trader.address, 6)}</span>
+                          <CopyButton value={trader.address} />
+                        </span>
+                        {trader.label ? <span className="truncate text-xs text-text-3">{trader.label}</span> : null}
                       </span>
-                      {trader.label ? <span className="truncate text-xs text-muted-foreground">{trader.label}</span> : null}
-                    </span>
-                  </label>
-                ))
-              )}
-            </div>
+                    </label>
+                  ))
+                )}
+              </div>
 
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button variant="ghost">Cancel</Button>
-              </DialogClose>
-              <Button onClick={() => submit([...selected])} disabled={submitting || selected.size === 0}>
-                {submitting && <Loader2 className="size-4 animate-spin" />}
-                Add {selected.size > 0 ? selected.size : ""} trader{selected.size === 1 ? "" : "s"}
-              </Button>
-            </DialogFooter>
-          </TabsContent>
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button variant="ghost">Cancel</Button>
+                </DialogClose>
+                <Button onClick={() => submit([...selected])} disabled={submitting || selected.size === 0}>
+                  {submitting && <Loader2 className="animate-spin" />}
+                  Add {selected.size > 0 ? selected.size : ""} trader{selected.size === 1 ? "" : "s"}
+                </Button>
+              </DialogFooter>
+            </TabsContent>
 
-          <TabsContent value="paste" className="mt-3 flex flex-col gap-3">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="wallet-paste">Wallet addresses</Label>
-              <Textarea
-                id="wallet-paste"
-                placeholder={"One per line, or comma/space-separated"}
-                value={pasteText}
-                onChange={(e) => setPasteText(e.target.value)}
-                // Fixed-height scroll box - see add-trader-dialog.tsx's bulk tab for why.
-                className="field-sizing-fixed h-40 max-h-40 resize-none overflow-x-hidden overflow-y-auto font-mono text-sm break-all whitespace-pre-wrap"
-              />
-              <p className="text-xs text-muted-foreground">
-                {plural(pasted.length, "address")} detected. Addresses already in this wallet and blacklisted addresses
-                are skipped.
-              </p>
-            </div>
-            <label className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
-              <span className="flex flex-col">
-                <span className="text-sm font-medium">Track new addresses</span>
-                <span className="text-xs text-muted-foreground">
-                  Addresses not on the platform yet are added as tracked traders first. Off: they&apos;re skipped.
-                </span>
-              </span>
-              <Switch checked={trackNew} onCheckedChange={setTrackNew} />
-            </label>
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button variant="ghost">Cancel</Button>
-              </DialogClose>
-              <Button onClick={() => submit(pasted, { trackNew })} disabled={submitting || pasted.length === 0}>
-                {submitting && <Loader2 className="size-4 animate-spin" />}
-                Add {pasted.length || ""} address{pasted.length === 1 ? "" : "es"}
-              </Button>
-            </DialogFooter>
-          </TabsContent>
-        </Tabs>
-      </DialogContent>
-    </Dialog>
+            <TabsContent value="paste" className="mt-4 flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="wallet-paste">
+                  Wallet addresses
+                  <HelpTip>Addresses already in this wallet and blacklisted ones are skipped.</HelpTip>
+                </Label>
+                <Textarea
+                  id="wallet-paste"
+                  placeholder={"One per line, or comma/space-separated"}
+                  value={pasteText}
+                  onChange={(e) => setPasteText(e.target.value)}
+                  // Fixed-height scroll box - see add-trader-dialog.tsx's bulk tab for why.
+                  className="field-sizing-fixed h-40 max-h-40 resize-none overflow-x-hidden overflow-y-auto font-mono text-sm break-all whitespace-pre-wrap"
+                />
+                <span className="text-xs text-text-3">{pasted.length} address{pasted.length === 1 ? "" : "es"} detected</span>
+              </div>
+              <div className="flex min-h-[52px] items-center justify-between gap-3 rounded-[14px] border border-border bg-surface-2 px-3.5 py-3">
+                <b className="text-[13px] font-semibold">
+                  Track new addresses
+                  <HelpTip>Addresses not yet on the platform are added as tracked traders first. Off: they are skipped.</HelpTip>
+                </b>
+                <Switch aria-label="Track new addresses" checked={trackNew} onCheckedChange={setTrackNew} />
+              </div>
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button variant="ghost">Cancel</Button>
+                </DialogClose>
+                <Button onClick={() => submit(pasted, { trackNew })} disabled={submitting || pasted.length === 0}>
+                  {submitting && <Loader2 className="animate-spin" />}
+                  Add {pasted.length || ""} address{pasted.length === 1 ? "" : "es"}
+                </Button>
+              </DialogFooter>
+            </TabsContent>
+          </Tabs>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

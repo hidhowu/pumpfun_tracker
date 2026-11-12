@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { CopyButton } from "@/components/copy-button";
 import { formatAddress, formatUsd } from "@/lib/format";
@@ -46,12 +46,12 @@ export function toneOf(value: number | null | undefined): "default" | "positive"
 }
 
 const GRADIENTS = [
-  ["#8b7cff", "#35d6b0"],
-  ["#ff8a5b", "#ff4f8b"],
-  ["#6d5bff", "#3b82f6"],
-  ["#f5b83d", "#e8743b"],
-  ["#35d6b0", "#3b82f6"],
-  ["#ff4f8b", "#8b7cff"],
+  ["#b6f24f", "#35d49a"],
+  ["#6cb8ff", "#35d49a"],
+  ["#f5b73d", "#ff6b7b"],
+  ["#a98bff", "#6cb8ff"],
+  ["#35d49a", "#6cb8ff"],
+  ["#ff6b7b", "#a98bff"],
 ];
 
 /** A stable two-colour gradient picked from any string (wallet address, token symbol), for avatars without an image. */
@@ -69,7 +69,7 @@ export function TokenAvatar({ icon, symbol, className }: { icon?: string | null;
     <Avatar className={cn("size-9", className)}>
       {icon ? <AvatarImage src={icon} alt="" referrerPolicy="no-referrer" /> : null}
       <AvatarFallback
-        className="text-xs font-extrabold text-white"
+        className="font-mono text-[11px] font-semibold text-primary-foreground"
         style={{ background: isSol ? "linear-gradient(135deg, #9945ff, #14f195)" : gradientFor(symbol ?? "?") }}
       >
         {label}
@@ -78,42 +78,55 @@ export function TokenAvatar({ icon, symbol, className }: { icon?: string | null;
   );
 }
 
-/** A round gradient badge for a wallet, derived from its address so every wallet keeps its own colours. */
-export function WalletAvatar({ address, className }: { address: string; className?: string }) {
-  return <div aria-hidden className={cn("size-10 shrink-0 rounded-full", className)} style={{ background: gradientFor(address) }} />;
+const WALLET_AVATAR_SIZES = { md: "size-10 rounded-xl text-xs", lg: "size-12 rounded-[15px] text-sm" } as const;
+
+/** A rounded square badge for a wallet: its initials on a gradient derived from the address, so every wallet keeps its own colours. */
+export function WalletAvatar({ address, name, size = "lg", className }: { address: string; name?: string; size?: keyof typeof WALLET_AVATAR_SIZES; className?: string }) {
+  const initials = (name ?? address)
+    .split(/s+/)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+  return (
+    <span aria-hidden className={cn("inline-flex shrink-0 items-center justify-center font-mono font-semibold text-primary-foreground", WALLET_AVATAR_SIZES[size], className)} style={{ background: gradientFor(address) }}>
+      {initials}
+    </span>
+  );
 }
 
 /** The small rounded label in front of a transaction: Bought / Sold / Received / Sent ... */
 export function TypePill({ label, tone, className }: { label: string; tone: "buy" | "sell" | "receive" | "send" | "neutral" | "failed"; className?: string }) {
   const tones = {
-    buy: "bg-positive/15 text-positive",
-    sell: "bg-[#ff8a5b]/15 text-[#ff9b6e]",
-    receive: "bg-primary/15 text-brand-soft",
-    send: "bg-[#9a97b3]/15 text-[#b8b5d0]",
-    neutral: "bg-[#9a97b3]/15 text-[#b8b5d0]",
-    failed: "bg-negative/15 text-negative",
+    buy: "border-positive/30 bg-pos-soft text-positive",
+    sell: "border-warn/30 bg-warn-soft text-warn",
+    receive: "border-volt-line bg-volt-soft text-primary",
+    send: "border-line-2 bg-surface-3 text-text-2",
+    neutral: "border-line-2 bg-surface-3 text-text-2",
+    failed: "border-destructive/30 bg-neg-soft text-destructive",
   } as const;
-  return <span className={cn("inline-flex w-fit items-center rounded-full px-2.5 py-0.5 text-xs font-extrabold whitespace-nowrap", tones[tone], className)}>{label}</span>;
+  return <span className={cn("inline-flex h-[22px] w-fit items-center rounded-full border px-2 text-[11.5px] font-medium whitespace-nowrap", tones[tone], className)}>{label}</span>;
 }
 
 /** Profit or loss as a tinted pill, e.g. "+$21.40 · +33.2%". */
 export function PnlPill({ usd, pct, className }: { usd: number | null | undefined; pct?: number | null; className?: string }) {
   if (usd === null || usd === undefined) return null;
-  const tone = usd > 0 ? "bg-positive/15 text-positive" : usd < 0 ? "bg-negative/15 text-negative" : "bg-muted text-muted-foreground";
+  const tone = usd > 0 ? "border-positive/30 bg-pos-soft text-positive" : usd < 0 ? "border-destructive/30 bg-neg-soft text-destructive" : "border-line-2 bg-surface-3 text-text-2";
   return (
-    <span className={cn("inline-flex w-fit items-center rounded-full px-2 py-0.5 text-xs font-bold whitespace-nowrap tabular-nums", tone, className)}>
+    <span className={cn("inline-flex h-[22px] w-fit items-center rounded-full border px-2 text-[11.5px] font-medium whitespace-nowrap tabular-nums", tone, className)}>
       {signedUsd(usd)}
       {pct !== null && pct !== undefined ? ` · ${signedPercent(pct)}` : ""}
     </span>
   );
 }
 
+/** A short address as a chip: it links to Solscan and has its own copy button. */
 export function AddressChip({ value, label = "address", kind = "account", chars = 4 }: { value: string; label?: string; kind?: "account" | "token" | "tx"; chars?: number }) {
   return (
-    <span className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground">
+    <span className="inline-flex h-[26px] w-fit items-center gap-1 rounded-lg border border-border bg-surface-2 pr-1 pl-2 font-mono text-xs text-text-2 transition-colors hover:border-line-2 hover:text-foreground">
       <a href={`https://solscan.io/${kind}/${value}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-primary">
         {formatAddress(value, chars)}
-        <ExternalLink className="size-3" />
+        <ArrowUpRight className="size-3" />
       </a>
       <CopyButton value={value} label={label} />
     </span>
@@ -128,10 +141,10 @@ export function tokenLabel(symbol: string | null | undefined, mint: string): str
 /** A small bordered box with a label and a value, used in the token and SOL panels. */
 export function StatBox({ label, value, hint, className }: { label: string; value: string; hint?: string; className?: string }) {
   return (
-    <div className="min-w-0 rounded-2xl border border-border bg-card p-3.5">
-      <div className="text-xs font-semibold text-muted-foreground">{label}</div>
-      <div className={cn("mt-1 truncate text-[17px] font-extrabold tabular-nums", className)}>{value}</div>
-      {hint ? <div className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</div> : null}
+    <div className="min-w-0 rounded-xl border border-border bg-surface-2 px-3.5 py-3">
+      <div className="text-xs text-text-3">{label}</div>
+      <div className={cn("mt-1 truncate text-[18px] leading-6 font-semibold tabular-nums", className)}>{value}</div>
+      {hint ? <div className="mt-0.5 truncate text-xs text-text-3">{hint}</div> : null}
     </div>
   );
 }

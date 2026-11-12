@@ -4,14 +4,15 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { SettingsList, SettingsRow } from "@/components/ui/settings-row";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { importBacktestViews, listBacktestRuns, previewBacktestViewImport } from "@/lib/backtest-api";
 import { formatUsd } from "@/lib/format";
 import type { BacktestViewImportPreview, BacktestRunSummary } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
+import { CheckMark, DialogHead, Field } from "./dialog-parts";
 
 type Props = {
   /** The backtest the combined backtests are imported INTO. */
@@ -91,22 +92,18 @@ export function ImportViewsDialog({ runId, open, onOpenChange, onImported }: Pro
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent className="max-h-[88vh] grid-cols-[minmax(0,1fr)] overflow-x-hidden overflow-y-auto sm:max-w-xl">
-        <DialogHeader className="min-w-0">
-          <DialogTitle className="flex items-center gap-2">
-            <Download className="size-4" /> Import combined backtests
-          </DialogTitle>
-          <DialogDescription>
-            Copies the name, addresses and settings of combined backtests from another backtest onto this one - not its trades. They are worked out from this backtest&apos;s own trades, so
-            only addresses this backtest has can be used.
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="sm:max-w-[560px]">
+        <DialogHead
+          icon={<Download className="size-5" />}
+          title="Import combined backtests"
+          help="Copies the name, addresses and settings of combined backtests from another backtest onto this one - not its trades. They are worked out from this backtest's own trades, so only addresses it has can be used."
+          description="Choose a backtest and the combined backtests to copy."
+        />
 
         <div className="flex min-w-0 flex-col gap-4">
-          <div className="min-w-0 space-y-1.5">
-            <Label>Import from</Label>
+          <Field label="Import from" htmlFor="import-views-source">
             <Select value={sourceId} onValueChange={choose} disabled={busy}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger id="import-views-source" className="w-full max-md:h-11">
                 <SelectValue placeholder={runs === null ? "Loading backtests…" : runs.length === 0 ? "No other backtests" : "Choose a backtest"} />
               </SelectTrigger>
               <SelectContent>
@@ -117,43 +114,58 @@ export function ImportViewsDialog({ runId, open, onOpenChange, onImported }: Pro
                 ))}
               </SelectContent>
             </Select>
-          </div>
+          </Field>
 
           {loadingPreview && (
-            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <p className="flex items-center gap-2 text-xs text-text-3">
               <Loader2 className="size-3.5 animate-spin" /> Reading its combined backtests…
             </p>
           )}
 
-          {preview && preview.views.length === 0 && <p className="text-sm text-muted-foreground">&quot;{preview.sourceName}&quot; has no combined backtests to import.</p>}
+          {preview && preview.views.length === 0 && <p className="text-sm text-text-2">&quot;{preview.sourceName}&quot; has no combined backtests to import.</p>}
 
           {preview && preview.views.length > 0 && (
-            <div className="min-w-0 space-y-2">
+            <div className="flex min-w-0 flex-col gap-2.5">
               <div className="flex items-center justify-between gap-2">
-                <Label>{picked.size} of {preview.views.length} selected</Label>
-                <div className="flex gap-1">
-                  <Button variant="ghost" size="sm" onClick={() => setPicked(new Set(preview.views.map((v) => v._id)))}>
+                <span className="text-sm font-medium">
+                  {picked.size} of {preview.views.length} selected
+                </span>
+                <div className="flex gap-1.5">
+                  <Button variant="outline" size="sm" onClick={() => setPicked(new Set(preview.views.map((v) => v._id)))}>
                     All
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setPicked(new Set())}>
+                  <Button variant="outline" size="sm" onClick={() => setPicked(new Set())}>
                     None
                   </Button>
                 </div>
               </div>
-              <div className="max-h-72 overflow-y-auto rounded-lg border border-border/60">
+              <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto">
                 {preview.views.map((v) => {
                   const whole = v.allAddresses || v.presentCount === v.addressCount;
                   const none = !v.allAddresses && v.presentCount === 0;
+                  const on = picked.has(v._id);
                   return (
-                    <label key={v._id} className={cn("flex cursor-pointer items-start gap-3 border-b border-border/60 px-3 py-2 last:border-b-0 hover:bg-muted/40", none && "opacity-60")}>
-                      <input type="checkbox" className="mt-1 size-4 shrink-0 accent-primary" checked={picked.has(v._id)} onChange={() => toggle(v._id)} disabled={busy} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">{v.name}</span>
-                        <span className="block text-xs text-muted-foreground">
+                    <button
+                      key={v._id}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={on}
+                      disabled={busy}
+                      onClick={() => toggle(v._id)}
+                      className={cn(
+                        "flex items-start gap-3 rounded-[14px] border bg-surface-2 px-3.5 py-3 text-left transition-colors",
+                        on ? "border-volt-line bg-volt-soft" : "border-border hover:border-line-2",
+                        none && "opacity-60"
+                      )}
+                    >
+                      <CheckMark checked={on} className="mt-0.5" />
+                      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <b className="truncate text-[13.5px] font-semibold">{v.name}</b>
+                        <span className="text-xs text-text-3">
                           {formatUsd(v.startingBalanceUsd)} start · {formatUsd(v.tradeSizeUsd)}/trade · {v.pumpFeePercent}% + {formatUsd(v.jitoFeeUsd)}
                           {v.resetDaily ? " · daily reset" : ""}
                         </span>
-                        <span className={cn("block text-xs", whole ? "text-muted-foreground" : none ? "text-negative" : "text-amber-500")}>
+                        <span className={cn("text-xs", whole ? "text-text-2" : none ? "text-negative" : "text-warn")}>
                           {v.allAddresses
                             ? "every address"
                             : whole
@@ -161,21 +173,21 @@ export function ImportViewsDialog({ runId, open, onOpenChange, onImported }: Pro
                               : `${v.presentCount} of ${v.addressCount} addresses are in this backtest`}
                         </span>
                       </span>
-                    </label>
+                    </button>
                   );
                 })}
               </div>
 
               {preview.views.some((v) => !v.allAddresses && v.presentCount !== v.addressCount) && (
-                <div className="flex items-start justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <Label htmlFor="bt-import-partial">Also import combinations with missing addresses</Label>
-                    <p className="text-xs text-muted-foreground">
-                      Off: a combination that is missing any address is skipped, so every imported one is exactly what you made. On: it is imported with only the addresses this backtest has.
-                    </p>
-                  </div>
-                  <Switch id="bt-import-partial" checked={allowPartial} onCheckedChange={setAllowPartial} disabled={busy} />
-                </div>
+                <SettingsList>
+                  <SettingsRow
+                    label="Also import combinations with missing addresses"
+                    help="Off: combinations missing any address are skipped. On: they are imported with only the addresses this backtest has."
+                    htmlFor="bt-import-partial"
+                  >
+                    <Switch id="bt-import-partial" checked={allowPartial} onCheckedChange={setAllowPartial} disabled={busy} />
+                  </SettingsRow>
+                </SettingsList>
               )}
             </div>
           )}
@@ -188,7 +200,7 @@ export function ImportViewsDialog({ runId, open, onOpenChange, onImported }: Pro
             </Button>
           </DialogClose>
           <Button onClick={run} disabled={busy || picked.size === 0} className="gap-1.5">
-            {busy && <Loader2 className="size-4 animate-spin" />}
+            {busy && <Loader2 className="animate-spin" />}
             Import {picked.size > 0 ? picked.size : ""}
           </Button>
         </DialogFooter>

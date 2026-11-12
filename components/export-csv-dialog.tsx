@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
 type Granularity = "hour" | "day" | "trade";
@@ -88,14 +89,17 @@ export function ExportCsvDialog({ endpoint, title, description }: { endpoint: st
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-1.5">
+        <Button variant="outline" className="gap-1.5">
           <Download className="size-4" /> Export CSV
         </Button>
       </DialogTrigger>
       <DialogContent className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
+          <DialogTitle>
+            {title}
+            <HelpTip>{description}</HelpTip>
+          </DialogTitle>
+          <DialogDescription className="sr-only">{description}</DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
@@ -166,7 +170,7 @@ export function ExportCsvDialog({ endpoint, title, description }: { endpoint: st
           </div>
 
           {granularity !== "trade" && (
-            <label className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
+            <label className="flex min-h-14 items-center justify-between gap-3 rounded-[14px] border border-border bg-surface-2 px-3.5 py-2">
               <span className="flex flex-col">
                 <span className="text-sm font-medium">Include periods with no trades</span>
                 <span className="text-xs text-muted-foreground">Adds a zero row for every {granularity === "hour" ? "hour" : "day"} in the range.</span>

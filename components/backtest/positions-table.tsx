@@ -4,8 +4,7 @@ import { CopyButton } from "@/components/copy-button";
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { ArrowUpRight, ChevronLeft, ChevronRight, Coins } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,16 +14,45 @@ import { formatAddress, formatUsd } from "@/lib/format";
 import type { BacktestPositionView } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
 import { TradeDetailDialog } from "./address-trade-history";
-import { CLOSE_REASON_LABEL, SKIP_REASON_LABEL, formatDateTime, formatDuration, formatSignedPercent, pnlTone } from "./shared";
+import { EmptyNote } from "./parts";
+import { CLOSE_REASON_LABEL, Pill, SKIP_REASON_LABEL, formatDateTime, formatDuration, formatSignedPercent, pnlTone } from "./shared";
 
 type StatusFilter = "default" | "closed" | "open" | "skipped";
 
 const PAGE_SIZE = 20;
+const headCls = "text-[11px] font-medium tracking-[0.07em] text-text-3 uppercase";
 
 function formatPrice(price: number | null): string {
   if (price == null) return "—";
   if (price === 0) return "$0";
   return `$${price < 0.01 ? price.toExponential(3) : price.toPrecision(4)}`;
+}
+
+function AddressChip({ address, href, label, short = 5 }: { address: string; href?: string; label: string; short?: number }) {
+  return (
+    <span className="inline-flex h-[26px] w-fit items-center gap-1 rounded-lg border border-border bg-surface-2 pr-1 pl-2 font-mono text-xs text-text-2 transition-colors hover:border-line-2 hover:text-foreground">
+      {href ? (
+        <a href={href} onClick={(e) => e.stopPropagation()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 hover:text-primary">
+          {formatAddress(address, short)}
+          <ArrowUpRight className="size-3" />
+        </a>
+      ) : (
+        <span>{formatAddress(address, short)}</span>
+      )}
+      <CopyButton value={address} label={label} />
+    </span>
+  );
+}
+
+function ExitCell({ p }: { p: BacktestPositionView }) {
+  if (p.status === "open") return <Pill tone="volt">Open at end</Pill>;
+  if (p.status === "skipped") return <Pill>{SKIP_REASON_LABEL[p.skipReason ?? "error"] ?? p.skipReason}</Pill>;
+  return (
+    <span className="inline-flex flex-col leading-[1.3]">
+      <span className="text-[13px]">{p.closeReason ? CLOSE_REASON_LABEL[p.closeReason] : "—"}</span>
+      <span className="text-xs text-text-3">{formatDateTime(p.closedAt)}</span>
+    </span>
+  );
 }
 
 function PositionRow({ p, showAddress, onSelect }: { p: BacktestPositionView; showAddress: boolean; onSelect: () => void }) {
@@ -33,75 +61,48 @@ function PositionRow({ p, showAddress, onSelect }: { p: BacktestPositionView; sh
   const pnlPct = p.status === "open" ? p.unrealizedPnlPercent : p.realizedPnlPercent;
 
   return (
-    <TableRow className="cursor-pointer border-border/60 hover:bg-muted/40" onClick={onSelect}>
-      <TableCell className="max-w-40">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="inline-flex min-w-0 items-center gap-1"><a
-            href={`https://pump.fun/coin/${p.mint}`}
-            onClick={(e) => e.stopPropagation()}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex min-w-0 items-center gap-1 font-mono text-xs hover:text-primary"
-          >
-            <span className="truncate">{formatAddress(p.mint, 5)}</span>
-            <ExternalLink className="size-3 shrink-0" />
-          </a><CopyButton value={p.mint} label="token address" /></span>
-          {showAddress && (
-            <span className="inline-flex min-w-0 items-center gap-1">
-              <span className="truncate font-mono text-[11px] text-muted-foreground">{formatAddress(p.address, 4)}</span>
-              <CopyButton value={p.address} label="address" />
-            </span>
-          )}
+    <TableRow className="h-[64px] cursor-pointer border-border" onClick={onSelect}>
+      <TableCell className="pl-5">
+        <div className="flex flex-col gap-1">
+          <AddressChip address={p.mint} href={`https://pump.fun/coin/${p.mint}`} label="token address" />
+          {showAddress && <AddressChip address={p.address} label="address" short={4} />}
         </div>
       </TableCell>
-      <TableCell className="text-xs">
-        <div className="flex flex-col gap-0.5">
+      <TableCell>
+        <span className="inline-flex flex-col text-xs leading-[1.3]">
           <span>{formatDateTime(p.traderBuyTime ? p.traderBuyTime * 1000 : p.openedAt)}</span>
-          <span className="text-muted-foreground">{p.traderBuyUsd != null ? `trader ${formatUsd(p.traderBuyUsd)}` : ""}</span>
-        </div>
+          <span className="text-text-3">{p.traderBuyUsd != null ? `trader ${formatUsd(p.traderBuyUsd)}` : ""}</span>
+        </span>
       </TableCell>
-      <TableCell className="hidden text-right font-mono text-xs md:table-cell">
-        <div className="flex flex-col gap-0.5">
+      <TableCell className="text-right font-mono text-xs">
+        <span className="inline-flex flex-col items-end leading-[1.3]">
           <span>{formatPrice(p.buyPriceUsd)}</span>
-          {p.buyPriceSource === "prior_trade" && <span className="text-[11px] text-muted-foreground">last known</span>}
-        </div>
+          {p.buyPriceSource === "prior_trade" && <span className="font-sans text-[11px] text-text-3">last known</span>}
+        </span>
       </TableCell>
-      <TableCell className="text-xs">
-        {p.status === "open" ? (
-          <Badge variant="outline" className="border-primary/30 text-primary">
-            Open at end
-          </Badge>
-        ) : p.status === "skipped" ? (
-          <Badge variant="outline" className="border-border/60 text-muted-foreground">
-            {SKIP_REASON_LABEL[p.skipReason ?? "error"] ?? p.skipReason}
-          </Badge>
-        ) : (
-          <div className="flex flex-col gap-0.5">
-            <span>{p.closeReason ? CLOSE_REASON_LABEL[p.closeReason] : "—"}</span>
-            <span className="text-muted-foreground">{formatDateTime(p.closedAt)}</span>
-          </div>
-        )}
+      <TableCell>
+        <ExitCell p={p} />
       </TableCell>
-      <TableCell className="hidden text-right font-mono text-xs md:table-cell">{p.status === "closed" ? formatPrice(p.sellPriceUsd) : p.status === "open" ? formatPrice(p.markPriceUsd) : "—"}</TableCell>
-      <TableCell className="hidden text-right text-xs text-muted-foreground lg:table-cell">{formatDuration(held)}</TableCell>
-      <TableCell className="hidden text-right text-xs lg:table-cell">
+      <TableCell className="text-right font-mono text-xs">{p.status === "closed" ? formatPrice(p.sellPriceUsd) : p.status === "open" ? formatPrice(p.markPriceUsd) : "—"}</TableCell>
+      <TableCell className="text-right text-xs text-text-3">{formatDuration(held)}</TableCell>
+      <TableCell className="text-right text-xs">
         {p.maxUnrealizedPnlPercent != null ? (
-          <div className="flex flex-col gap-0.5 tabular-nums">
+          <span className="inline-flex flex-col leading-[1.3] tabular-nums">
             <span className="text-positive">{formatSignedPercent(p.maxUnrealizedPnlPercent, 0)}</span>
             <span className="text-negative">{formatSignedPercent(p.minUnrealizedPnlPercent, 0)}</span>
-          </div>
+          </span>
         ) : (
-          <span className="text-muted-foreground">—</span>
+          <span className="text-text-3">—</span>
         )}
       </TableCell>
-      <TableCell className="pr-4 text-right tabular-nums">
+      <TableCell className="pr-5 text-right tabular-nums">
         {pnlUsd == null ? (
-          <span className="text-muted-foreground">—</span>
+          <span className="text-text-3">—</span>
         ) : (
-          <div className="flex flex-col gap-0.5">
-            <span className={cn("font-medium", pnlTone(pnlUsd))}>{formatUsd(pnlUsd)}</span>
+          <span className="inline-flex flex-col items-end leading-[1.3]">
+            <b className={cn("text-[13px] font-semibold", pnlTone(pnlUsd))}>{formatUsd(pnlUsd)}</b>
             <span className={cn("text-xs", pnlTone(pnlPct))}>{formatSignedPercent(pnlPct)}</span>
-          </div>
+          </span>
         )}
       </TableCell>
     </TableRow>
@@ -125,9 +126,24 @@ export function PositionsTable({ runId, address, refreshKey = 0 }: { runId: stri
     };
   }, [runId, address, status, page, refreshKey]);
 
+  const pager =
+    data && data.totalPages > 1 ? (
+      <div className="flex items-center gap-2 text-xs text-text-2">
+        <Button variant="outline" size="icon-sm" aria-label="Previous page" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+          <ChevronLeft />
+        </Button>
+        <span className="tabular-nums">
+          {page} / {data.totalPages}
+        </span>
+        <Button variant="outline" size="icon-sm" aria-label="Next page" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>
+          <ChevronRight />
+        </Button>
+      </div>
+    ) : null;
+
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-col overflow-hidden rounded-[20px] border-border bg-card max-md:gap-3 max-md:border-0 max-md:bg-transparent md:border">
+      <div className="flex flex-wrap items-center gap-3 border-border md:border-b md:px-4 md:py-3">
         <Select
           value={status}
           onValueChange={(v) => {
@@ -135,7 +151,7 @@ export function PositionsTable({ runId, address, refreshKey = 0 }: { runId: stri
             setPage(1);
           }}
         >
-          <SelectTrigger size="sm" className="w-44" aria-label="Filter trades">
+          <SelectTrigger size="sm" className="w-44 max-md:h-11 max-md:flex-1" aria-label="Filter trades">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -145,31 +161,62 @@ export function PositionsTable({ runId, address, refreshKey = 0 }: { runId: stri
             <SelectItem value="skipped">Skipped signals</SelectItem>
           </SelectContent>
         </Select>
-        {data && <span className="text-xs text-muted-foreground">{data.total.toLocaleString()} total</span>}
+        {data && <span className="text-xs text-text-3">{data.total.toLocaleString()} total</span>}
+        <div className="flex-1" />
+        {pager}
       </div>
 
       {data === null ? (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2.5 md:p-5">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-12 w-full" />
+            <Skeleton key={i} className="h-14 w-full rounded-xl" />
           ))}
         </div>
       ) : data.positions.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border/60 py-10 text-center text-sm text-muted-foreground">No trades to show yet.</div>
+        <EmptyNote icon={<Coins className="size-5" />}>No trades to show yet.</EmptyNote>
       ) : (
         <>
-          <div className="overflow-x-auto rounded-lg border border-border/60">
-            <Table>
+          {/* Phone: one card per trade. */}
+          <div className="flex flex-col gap-3 md:hidden">
+            {data.positions.map((p) => {
+              const pnlUsd = p.status === "open" ? p.unrealizedPnlUsd : p.realizedPnlUsd;
+              const pnlPct = p.status === "open" ? p.unrealizedPnlPercent : p.realizedPnlPercent;
+              return (
+                <article key={p._id} role="button" tabIndex={0} onClick={() => setSelected(p)} onKeyDown={(e) => e.key === "Enter" && setSelected(p)} className="flex flex-col gap-2.5 rounded-2xl border border-border bg-card p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <AddressChip address={p.mint} label="token address" />
+                    {pnlUsd == null ? (
+                      <span className="text-text-3">—</span>
+                    ) : (
+                      <span className="flex flex-col items-end leading-[1.3]">
+                        <b className={cn("font-semibold tabular-nums", pnlTone(pnlUsd))}>{formatUsd(pnlUsd)}</b>
+                        <span className={cn("text-xs tabular-nums", pnlTone(pnlPct))}>{formatSignedPercent(pnlPct)}</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between gap-2 text-xs text-text-3">
+                    <span>{p.status === "open" ? "Open at end" : p.status === "skipped" ? (SKIP_REASON_LABEL[p.skipReason ?? "error"] ?? p.skipReason) : (p.closeReason ? CLOSE_REASON_LABEL[p.closeReason] : "—")}</span>
+                    <span>{p.status === "closed" ? formatDateTime(p.closedAt) : formatDateTime(p.openedAt)}</span>
+                  </div>
+                  {!address && <span className="font-mono text-[11px] text-text-3">{formatAddress(p.address, 5)}</span>}
+                </article>
+              );
+            })}
+          </div>
+
+          {/* Wide screens: the table scrolls sideways inside its box. */}
+          <div className="max-md:hidden">
+            <Table className="min-w-[1000px]">
               <TableHeader>
-                <TableRow className="border-border/60 hover:bg-transparent">
-                  <TableHead>Token</TableHead>
-                  <TableHead>Trader bought</TableHead>
-                  <TableHead className="hidden text-right md:table-cell">Our entry</TableHead>
-                  <TableHead>Exit</TableHead>
-                  <TableHead className="hidden text-right md:table-cell">Exit price</TableHead>
-                  <TableHead className="hidden text-right lg:table-cell">Held</TableHead>
-                  <TableHead className="hidden text-right lg:table-cell">Peak / low</TableHead>
-                  <TableHead className="pr-4 text-right">P&amp;L</TableHead>
+                <TableRow className="border-border hover:bg-transparent">
+                  <TableHead className={cn(headCls, "pl-5")}>Token</TableHead>
+                  <TableHead className={headCls}>Trader bought</TableHead>
+                  <TableHead className={cn(headCls, "text-right")}>Our entry</TableHead>
+                  <TableHead className={headCls}>Exit</TableHead>
+                  <TableHead className={cn(headCls, "text-right")}>Exit price</TableHead>
+                  <TableHead className={cn(headCls, "text-right")}>Held</TableHead>
+                  <TableHead className={cn(headCls, "text-right")}>Peak / low</TableHead>
+                  <TableHead className={cn(headCls, "pr-5 text-right")}>P&amp;L</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -179,19 +226,6 @@ export function PositionsTable({ runId, address, refreshKey = 0 }: { runId: stri
               </TableBody>
             </Table>
           </div>
-          {data.totalPages > 1 && (
-            <div className="flex items-center justify-between gap-2">
-              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="gap-1">
-                <ChevronLeft className="size-4" /> Prev
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                Page {page} of {data.totalPages}
-              </span>
-              <Button variant="outline" size="sm" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)} className="gap-1">
-                Next <ChevronRight className="size-4" />
-              </Button>
-            </div>
-          )}
         </>
       )}
       <TradeDetailDialog position={selected} onClose={() => setSelected(null)} />

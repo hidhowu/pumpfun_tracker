@@ -2,38 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, CheckCircle2, Loader2, Plus, RefreshCw, ShieldAlert, Shuffle, Square, Trash2 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { AlertTriangle, CheckCircle2, EllipsisVertical, Loader2, Plus, RefreshCw, ShieldAlert, Shuffle, Square, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DialogIcon } from "@/components/ui/dialog-parts";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { addProxiesBulk, deleteProxiesBulk, deleteProxy, listProxies, testProxy, updateProxy } from "@/lib/api";
+import { AddProxiesDialog } from "@/components/proxies/add-proxies-dialog";
+import { ConfirmDelete } from "@/components/rpc/health-toolbar";
+import { EmptyBox, StatusPill } from "@/components/rpc/parts";
+import { deleteProxiesBulk, deleteProxy, listProxies, testProxy, updateProxy } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/format";
 import type { ProxyView } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -41,141 +23,26 @@ import { cn } from "@/lib/utils";
 function StatusBadge({ status }: { status: ProxyView["status"] }) {
   if (status === "blacklisted") {
     return (
-      <Badge className="gap-1 border-negative/30 bg-negative/15 text-negative">
-        <ShieldAlert className="size-3" /> Blacklisted
-      </Badge>
+      <StatusPill tone="neg">
+        <ShieldAlert /> Blacklisted
+      </StatusPill>
     );
   }
   return (
-    <Badge className="gap-1 border-positive/30 bg-positive/15 text-positive">
-      <CheckCircle2 className="size-3" /> Active
-    </Badge>
+    <StatusPill tone="pos">
+      <CheckCircle2 /> Active
+    </StatusPill>
   );
 }
 
-type HostPortEntry = { host?: string; port?: number | string; username?: string; password?: string; scheme?: string };
-
-function hostPortToUrl(entry: HostPortEntry): string | null {
-  if (!entry || typeof entry !== "object" || !entry.host || !entry.port) return null;
-  const scheme = entry.scheme || "http"; // these host/port/username/password proxy lists are conventionally plain HTTP proxies unless stated otherwise
-  const auth = entry.username ? `${encodeURIComponent(entry.username)}:${encodeURIComponent(entry.password ?? "")}@` : "";
-  return `${scheme}://${auth}${entry.host}:${entry.port}`;
-}
-
-/**
- * Accepts either the existing plain-URL format (one per line/comma, e.g.
- * "http://user:pass@host:port") OR a pasted JSON {host,port,username,password}
- * object/array - including the common copy-paste artifact of an object list
- * with a trailing comma and no surrounding [] (exactly what a "copy" button
- * on a proxy provider's dashboard tends to produce). JSON is tried first;
- * only text that isn't valid JSON falls through to the line/comma splitter,
- * so the two formats can't be accidentally cross-parsed.
- */
-function parseProxyInput(text: string): string[] {
-  const trimmed = text.trim();
-  if (!trimmed) return [];
-
-  for (const candidate of [trimmed, `[${trimmed.replace(/,\s*$/, "")}]`]) {
-    try {
-      const parsed = JSON.parse(candidate);
-      const entries = Array.isArray(parsed) ? parsed : [parsed];
-      const urls = entries.map(hostPortToUrl).filter((u): u is string => !!u);
-      if (urls.length > 0) return urls;
-    } catch {
-      // not valid JSON (or not this shape) - fall through to the next candidate / plain-text parsing
-    }
-  }
-
-  return trimmed
-    .split(/[\n,]/)
-    .map((u) => u.trim())
-    .filter(Boolean);
-}
-
-function AddProxiesDialog({ onAdded }: { onAdded: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [text, setText] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  async function handleSubmit() {
-    const urls = parseProxyInput(text);
-    if (urls.length === 0) {
-      toast.error("Paste at least one proxy URL");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const { added, skipped, invalid } = await addProxiesBulk(urls);
-      const parts: string[] = [];
-      if (added.length) parts.push(`${added.length} added`);
-      if (skipped.length) parts.push(`${skipped.length} already registered`);
-      if (invalid.length) parts.push(`${invalid.length} invalid`);
-      if (added.length > 0) toast.success(parts.join(", "));
-      else toast.error(parts.join(", ") || "Nothing added");
-      setText("");
-      setOpen(false);
-      onAdded();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to add proxies");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button className="gap-1.5">
-          <Plus className="size-4" />
-          Add proxies
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Add proxies</DialogTitle>
-          <DialogDescription>
-            One proxy per line (or comma-separated) - e.g. http://user:pass@host:port or socks5://host:port. You
-            can also paste a JSON list of {"{host, port, username, password}"} objects (with or without the
-            surrounding brackets) - a common export format from proxy providers. The pump.fun API client
-            round-robins through every enabled, healthy proxy here; with none configured, it calls directly,
-            exactly as before.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-1.5">
-          <Label htmlFor="proxy-list">Proxy URLs</Label>
-          <Textarea
-            id="proxy-list"
-            placeholder={'http://user:pass@host1:port\nsocks5://host2:port\n\nor:\n{ "host": "1.2.3.4", "port": 8105, "username": "u", "password": "p" }'}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            // The base Textarea uses field-sizing:content (grows to fit
-            // whatever's pasted, in both directions, unbounded) - fine for a
-            // short chat-style input, broken for pasting a big bulk list:
-            // it pushes the dialog's own Cancel/Add buttons off-screen with
-            // no way to reach them. Same fix as add-trader-dialog.tsx's bulk
-            // tab: a fixed box that scrolls internally instead.
-            className="field-sizing-fixed h-40 max-h-40 resize-none overflow-x-hidden overflow-y-auto font-mono text-sm break-all whitespace-pre-wrap"
-          />
-        </div>
-        <DialogFooter>
-          <DialogClose asChild>
-            <Button variant="ghost">Cancel</Button>
-          </DialogClose>
-          <Button onClick={handleSubmit} disabled={submitting}>
-            {submitting && <Loader2 className="size-4 animate-spin" />}
-            Add
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
+const plural = (n: number) => `prox${n === 1 ? "y" : "ies"}`;
 
 export default function ProxiesPage() {
   const [proxies, setProxies] = useState<ProxyView[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [deletingInactive, setDeletingInactive] = useState(false);
+  const [confirmInactive, setConfirmInactive] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkTest, setBulkTest] = useState<{ done: number; total: number; passed: number } | null>(null);
@@ -205,6 +72,9 @@ export default function ProxiesPage() {
     const ids = new Set(proxies.map((p) => p._id));
     setSelected((prev) => new Set([...prev].filter((id) => ids.has(id))));
   }, [proxies]);
+
+  const blacklistedCount = useMemo(() => (proxies ?? []).filter((p) => p.status === "blacklisted").length, [proxies]);
+  const inactiveProxies = useMemo(() => (proxies ?? []).filter((p) => p.status === "blacklisted" || !p.enabled), [proxies]);
 
   async function handleToggleEnabled(proxy: ProxyView, enabled: boolean) {
     setPendingId(proxy._id);
@@ -322,48 +192,101 @@ export default function ProxiesPage() {
     });
   }
 
-  const allSelected = (proxies?.length ?? 0) > 0 && selected.size === proxies?.length;
-  const blacklistedCount = useMemo(() => (proxies ?? []).filter((p) => p.status === "blacklisted").length, [proxies]);
-  const inactiveProxies = useMemo(() => (proxies ?? []).filter((p) => p.status === "blacklisted" || !p.enabled), [proxies]);
+  const total = proxies?.length ?? 0;
+  const allSelected = total > 0 && selected.size === total;
+  const busy = !!bulkTest;
+
+  /** Test + delete for one proxy. A function, not a component, so the 10 s refresh never remounts an open confirm. */
+  function renderActions(proxy: ProxyView, phone: boolean) {
+    const isPending = pendingId === proxy._id;
+    const isTesting = testingId === proxy._id;
+    return (
+      <>
+        <Button variant="outline" size="sm" disabled={isTesting || busy} onClick={() => handleTest(proxy)} className={cn("gap-1.5", phone && "h-11 flex-1 text-[13px]")}>
+          {isTesting ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+          Test
+        </Button>
+        <ConfirmDelete
+          trigger={
+            <Button
+              variant={phone ? "outline" : "ghost"}
+              size={phone ? "icon-lg" : "icon-sm"}
+              disabled={isPending}
+              aria-label="Delete proxy"
+              className={phone ? "text-negative" : "text-text-3 hover:text-negative"}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          }
+          title="Delete this proxy?"
+          description="This can't be undone."
+          onConfirm={() => handleDelete(proxy)}
+        />
+      </>
+    );
+  }
+
+  /** What a proxy row says about its last failure: the message (full text in a tooltip, since a raw curl error can be long). */
+  function renderError(proxy: ProxyView, className?: string) {
+    if (!proxy.lastError) return null;
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={cn("block truncate text-xs text-destructive", className)}>{proxy.lastError}</span>
+        </TooltipTrigger>
+        <TooltipContent className="break-words">{proxy.lastError}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  const testingPill = bulkTest ? (
+    <span className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-1.5 text-[13px] text-text-2 tabular-nums">
+      <Loader2 className="size-3.5 animate-spin" />
+      Testing {bulkTest.done}/{bulkTest.total} · {bulkTest.passed} working
+    </span>
+  ) : null;
+  const stopButton = (
+    <Button variant="outline" size="sm" className="gap-1.5 max-md:h-11" onClick={() => (cancelBulkTest.current = true)}>
+      <Square className="size-3.5" /> Stop
+    </Button>
+  );
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/15 text-primary">
-            <Shuffle className="size-4.5" />
-          </div>
-          <div>
-            <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">Proxies</h1>
-            <p className="text-sm text-muted-foreground">
-              Rotated round-robin by the pump.fun API client to spread requests across more than one origin IP.
-              A proxy that fails 3 times in a row is auto-blacklisted and skipped until it passes a test again.
-            </p>
-          </div>
+    <div className="mx-auto flex w-full min-w-0 max-w-[1360px] flex-col gap-4 md:gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <DialogIcon>
+            <Shuffle className="size-5" />
+          </DialogIcon>
+          <h1 className="text-[22px] leading-7 font-semibold tracking-[-0.02em] md:text-[28px] md:leading-[34px] md:tracking-[-0.025em]">
+            Proxies
+            <HelpTip>Rotated round-robin by the pump.fun API client to spread requests across more than one origin IP. A proxy that fails 3 times in a row is auto-blacklisted and skipped until it passes a test again.</HelpTip>
+          </h1>
         </div>
+        <div className="max-md:hidden">
+          <AddProxiesDialog onAdded={refresh} />
+        </div>
+      </div>
+      <div className="md:hidden">
         <AddProxiesDialog onAdded={refresh} />
       </div>
 
-      <div className="flex flex-wrap gap-3 text-sm">
-        <div className="rounded-lg border border-border/60 bg-card/40 px-3 py-1.5 text-muted-foreground">
-          {proxies?.length ?? 0} prox{(proxies?.length ?? 0) === 1 ? "y" : "ies"}
-        </div>
+      {/* Desktop toolbar: counts, then the bulk buttons in their original order */}
+      <div className="flex flex-wrap items-center gap-2.5 max-md:hidden">
+        <span className="inline-flex items-center rounded-xl border border-border bg-card px-3 py-1.5 text-[13px] text-text-2 tabular-nums">
+          {total} {plural(total)}
+        </span>
         {blacklistedCount > 0 && (
-          <div className="inline-flex items-center gap-1.5 rounded-lg border border-negative/30 bg-negative/10 px-3 py-1.5 text-negative">
+          <span className="inline-flex items-center gap-1.5 rounded-xl border border-destructive/35 bg-neg-soft px-3 py-1.5 text-[13px] text-destructive tabular-nums">
             <AlertTriangle className="size-3.5" />
             {blacklistedCount} blacklisted
-          </div>
+          </span>
         )}
         {bulkTest ? (
-          <div className="inline-flex items-center gap-2">
-            <div className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-card/40 px-3 py-1.5 text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" />
-              Testing {bulkTest.done}/{bulkTest.total} - {bulkTest.passed} working
-            </div>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => (cancelBulkTest.current = true)}>
-              <Square className="size-3.5" /> Stop
-            </Button>
-          </div>
+          <>
+            {testingPill}
+            {stopButton}
+          </>
         ) : (
           <>
             <Button
@@ -377,39 +300,22 @@ export default function ProxiesPage() {
               <RefreshCw className="size-3.5" />
               Re-test blacklisted &amp; disabled ({inactiveProxies.length})
             </Button>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5 text-negative hover:text-negative"
-                  disabled={inactiveProxies.length === 0 || deletingInactive}
-                  title="Deletes every blacklisted or disabled proxy at once"
-                >
-                  {deletingInactive ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-                  Delete blacklisted &amp; disabled ({inactiveProxies.length})
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Delete {inactiveProxies.length} prox{inactiveProxies.length === 1 ? "y" : "ies"}?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Every blacklisted or disabled proxy is deleted. Active proxies are not touched. This can&apos;t be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction className="bg-negative text-negative-foreground hover:bg-negative/90" onClick={handleDeleteInactive}>
-                    Delete {inactiveProxies.length}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-negative hover:text-negative"
+              disabled={inactiveProxies.length === 0 || deletingInactive}
+              onClick={() => setConfirmInactive(true)}
+              title="Deletes every blacklisted or disabled proxy at once"
+            >
+              {deletingInactive ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+              Delete blacklisted &amp; disabled ({inactiveProxies.length})
+            </Button>
             <Button
               variant="ghost"
               size="sm"
               className="gap-1.5"
-              disabled={!proxies || proxies.length === 0}
+              disabled={total === 0}
               onClick={() => runBulkTest(proxies ?? [], { enableOnSuccess: false })}
               title="Tests every proxy - working ones are un-blacklisted, failing ones count toward blacklisting. Enabled/disabled switches are left as they are."
             >
@@ -419,54 +325,120 @@ export default function ProxiesPage() {
           </>
         )}
         {selected.size > 0 && (
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
+          <ConfirmDelete
+            trigger={
               <Button variant="outline" size="sm" className="gap-1.5 text-negative hover:text-negative">
                 <Trash2 className="size-3.5" />
                 Delete {selected.size} selected
               </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete {selected.size} prox{selected.size === 1 ? "y" : "ies"}?</AlertDialogTitle>
-                <AlertDialogDescription>This can&apos;t be undone.</AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  className="bg-negative text-negative-foreground hover:bg-negative/90"
-                  onClick={handleBulkDelete}
-                >
-                  Delete
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+            }
+            title={`Delete ${selected.size} ${plural(selected.size)}?`}
+            description="This can't be undone."
+            onConfirm={handleBulkDelete}
+          />
         )}
       </div>
+
+      {/* Phone toolbar: counts, Re-test with the rest behind a menu, and the selection bar */}
+      <div className="flex flex-col gap-3 md:hidden">
+        <div className="flex flex-wrap gap-2">
+          <StatusPill>
+            {total} {plural(total)}
+          </StatusPill>
+          {blacklistedCount > 0 && <StatusPill tone="neg">{blacklistedCount} blacklisted</StatusPill>}
+        </div>
+        {bulkTest ? (
+          <div className="flex items-center gap-2.5 rounded-2xl border border-border bg-surface-2 px-3.5 py-2.5">
+            <span className="min-w-0 flex-1 text-sm tabular-nums">
+              Testing {bulkTest.done}/{bulkTest.total} — {bulkTest.passed} working
+            </span>
+            {stopButton}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              className="h-11 min-w-0 flex-1 gap-1.5 text-[13px]"
+              disabled={inactiveProxies.length === 0}
+              onClick={() => runBulkTest(inactiveProxies, { enableOnSuccess: true })}
+            >
+              <RefreshCw className="size-3.5 shrink-0" />
+              <span className="truncate">Re-test blacklisted &amp; disabled ({inactiveProxies.length})</span>
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon-lg" aria-label="More bulk actions">
+                  <EllipsisVertical />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuItem className="min-h-11 text-negative" disabled={inactiveProxies.length === 0 || deletingInactive} onSelect={() => setConfirmInactive(true)}>
+                  <Trash2 /> Delete blacklisted &amp; disabled ({inactiveProxies.length})
+                </DropdownMenuItem>
+                <DropdownMenuItem className="min-h-11" disabled={total === 0} onSelect={() => runBulkTest(proxies ?? [], { enableOnSuccess: false })}>
+                  <CheckCircle2 /> Test all
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
+        {selected.size > 0 && (
+          <div role="region" aria-label="Selected proxies" className="flex flex-wrap items-center gap-2 rounded-2xl border border-volt-line bg-volt-soft px-3.5 py-2.5">
+            <b className="text-[13px] text-primary">{selected.size} selected</b>
+            <div className="flex-1" />
+            <ConfirmDelete
+              trigger={
+                <Button variant="outline" size="sm" className="gap-1.5 text-negative hover:text-negative">
+                  <Trash2 className="size-3.5" />
+                  Delete {selected.size} selected
+                </Button>
+              }
+              title={`Delete ${selected.size} ${plural(selected.size)}?`}
+              description="This can't be undone."
+              onConfirm={handleBulkDelete}
+            />
+          </div>
+        )}
+      </div>
+
+      <ConfirmDelete
+        open={confirmInactive}
+        onOpenChange={setConfirmInactive}
+        title={`Delete ${inactiveProxies.length} ${plural(inactiveProxies.length)}?`}
+        description="Every blacklisted or disabled proxy is deleted. Active proxies are not touched. This can't be undone."
+        confirmLabel={`Delete ${inactiveProxies.length}`}
+        onConfirm={handleDeleteInactive}
+      />
 
       {loading && !proxies ? (
         <div className="flex flex-col gap-2">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-12 w-full rounded-lg" />
+            <Skeleton key={i} className="h-12 w-full rounded-2xl" />
           ))}
         </div>
       ) : !proxies || proxies.length === 0 ? (
-        <div className="flex min-h-[240px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-card/40 text-center">
-          <p className="text-sm text-muted-foreground">No proxies configured yet - the API client calls directly.</p>
-        </div>
+        <EmptyBox icon={<Shuffle className="size-6" />} title="No proxies configured yet - the API client calls directly." className="min-h-[240px]">
+          <AddProxiesDialog
+            onAdded={refresh}
+            trigger={
+              <Button className="gap-1.5">
+                <Plus className="size-4" />
+                Add proxies
+              </Button>
+            }
+          />
+        </EmptyBox>
       ) : (
-        <Card className="overflow-hidden border-border/60">
-          <CardContent className="p-0">
+        <>
+          {/* Desktop: one table */}
+          <div className="hidden overflow-hidden rounded-[20px] border border-border bg-card md:block">
             <Table>
               <TableHeader>
-                <TableRow className="border-border/60 hover:bg-transparent">
-                  <TableHead className="w-10 pl-4">
-                    <input
-                      type="checkbox"
-                      checked={allSelected}
-                      onChange={(e) => setSelected(e.target.checked ? new Set(proxies.map((p) => p._id)) : new Set())}
-                      className="size-4 rounded border-border accent-primary"
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="w-11 pl-4">
+                    <Checkbox
+                      checked={allSelected ? true : selected.size > 0 ? "indeterminate" : false}
+                      onCheckedChange={(checked) => setSelected(checked === true ? new Set(proxies.map((p) => p._id)) : new Set())}
                       aria-label="Select all"
                     />
                   </TableHead>
@@ -475,23 +447,17 @@ export default function ProxiesPage() {
                   <TableHead className="text-right">Failures</TableHead>
                   <TableHead className="text-right">Last checked</TableHead>
                   <TableHead className="text-center">Enabled</TableHead>
-                  <TableHead className="pr-4 text-right">Actions</TableHead>
+                  <TableHead className="pr-5 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {proxies.map((proxy) => {
                   const isPending = pendingId === proxy._id;
-                  const isTesting = testingId === proxy._id;
+                  const isSelected = selected.has(proxy._id);
                   return (
-                    <TableRow key={proxy._id} className="border-border/60">
+                    <TableRow key={proxy._id} data-state={isSelected ? "selected" : undefined} className={cn(isSelected && "bg-[#222e19] hover:bg-[#222e19]")}>
                       <TableCell className="pl-4">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(proxy._id)}
-                          onChange={(e) => toggleRow(proxy._id, e.target.checked)}
-                          className="size-4 rounded border-border accent-primary"
-                          aria-label={`Select ${proxy.url}`}
-                        />
+                        <Checkbox checked={isSelected} onCheckedChange={(checked) => toggleRow(proxy._id, checked === true)} aria-label={`Select ${proxy.url}`} />
                       </TableCell>
                       <TableCell className="max-w-3xs sm:max-w-xs">
                         {/*
@@ -510,84 +476,58 @@ export default function ProxiesPage() {
                         */}
                         <div className="flex min-w-0 flex-col gap-0.5">
                           <span className="truncate font-mono text-xs">{proxy.url}</span>
-                          {proxy.label ? <span className="truncate text-xs text-muted-foreground">{proxy.label}</span> : null}
-                          {proxy.lastError ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className="block truncate text-[11px] text-negative/80">{proxy.lastError}</span>
-                              </TooltipTrigger>
-                              <TooltipContent className="break-words">{proxy.lastError}</TooltipContent>
-                            </Tooltip>
-                          ) : null}
+                          {proxy.label ? <span className="truncate text-xs text-text-3">{proxy.label}</span> : null}
+                          {renderError(proxy)}
                         </div>
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={proxy.status} />
                       </TableCell>
-                      <TableCell
-                        className={cn(
-                          "text-right font-mono text-sm",
-                          proxy.consecutiveFailures > 0 ? "text-negative" : "text-muted-foreground"
-                        )}
-                      >
-                        {proxy.consecutiveFailures}
-                      </TableCell>
-                      <TableCell className="text-right text-xs text-muted-foreground">
-                        {formatRelativeTime(proxy.lastCheckedAt)}
-                      </TableCell>
+                      <TableCell className={cn("text-right text-sm tabular-nums", proxy.consecutiveFailures > 0 ? "text-negative" : "text-text-3")}>{proxy.consecutiveFailures}</TableCell>
+                      <TableCell className="text-right text-xs text-text-3">{formatRelativeTime(proxy.lastCheckedAt)}</TableCell>
                       <TableCell>
                         <div className="flex justify-center">
-                          <Switch
-                            checked={proxy.enabled}
-                            disabled={isPending}
-                            onCheckedChange={(checked) => handleToggleEnabled(proxy, checked)}
-                            aria-label="Enable proxy"
-                          />
+                          <Switch checked={proxy.enabled} disabled={isPending} onCheckedChange={(checked) => handleToggleEnabled(proxy, checked)} aria-label="Enable proxy" />
                         </div>
                       </TableCell>
-                      <TableCell className="pr-4 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={isTesting || !!bulkTest}
-                            onClick={() => handleTest(proxy)}
-                            className="gap-1.5"
-                          >
-                            {isTesting ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
-                            Test
-                          </Button>
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button variant="ghost" size="sm" disabled={isPending} className="text-muted-foreground hover:text-negative">
-                                <Trash2 className="size-4" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Delete this proxy?</AlertDialogTitle>
-                                <AlertDialogDescription>This can&apos;t be undone.</AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction
-                                  className="bg-negative text-negative-foreground hover:bg-negative/90"
-                                  onClick={() => handleDelete(proxy)}
-                                >
-                                  Delete
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        </div>
+                      <TableCell className="pr-5 text-right">
+                        <div className="flex items-center justify-end gap-1.5">{renderActions(proxy, false)}</div>
                       </TableCell>
                     </TableRow>
                   );
                 })}
               </TableBody>
             </Table>
-          </CardContent>
-        </Card>
+          </div>
+
+          {/* Phone: one card per proxy */}
+          <div className="flex flex-col gap-3 md:hidden">
+            {proxies.map((proxy) => {
+              const isPending = pendingId === proxy._id;
+              const isSelected = selected.has(proxy._id);
+              return (
+                <article key={proxy._id} className={cn("flex min-w-0 flex-col gap-3 rounded-2xl border p-4", isSelected ? "border-volt-line bg-volt-soft" : "border-border bg-card")}>
+                  <div className="flex items-start gap-3">
+                    <Checkbox className="mt-0.5" checked={isSelected} onCheckedChange={(checked) => toggleRow(proxy._id, checked === true)} aria-label={`Select ${proxy.url}`} />
+                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="truncate font-mono text-xs">{proxy.url}</span>
+                      {proxy.label ? <span className="truncate text-xs text-text-3">{proxy.label}</span> : null}
+                      {proxy.lastError ? <span className="line-clamp-2 text-xs break-all text-destructive">{proxy.lastError}</span> : null}
+                    </div>
+                    <Switch checked={proxy.enabled} disabled={isPending} onCheckedChange={(checked) => handleToggleEnabled(proxy, checked)} aria-label="Enable proxy" />
+                  </div>
+                  <div className="flex items-center justify-between gap-3 text-xs">
+                    <StatusBadge status={proxy.status} />
+                    <span className="text-text-3 tabular-nums">
+                      failures <b className={cn("font-semibold", proxy.consecutiveFailures > 0 ? "text-negative" : "text-text-2")}>{proxy.consecutiveFailures}</b> · {formatRelativeTime(proxy.lastCheckedAt)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">{renderActions(proxy, true)}</div>
+                </article>
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );

@@ -32,7 +32,7 @@ export function TokenSheet({
             <SheetHeader className="flex-row items-center gap-3.5 px-5 pt-5 pr-14 pb-3">
               <TokenAvatar icon={holding?.icon} symbol={holding?.symbol} className="size-12" />
               <div className="min-w-0">
-                <SheetTitle className="truncate text-xl font-extrabold">{tokenLabel(holding?.symbol, mint)}</SheetTitle>
+                <SheetTitle className="truncate text-[20px] leading-7 font-semibold">{tokenLabel(holding?.symbol, mint)}</SheetTitle>
                 <SheetDescription className="flex min-w-0 items-center gap-2">
                   {holding?.name ? <span className="max-w-40 truncate">{holding.name}</span> : null}
                   <AddressChip value={mint} kind="token" label="mint address" chars={4} />
@@ -43,8 +43,8 @@ export function TokenSheet({
               {holding ? (
                 <>
                   <div>
-                    <div className="text-4xl font-extrabold tracking-tight tabular-nums">{holding.valueUsd === null ? "No price" : formatUsd(holding.valueUsd)}</div>
-                    <div className="mt-0.5 text-[13px] text-muted-foreground tabular-nums">
+                    <div className="text-4xl font-semibold tracking-[-0.025em] tabular-nums">{holding.valueUsd === null ? "No price" : formatUsd(holding.valueUsd)}</div>
+                    <div className="mt-0.5 text-[13px] text-text-2 tabular-nums">
                       {formatAmount(holding.balance)} {holding.symbol ?? ""} · {formatPrice(holding.priceUsd)} each
                     </div>
                   </div>
@@ -65,17 +65,17 @@ export function TokenSheet({
                   </div>
                 </>
               ) : (
-                <p className="rounded-2xl border border-border bg-card p-4 text-sm text-muted-foreground">This wallet no longer holds this token.</p>
+                <p className="rounded-xl border border-border bg-surface-2 p-4 text-sm text-text-2">This wallet no longer holds this token.</p>
               )}
               {accounts.length ? (
                 <div>
-                  <h3 className="mb-3 text-[15px] font-extrabold">Token account{accounts.length === 1 ? "" : "s"}</h3>
+                  <h3 className="mb-3 text-[15px] font-semibold">Token account{accounts.length === 1 ? "" : "s"}</h3>
                   <ul className="flex flex-col gap-2">
                     {accounts.map((a) => (
-                      <li key={a.account} className="flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3">
+                      <li key={a.account} className="flex items-center gap-3 rounded-[14px] border border-border bg-surface-2 px-4 py-3">
                         <div className="min-w-0 flex-1">
                           <AddressChip value={a.account} label="token account address" chars={5} />
-                          <div className="mt-1 text-xs text-muted-foreground tabular-nums">
+                          <div className="mt-1 text-xs text-text-2 tabular-nums">
                             {formatAmount(a.balance)} held · {formatSol(a.rentLamports / 1e9)} deposit
                           </div>
                         </div>
@@ -86,7 +86,7 @@ export function TokenSheet({
                 </div>
               ) : null}
               <div>
-                <h3 className="mb-3 text-[15px] font-extrabold">{tokenLabel(holding?.symbol, mint)} history</h3>
+                <h3 className="mb-3 text-[15px] font-semibold">{tokenLabel(holding?.symbol, mint)} history</h3>
                 <ActivityTable walletId={walletId} mint={mint} layout="list" showSummary={false} />
               </div>
             </div>

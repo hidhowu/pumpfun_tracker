@@ -5,14 +5,14 @@ import { toast } from "sonner";
 import { Layers, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { createBacktestViews, updateBacktestView } from "@/lib/backtest-api";
 import type { BacktestViewConfig, BacktestViewDefinition, BacktestViewSource } from "@/lib/backtest-types";
 import { formatUsd } from "@/lib/format";
 import { CombinedFields, parseCombined, toCombinedValues, type CombinedValues } from "./combined-fields";
+import { DialogHead, Field, Group } from "./dialog-parts";
 
 type Props = {
   runId: string;
@@ -93,36 +93,30 @@ export function NewViewDialog({ runId, source, suggestedBalanceUsd, open, onOpen
     }
   }
 
+  const walletSummary = numbers
+    ? `$${numbers.startingBalanceUsd} start · $${numbers.tradeSizeUsd}/trade · ${numbers.pumpFeePercent}% + $${numbers.jitoFeeUsd} · daily reset ${numbers.resetDaily ? "on" : "off"} · negative balance ${numbers.allowNegativeBalance ? "allowed" : "not allowed"}`
+    : undefined;
+
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      {/* The grid column is allowed to shrink below its content (minmax(0,1fr)) so long addresses and help texts wrap or scroll inside the dialog instead of pushing it wider. */}
-      <DialogContent className="max-h-[88vh] grid-cols-[minmax(0,1fr)] overflow-x-hidden overflow-y-auto sm:max-w-xl">
-        <DialogHeader className="min-w-0">
-          <DialogTitle className="flex items-center gap-2">
-            <Layers className="size-4" /> {editing ? "Edit combined backtest" : "New combined backtest"}
-          </DialogTitle>
-          <DialogDescription>
-            The addresses trade as ONE wallet with a shared starting balance, using the trades this backtest already simulated, re-priced with the amount and fees below. Nothing is fetched or
-            simulated again
-            {source.tradeSizeUsd != null && (
-              <>
-                {" "}
-                (this backtest used {formatUsd(source.tradeSizeUsd)} per trade, {source.pumpFeePercent ?? 0}% + {formatUsd(source.jitoFeeUsd ?? 0)} fees).
-              </>
-            )}
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="sm:max-w-[600px]">
+        <DialogHead
+          icon={<Layers className="size-5" />}
+          title={editing ? "Edit combined backtest" : "New combined backtest"}
+          help={`The addresses trade as ONE wallet with a shared starting balance, using the trades this backtest already simulated, re-priced with the amount and fees below. Nothing is fetched or simulated again${
+            source.tradeSizeUsd != null ? ` (this backtest used ${formatUsd(source.tradeSizeUsd)} per trade, ${source.pumpFeePercent ?? 0}% + ${formatUsd(source.jitoFeeUsd ?? 0)} fees)` : ""
+          }.`}
+          description="Name the combination, choose its addresses and set the wallet and fees."
+        />
 
         <div className="flex min-w-0 flex-col gap-4">
-          <div className="min-w-0 space-y-1.5">
-            <Label htmlFor="bt-view-name">Name</Label>
-            <Input id="bt-view-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Safe 5 at $10" maxLength={80} />
-          </div>
+          <Field label="Name" htmlFor="bt-view-name">
+            <Input id="bt-view-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Safe 5 at $10" maxLength={80} className="max-md:h-11" />
+          </Field>
 
-          <div className="min-w-0 space-y-1.5">
-            <Label>Addresses</Label>
+          <Field label="Addresses" htmlFor="bt-view-scope">
             <Select value={scope} onValueChange={(v) => setScope(v as "all" | "listed")}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger id="bt-view-scope" className="w-full max-md:h-11">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -130,11 +124,20 @@ export function NewViewDialog({ runId, source, suggestedBalanceUsd, open, onOpen
                 <SelectItem value="all">Every address of this backtest</SelectItem>
               </SelectContent>
             </Select>
-          </div>
+          </Field>
 
           {scope === "listed" && (
-            <div className="min-w-0 space-y-1.5">
-              <Label htmlFor="bt-view-addresses">One address per line</Label>
+            <Field
+              label="One address per line"
+              htmlFor="bt-view-addresses"
+              note={
+                parsed.badLines.length > 0 ? undefined : (
+                  <>
+                    {parsed.addresses.length > 0 ? `${parsed.addresses.length} address${parsed.addresses.length === 1 ? "" : "es"}` : "No addresses yet"} · every address must be part of this backtest.
+                  </>
+                )
+              }
+            >
               <Textarea
                 id="bt-view-addresses"
                 value={text}
@@ -144,25 +147,21 @@ export function NewViewDialog({ runId, source, suggestedBalanceUsd, open, onOpen
                 placeholder={"Paste the addresses of this combination,\none on each line"}
                 aria-invalid={parsed.badLines.length > 0}
                 // field-sizing-fixed: the box keeps its own size (the default grows with the text); long lines scroll sideways inside it.
-                className="h-52 max-w-full resize-y overflow-auto font-mono text-xs whitespace-pre field-sizing-fixed"
+                className="h-44 max-w-full resize-y overflow-auto font-mono text-xs whitespace-pre field-sizing-fixed"
               />
-              {parsed.badLines.length > 0 ? (
-                <p className="text-xs text-negative">
+              {parsed.badLines.length > 0 && (
+                <p className="text-xs leading-[18px] text-negative">
                   {parsed.badLines.length === 1 ? `Line ${parsed.badLines[0]} is` : `Lines ${parsed.badLines.slice(0, 6).join(", ")}${parsed.badLines.length > 6 ? "…" : ""} are`} not a single address - put exactly one
                   address on each line, no commas or spaces.
                 </p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  {parsed.addresses.length > 0 ? `${parsed.addresses.length} address${parsed.addresses.length === 1 ? "" : "es"}` : "No addresses yet"} · every address must be part of this backtest.
-                </p>
               )}
-            </div>
+            </Field>
           )}
 
-          <div className="min-w-0">
+          <Group title="Wallet and fees" summary={walletSummary}>
             <CombinedFields values={values} onChange={setValues} idPrefix="bt-view" recalculated />
-          </div>
-          <p className="text-xs text-muted-foreground">
+          </Group>
+          <p className="text-xs leading-[18px] text-text-3">
             Same entries and exits as the backtest, new amounts and fees. Stop-loss, take-profit and trailing stops were judged with the backtest&apos;s own fees, so with very different fees a
             trade sitting right at a threshold could have exited a moment earlier or later.
           </p>
@@ -175,7 +174,7 @@ export function NewViewDialog({ runId, source, suggestedBalanceUsd, open, onOpen
             </Button>
           </DialogClose>
           <Button onClick={save} disabled={!canSave} className="gap-1.5">
-            {busy && <Loader2 className="size-4 animate-spin" />}
+            {busy && <Loader2 className="animate-spin" />}
             {editing ? "Save" : "Create combined backtest"}
           </Button>
         </DialogFooter>

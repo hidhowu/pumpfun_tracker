@@ -6,6 +6,7 @@ import { isObjectIdString } from "@/db/settingsLimits";
 import { deleteWallet, renameWallet, updateWalletSettings } from "@/db/walletService";
 import { applyDailyBalanceResets } from "@/db/simulation/walletSnapshot";
 import { withPanic } from "@/db/walletPanic";
+import { WalletTrader } from "@/db/models/WalletTrader";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -20,7 +21,8 @@ export async function GET(_request: NextRequest, { params }: Params) {
   // this wallet was created (e.g. pumpFeePercent/jitoFeeUsd).
   const wallet = await Wallet.findById(id);
   if (!wallet) return NextResponse.json({ error: "Wallet not found" }, { status: 404 });
-  return NextResponse.json({ wallet: await withPanic(JSON.parse(JSON.stringify(wallet))) });
+  const traderCount = await WalletTrader.countDocuments({ walletId: wallet._id });
+  return NextResponse.json({ wallet: { ...(await withPanic(JSON.parse(JSON.stringify(wallet)))), traderCount } });
 }
 
 /** Body: { name?: string, settings?: Partial<Wallet["settings"]> } - either or both. */

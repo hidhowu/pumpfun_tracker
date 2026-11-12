@@ -94,6 +94,7 @@ export type Trader = {
   addedAt: string;
   blacklistedAt: string | null;
   listIds: string[]; // TraderList ids this trader is tagged into
+  pnlSpark?: number[]; // running realized P&L per UTC day over the last 14 days (list view only) - for the small trend line
   stats: TraderStats; // the tracked wallet's own on-chain stats - not shown in the UI, kept for internal bookkeeping
   sim: SimStats;
   settings: TraderSimSettings;
@@ -442,7 +443,8 @@ export type WalletView = {
   lastAutoResetAt: string | null;
   settings: WalletSettings;
   panic?: WalletPanic | null; // null/absent when the wallet has no panic level
-  traderCount?: number; // present on the /api/wallets list endpoint only
+  traderCount?: number; // present on the /api/wallets list and detail endpoints (not after a rename)
+  linkedLive?: boolean; // present on the /api/wallets list endpoint only - a live wallet is connected to this one
   todayRealizedPnlUsd?: number; // present on the /api/wallets list endpoint only - sum of realizedPnlUsd for positions closed today (UTC)
 };
 

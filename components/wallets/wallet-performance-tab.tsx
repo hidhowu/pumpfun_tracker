@@ -3,15 +3,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ChevronLeft, ChevronRight, Coins, LineChart, Layers, Wallet as WalletIcon } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { HelpTip } from "@/components/ui/help-tip";
+import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatTile } from "@/components/traders/stat-tile";
 import { WalletPerformanceChart, toChartPoints, type ChartMode } from "./wallet-performance-chart";
 import { WalletOpenPositionsTable } from "./wallet-open-positions-table";
 import { getWalletPnl } from "@/lib/api";
 import { formatUsd } from "@/lib/format";
+import { useMediaQuery } from "@/hooks/use-media-query";
+import { cn } from "@/lib/utils";
 import type { WalletPnlBreakdown, WalletView } from "@/lib/types";
 
 type Props = { wallet: WalletView };
@@ -38,7 +40,30 @@ const MODE_COPY: Record<ChartMode, Record<Period, { title: string; description: 
   },
 };
 
+const MODES = [
+  { value: "value", label: "Value" },
+  { value: "pnl", label: "P&L" },
+] as const;
+const PERIODS = [
+  { value: "day", label: "Day" },
+  { value: "week", label: "Week" },
+  { value: "month", label: "Month" },
+] as const;
+
+const tone = (n: number | null | undefined) => (n != null && n > 0 ? "text-positive" : n != null && n < 0 ? "text-negative" : undefined);
+const signedUsd = (n: number) => `${n > 0 ? "+" : ""}${formatUsd(n)}`;
+
+function Kpi({ label, value, className }: { label: string; value: React.ReactNode; className?: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <span className="text-xs text-text-3">{label}</span>
+      <span className={cn("truncate text-sm font-semibold tabular-nums", className)}>{value}</span>
+    </div>
+  );
+}
+
 export function WalletPerformanceTab({ wallet }: Props) {
+  const phone = !useMediaQuery("(min-width: 768px)");
   const [period, setPeriod] = useState<Period>("week");
   const [mode, setMode] = useState<ChartMode>("value");
   const [dayDate, setDayDate] = useState<string>(todayUtc); // only used by the Day view
@@ -70,70 +95,53 @@ export function WalletPerformanceTab({ wallet }: Props) {
   const isToday = dayDate >= todayUtc();
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatTile
-          label="Balance"
-          value={formatUsd(wallet.balanceUsd)}
-          icon={WalletIcon}
-          hint={`of ${formatUsd(wallet.startingBalanceUsd)} starting`}
-        />
+    <div className="flex flex-col gap-4 md:gap-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+        <StatTile label="Balance" value={formatUsd(wallet.balanceUsd)} icon={WalletIcon} hint={`of ${formatUsd(wallet.startingBalanceUsd)} starting`} />
         <StatTile
           label="Lifetime realized P&L"
-          value={formatUsd(wallet.realizedPnlUsd)}
+          value={signedUsd(wallet.realizedPnlUsd)}
           icon={Coins}
           tone={wallet.realizedPnlUsd > 0 ? "positive" : wallet.realizedPnlUsd < 0 ? "negative" : "default"}
-          hint="after all fees - incl. buy fees of open positions"
+          hint={
+            <>
+              <span className="md:hidden">incl. open buy fees</span>
+              <span className="max-md:hidden">after all fees - incl. buy fees of open positions</span>
+            </>
+          }
         />
         <StatTile label="Open positions" value={String(wallet.openPositionCount)} icon={Layers} />
         <StatTile label="Total trades" value={String(totalTrades)} icon={LineChart} hint={`${wallet.closedPositionCount} closed`} />
       </div>
 
-      <Card className="border-border/60">
-        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <LineChart className="size-4 text-primary" /> {copy.title}
-            </CardTitle>
-            <CardDescription>{copy.description}</CardDescription>
+      <div className="flex flex-col overflow-hidden rounded-[20px] border border-border bg-card">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4 md:px-5">
+          <b className="flex items-center gap-2 text-[15px] font-semibold">
+            <LineChart className="size-4 text-primary" />
+            {copy.title}
+            <HelpTip className="ml-0">{copy.description}</HelpTip>
+          </b>
+          <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
+            <Segmented options={MODES} value={mode} onChange={setMode} label="Chart shows" block={phone} tall={phone} />
+            <Segmented options={PERIODS} value={period} onChange={setPeriod} label="Period" block={phone} tall={phone} />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Tabs value={mode} onValueChange={(v) => setMode(v as ChartMode)}>
-              <TabsList>
-                <TabsTrigger value="value">Value</TabsTrigger>
-                <TabsTrigger value="pnl">P&amp;L</TabsTrigger>
-              </TabsList>
-            </Tabs>
-            <Tabs value={period} onValueChange={(v) => setPeriod(v as Period)}>
-              <TabsList>
-                <TabsTrigger value="day">Day</TabsTrigger>
-                <TabsTrigger value="week">Week</TabsTrigger>
-                <TabsTrigger value="month">Month</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
-        </CardHeader>
-        <CardContent>
+        </div>
+
+        <div className="flex flex-col gap-4 p-4 md:p-5">
           {period === "day" && (
-            <div className="mb-3 flex items-center justify-center gap-2">
-              <Button variant="ghost" size="icon-sm" aria-label="Previous day" onClick={() => setDayDate(addDaysUtc(dayDate, -1))}>
-                <ChevronLeft className="size-4" />
+            <div className="flex items-center justify-center gap-2">
+              <Button variant="outline" size={phone ? "icon-lg" : "icon-sm"} aria-label="Previous day" onClick={() => setDayDate(addDaysUtc(dayDate, -1))}>
+                <ChevronLeft />
               </Button>
-              <span className="min-w-36 text-center text-sm font-medium tabular-nums">
+              <span className="min-w-[150px] text-center text-sm font-medium tabular-nums">
                 {dayDate}
-                {isToday && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(today)</span>}
+                {isToday && <span className="ml-1.5 text-xs font-normal text-text-3">(today)</span>}
               </span>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Next day"
-                disabled={isToday}
-                onClick={() => setDayDate(addDaysUtc(dayDate, 1))}
-              >
-                <ChevronRight className="size-4" />
+              <Button variant="outline" size={phone ? "icon-lg" : "icon-sm"} aria-label="Next day" disabled={isToday} onClick={() => setDayDate(addDaysUtc(dayDate, 1))}>
+                <ChevronRight />
               </Button>
               {!isToday && (
-                <Button variant="outline" size="sm" onClick={() => setDayDate(todayUtc())}>
+                <Button variant="outline" size={phone ? "lg" : "sm"} onClick={() => setDayDate(todayUtc())}>
                   Today
                 </Button>
               )}
@@ -141,7 +149,7 @@ export function WalletPerformanceTab({ wallet }: Props) {
           )}
 
           {loading && !pnl ? (
-            <Skeleton className="h-56 w-full" />
+            <Skeleton className="h-56 w-full rounded-xl" />
           ) : pnl ? (
             <div className={loading ? "opacity-60 transition-opacity" : "transition-opacity"}>
               <WalletPerformanceChart points={toChartPoints(pnl)} mode={mode} />
@@ -149,53 +157,16 @@ export function WalletPerformanceTab({ wallet }: Props) {
           ) : null}
 
           {pnl && (
-            <div className="mt-4 grid grid-cols-2 gap-4 border-t border-border/60 pt-4 sm:grid-cols-5">
-              <div className="flex flex-col gap-0.5">
-                <span className="text-xs text-muted-foreground">Period P&amp;L</span>
-                <span
-                  className={[
-                    "text-sm font-semibold tabular-nums",
-                    pnl.actualizedUsd != null && pnl.actualizedUsd > 0 && "text-positive",
-                    pnl.actualizedUsd != null && pnl.actualizedUsd < 0 && "text-negative",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                >
-                  {pnl.actualizedUsd != null ? formatUsd(pnl.actualizedUsd) : "—"}
-                </span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                <span className="text-xs text-muted-foreground">Realized P&amp;L</span>
-                <span
-                  className={[
-                    "text-sm font-semibold tabular-nums",
-                    pnl.combinedUsd > 0 && "text-positive",
-                    pnl.combinedUsd < 0 && "text-negative",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                >
-                  {formatUsd(pnl.combinedUsd)}
-                </span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                <span className="text-xs text-muted-foreground">Closed trades</span>
-                <span className="text-sm font-semibold tabular-nums">{pnl.closedTradeCount}</span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                <span className="text-xs text-muted-foreground">Win rate</span>
-                <span className="text-sm font-semibold tabular-nums">{pnl.winRatePercent != null ? `${pnl.winRatePercent.toFixed(0)}%` : "—"}</span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                <span className="text-xs text-muted-foreground">Current streak</span>
-                <span className="text-sm font-semibold tabular-nums">
-                  {streak && streak.type !== "none" ? `${streak.length}d ${streak.type}` : "—"}
-                </span>
-              </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-t border-border pt-4 sm:grid-cols-5">
+              <Kpi label="Period P&L" value={pnl.actualizedUsd != null ? signedUsd(pnl.actualizedUsd) : "—"} className={tone(pnl.actualizedUsd)} />
+              <Kpi label="Realized P&L" value={signedUsd(pnl.combinedUsd)} className={tone(pnl.combinedUsd)} />
+              <Kpi label="Closed trades" value={pnl.closedTradeCount} />
+              <Kpi label="Win rate" value={pnl.winRatePercent != null ? `${pnl.winRatePercent.toFixed(0)}%` : "—"} />
+              <Kpi label="Current streak" value={streak && streak.type !== "none" ? `${streak.length}d ${streak.type}` : "—"} className={streak?.type === "profit" ? "text-positive" : streak?.type === "loss" ? "text-negative" : undefined} />
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       <WalletOpenPositionsTable walletId={wallet._id} />
     </div>

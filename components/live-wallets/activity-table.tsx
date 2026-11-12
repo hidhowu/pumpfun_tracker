@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ArrowDownLeft, ArrowLeftRight, Flame, ArrowUpRight, ChevronLeft, ChevronRight, CircleAlert, Coins, ExternalLink, RefreshCw, TrendingDown, TrendingUp, Trophy, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Chip } from "@/components/ui/chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatTile } from "@/components/traders/stat-tile";
@@ -16,15 +16,15 @@ import { cn } from "@/lib/utils";
 type Pill = "buy" | "sell" | "receive" | "send" | "neutral" | "failed";
 
 const KIND_META: Record<LiveTxKind, { label: string; pill: Pill; icon: typeof ArrowDownLeft; tint: string }> = {
-  buy: { label: "Bought", pill: "buy", icon: ArrowLeftRight, tint: "bg-positive/15 text-positive" },
-  sell: { label: "Sold", pill: "sell", icon: ArrowLeftRight, tint: "bg-[#ff8a5b]/15 text-[#ff9b6e]" },
-  receive: { label: "Received", pill: "receive", icon: ArrowDownLeft, tint: "bg-primary/15 text-brand-soft" },
-  send: { label: "Sent", pill: "send", icon: ArrowUpRight, tint: "bg-[#9a97b3]/15 text-[#b8b5d0]" },
-  burn: { label: "Burned", pill: "failed", icon: Flame, tint: "bg-negative/15 text-negative" },
-  sol_in: { label: "SOL in", pill: "receive", icon: Coins, tint: "bg-primary/15 text-brand-soft" },
-  sol_out: { label: "SOL out", pill: "send", icon: Coins, tint: "bg-[#9a97b3]/15 text-[#b8b5d0]" },
-  other: { label: "Other", pill: "neutral", icon: CircleAlert, tint: "bg-[#9a97b3]/15 text-[#b8b5d0]" },
-  failed: { label: "Failed", pill: "failed", icon: CircleAlert, tint: "bg-negative/15 text-negative" },
+  buy: { label: "Bought", pill: "buy", icon: ArrowLeftRight, tint: "bg-pos-soft text-positive" },
+  sell: { label: "Sold", pill: "sell", icon: ArrowLeftRight, tint: "bg-warn-soft text-warn" },
+  receive: { label: "Received", pill: "receive", icon: ArrowDownLeft, tint: "bg-volt-soft text-primary" },
+  send: { label: "Sent", pill: "send", icon: ArrowUpRight, tint: "bg-surface-3 text-text-2" },
+  burn: { label: "Burned", pill: "failed", icon: Flame, tint: "bg-neg-soft text-destructive" },
+  sol_in: { label: "SOL in", pill: "receive", icon: Coins, tint: "bg-volt-soft text-primary" },
+  sol_out: { label: "SOL out", pill: "send", icon: Coins, tint: "bg-surface-3 text-text-2" },
+  other: { label: "Other", pill: "neutral", icon: CircleAlert, tint: "bg-surface-3 text-text-2" },
+  failed: { label: "Failed", pill: "failed", icon: CircleAlert, tint: "bg-neg-soft text-destructive" },
 };
 
 const FILTERS = [
@@ -50,6 +50,7 @@ const SOL_FILTERS = [
 ];
 
 const PAGE_SIZE = 25;
+const headCls = "text-[11px] font-medium tracking-[0.07em] text-text-3 uppercase";
 
 /** The figures shown for one transaction, shared by the table and the list so they never disagree. */
 function describe(tx: LiveTransaction) {
@@ -68,7 +69,7 @@ function KindIcon({ kind }: { kind: LiveTxKind }) {
   const meta = KIND_META[kind];
   const Icon = meta.icon;
   return (
-    <span className={cn("flex size-11 shrink-0 items-center justify-center rounded-full", meta.tint)}>
+    <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", meta.tint)}>
       <Icon className="size-5" />
     </span>
   );
@@ -76,7 +77,7 @@ function KindIcon({ kind }: { kind: LiveTxKind }) {
 
 function amountTone(tx: LiveTransaction) {
   if (tx.kind === "buy") return "text-positive";
-  if (tx.kind === "receive" || tx.kind === "sol_in") return "text-brand-soft";
+  if (tx.kind === "receive" || tx.kind === "sol_in") return "text-primary";
   return "text-foreground";
 }
 
@@ -87,7 +88,7 @@ function TxLink({ signature }: { signature: string }) {
       target="_blank"
       rel="noreferrer"
       aria-label="View transaction on Solscan"
-      className="inline-flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+      className="inline-flex size-8 items-center justify-center rounded-lg text-text-3 transition-colors hover:bg-accent hover:text-foreground"
     >
       <ExternalLink className="size-3.5" />
     </a>
@@ -117,14 +118,14 @@ function ListRow({ tx, showToken, onSelectToken, solView }: { tx: LiveTransactio
     <>
       <KindIcon kind={tx.kind} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[15px] font-bold">{title}</div>
-        <div className="text-xs text-muted-foreground" title={tx.blockTime ? new Date(tx.blockTime).toLocaleString() : undefined}>
+        <div className="truncate text-[15px] font-semibold">{title}</div>
+        <div className="text-xs text-text-3" title={tx.blockTime ? new Date(tx.blockTime).toLocaleString() : undefined}>
           {formatRelativeTime(tx.blockTime)}
         </div>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-0.5 text-right">
-        <div className={cn("text-[15px] font-bold tabular-nums", amountClass)}>{amountText}</div>
-        {subText ? <div className="text-xs text-muted-foreground tabular-nums">{subText}</div> : null}
+        <div className={cn("text-[15px] font-semibold tabular-nums", amountClass)}>{amountText}</div>
+        {subText ? <div className="text-xs text-text-3 tabular-nums">{subText}</div> : null}
         {tx.kind === "sell" && tx.realizedPnlUsd !== null ? <PnlPill usd={tx.realizedPnlUsd} pct={tx.realizedPnlPct} className="mt-1" /> : null}
       </div>
     </>
@@ -147,22 +148,22 @@ function TableRowTx({ tx, showToken, onSelectToken }: { tx: LiveTransaction; sho
   const meta = KIND_META[tx.kind];
   const d = describe(tx);
   return (
-    <TableRow className="h-16">
+    <TableRow className="h-16 border-border">
       <TableCell className="pl-5">
         <TypePill label={meta.label} tone={meta.pill} />
-        <div className="mt-1 text-xs text-muted-foreground" title={tx.blockTime ? new Date(tx.blockTime).toLocaleString() : undefined}>
+        <div className="mt-1 text-xs text-text-3" title={tx.blockTime ? new Date(tx.blockTime).toLocaleString() : undefined}>
           {formatRelativeTime(tx.blockTime)}
         </div>
       </TableCell>
       {showToken ? (
         <TableCell>
           {d.hasToken ? (
-            <button type="button" onClick={() => onSelectToken?.(tx.mint!)} className="flex items-center gap-2.5 text-left hover:text-brand-soft">
+            <button type="button" onClick={() => onSelectToken?.(tx.mint!)} className="flex items-center gap-2.5 text-left hover:text-primary">
               <TokenAvatar icon={tx.icon} symbol={tx.symbol} className="size-7" />
-              <span className="max-w-28 truncate font-extrabold">{d.symbol}</span>
+              <span className="max-w-28 truncate text-[13px] font-semibold">{d.symbol}</span>
             </button>
           ) : (
-            <span className="flex items-center gap-2.5 text-muted-foreground">
+            <span className="flex items-center gap-2.5 text-text-3">
               <Wallet className="size-4" /> SOL
             </span>
           )}
@@ -170,10 +171,10 @@ function TableRowTx({ tx, showToken, onSelectToken }: { tx: LiveTransaction; sho
       ) : null}
       <TableCell className={cn("text-right font-semibold tabular-nums", amountTone(tx))}>{d.amount}</TableCell>
       <TableCell className="text-right tabular-nums">
-        <div className={cn(d.value === "No price" ? "text-muted-foreground" : "font-semibold")}>{d.value}</div>
-        {d.sol ? <div className="text-xs text-muted-foreground">{d.sol}</div> : null}
+        <div className={cn(d.value === "No price" ? "text-text-3" : "font-semibold")}>{d.value}</div>
+        {d.sol ? <div className="text-xs text-text-3">{d.sol}</div> : null}
       </TableCell>
-      <TableCell className="text-right">{tx.kind === "sell" && tx.realizedPnlUsd !== null ? <PnlPill usd={tx.realizedPnlUsd} pct={tx.realizedPnlPct} /> : <span className="text-muted-foreground">-</span>}</TableCell>
+      <TableCell className="text-right">{tx.kind === "sell" && tx.realizedPnlUsd !== null ? <PnlPill usd={tx.realizedPnlUsd} pct={tx.realizedPnlPct} /> : <span className="text-text-3">—</span>}</TableCell>
       <TableCell className="pr-4 text-right">
         <TxLink signature={tx.signature} />
       </TableCell>
@@ -244,32 +245,27 @@ export function ActivityTable({
       <div className="flex items-center gap-2">
         <div role="group" aria-label="Filter activity" className="-mx-1 flex min-w-0 flex-1 gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {(mint === "SOL" ? SOL_FILTERS : FILTERS).map((f) => (
-            <button
+            <Chip
               key={f.value}
-              type="button"
-              aria-pressed={filter === f.value}
+              active={filter === f.value}
               onClick={() => {
                 setFilter(f.value);
                 setPage(1);
               }}
-              className={cn(
-                "h-9 shrink-0 rounded-full border px-4 text-sm font-bold transition-colors",
-                filter === f.value ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-muted-foreground hover:text-foreground"
-              )}
             >
               {f.label}
-            </button>
+            </Chip>
           ))}
         </div>
-        <Button variant="ghost" size="icon" className="shrink-0 text-muted-foreground" onClick={load} aria-label="Refresh transactions">
+        <Button variant="ghost" size="icon" className="shrink-0 text-text-3 max-md:size-10" onClick={load} aria-label="Refresh transactions">
           <RefreshCw className="size-4" />
         </Button>
       </div>
-      {data ? <div className="-mt-2 text-xs text-muted-foreground">{`${data.total} transaction${data.total === 1 ? "" : "s"}`}</div> : null}
+      {data ? <div className="-mt-2 text-xs text-text-3">{`${data.total} transaction${data.total === 1 ? "" : "s"}`}</div> : null}
 
-      <Card className="gap-0 py-0">
+      <div className="overflow-hidden rounded-[20px] border border-border bg-card">
         {error && !data ? (
-          <div className="p-6 text-sm text-destructive">{error}</div>
+          <div className="p-6 text-sm text-destructive" role="alert">{error}</div>
         ) : loading && !data ? (
           <div className="flex flex-col gap-2 p-4">
             {Array.from({ length: 4 }).map((_, i) => (
@@ -277,7 +273,7 @@ export function ActivityTable({
             ))}
           </div>
         ) : !data || data.transactions.length === 0 ? (
-          <div className="flex min-h-40 items-center justify-center px-6 text-center text-sm text-muted-foreground">No transactions yet.</div>
+          <div className="flex min-h-40 items-center justify-center px-6 text-center text-sm text-text-3">No transactions yet.</div>
         ) : (
           <>
             <ul className={cn("px-4", !listOnly && "md:hidden")}>
@@ -289,12 +285,12 @@ export function ActivityTable({
               <div className="hidden md:block">
                 <Table>
                   <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead className="pl-5">Type</TableHead>
-                      {showToken ? <TableHead>Token</TableHead> : null}
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead className="text-right">Value</TableHead>
-                      <TableHead className="text-right">Profit / loss</TableHead>
+                    <TableRow className="border-border hover:bg-transparent">
+                      <TableHead className={cn(headCls, "pl-5")}>Type</TableHead>
+                      {showToken ? <TableHead className={headCls}>Token</TableHead> : null}
+                      <TableHead className={cn(headCls, "text-right")}>Amount</TableHead>
+                      <TableHead className={cn(headCls, "text-right")}>Value</TableHead>
+                      <TableHead className={cn(headCls, "text-right")}>Profit / loss</TableHead>
                       <TableHead className="pr-4 text-right">
                         <span className="sr-only">Transaction</span>
                       </TableHead>
@@ -311,24 +307,24 @@ export function ActivityTable({
           </>
         )}
         {data && data.totalPages > 1 ? (
-          <div className="flex items-center justify-between border-t border-border px-4 py-2 text-sm text-muted-foreground">
+          <div className="flex items-center justify-between border-t border-border px-4 py-2 text-[13px] text-text-2">
             <span>
               Page {data.page} of {data.totalPages}
             </span>
             <div className="flex gap-1">
-              <Button variant="ghost" size="icon" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} aria-label="Previous page">
+              <Button variant="outline" size="icon-sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} aria-label="Previous page">
                 <ChevronLeft className="size-4" />
               </Button>
-              <Button variant="ghost" size="icon" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)} aria-label="Next page">
+              <Button variant="outline" size="icon-sm" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)} aria-label="Next page">
                 <ChevronRight className="size-4" />
               </Button>
             </div>
           </div>
         ) : null}
-      </Card>
+      </div>
 
-      {data?.syncError ? <p className="text-xs text-muted-foreground">Sync note: {data.syncError}</p> : null}
-      <p className="text-xs leading-relaxed text-muted-foreground">
+      {data?.syncError ? <p className="text-xs text-text-3">Sync note: {data.syncError}</p> : null}
+      <p className="text-xs leading-[18px] text-text-3">
         Tokens sent to you or sent out have no purchase price, so they never count as profit or loss. Only buys and sells do. Profit and loss uses the average cost of the tokens sold, after the network fee. USD values use the SOL price when each transaction was synced.
       </p>
     </div>

@@ -5,15 +5,17 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { Loader2, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { SettingsList, SettingsRow } from "@/components/ui/settings-row";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { listWallets } from "@/lib/api";
 import { createWalletsFromViews, type WalletsFromViewsResult } from "@/lib/backtest-api";
 import { formatUsd } from "@/lib/format";
 import type { BacktestViewDefinition } from "@/lib/backtest-types";
 import type { WalletView } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import { CheckMark, DialogHead, Field } from "./dialog-parts";
 
 const NO_WALLET = "none";
 
@@ -77,23 +79,22 @@ export function AddViewsToWalletsDialog({ runId, views, open, onOpenChange }: Pr
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col">
-        <DialogHeader>
-          <DialogTitle>Add combined views to wallets</DialogTitle>
-          <DialogDescription>
-            Each ticked view becomes a wallet that tracks its addresses live. It starts fresh from the view&apos;s starting balance - none of the backtest&apos;s trades are copied.
-            Addresses that aren&apos;t tracked yet are added to tracking.
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="sm:max-w-[600px]">
+        <DialogHead
+          icon={<Wallet className="size-5" />}
+          title={result ? "Wallets created" : "Add combined views to wallets"}
+          help="Each ticked view becomes a wallet that tracks its addresses live. It starts fresh from the view's starting balance - none of the backtest's trades are copied. Addresses that aren't tracked yet are added to tracking."
+          description="Create a wallet from each selected combined view."
+        />
 
         {result ? (
-          <div className="flex min-h-0 max-h-[45dvh] flex-col gap-2 overflow-y-auto text-sm">
+          <div className="flex max-h-[50dvh] flex-col gap-2 overflow-y-auto">
             {result.created.map((c) => (
-              <div key={c.walletId} className="rounded-md border border-border/60 px-3 py-2">
-                <Link href={`/wallets/${c.walletId}`} className="font-medium hover:underline">
+              <div key={c.walletId} className="flex flex-col gap-0.5 rounded-[14px] border border-border bg-surface-2 px-3.5 py-3">
+                <Link href={`/wallets/${c.walletId}`} className="text-[13.5px] font-semibold hover:text-primary">
                   {c.name}
                 </Link>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-text-3">
                   {c.added} of {c.addresses} addresses tracking
                   {c.blacklisted > 0 ? ` · ${c.blacklisted} blacklisted (skipped)` : ""}
                   {c.invalid > 0 ? ` · ${c.invalid} invalid (skipped)` : ""}
@@ -101,40 +102,56 @@ export function AddViewsToWalletsDialog({ runId, views, open, onOpenChange }: Pr
               </div>
             ))}
             {result.skipped.map((s) => (
-              <p key={s.viewId} className="text-xs text-muted-foreground">
+              <p key={s.viewId} className="px-1 text-xs text-text-3">
                 Skipped &quot;{s.name}&quot;: {s.reason}
               </p>
             ))}
           </div>
         ) : (
           <div className="flex min-h-0 flex-col gap-4">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium">
                 {picked.size} of {views.length} selected
               </span>
-              <button type="button" className="underline" onClick={() => setPicked(picked.size === views.length ? new Set() : new Set(views.map((v) => v._id)))}>
+              <Button variant="outline" size="sm" onClick={() => setPicked(picked.size === views.length ? new Set() : new Set(views.map((v) => v._id)))}>
                 {picked.size === views.length ? "Clear" : "Select all"}
-              </button>
+              </Button>
             </div>
-            <div className="min-h-0 max-h-[45dvh] overflow-y-auto rounded-md border border-border/60">
-              {views.map((v) => (
-                <label key={v._id} className="flex cursor-pointer items-center gap-3 border-b border-border/40 px-3 py-2 last:border-b-0">
-                  <input type="checkbox" checked={picked.has(v._id)} onChange={() => toggle(v._id)} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">{v.name}</span>
-                    <span className="block text-xs text-muted-foreground">
-                      {v.allAddresses ? "all addresses" : `${v.addressCount} addresses`} · {formatUsd(v.startingBalanceUsd)} start · {formatUsd(v.tradeSizeUsd)}/trade · {v.pumpFeePercent}% +{" "}
-                      {formatUsd(v.jitoFeeUsd)}
+            <div className="flex max-h-[40dvh] flex-col gap-1.5 overflow-y-auto">
+              {views.map((v) => {
+                const on = picked.has(v._id);
+                return (
+                  <button
+                    key={v._id}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={on}
+                    onClick={() => toggle(v._id)}
+                    className={cn(
+                      "flex items-start gap-3 rounded-[14px] border bg-surface-2 px-3.5 py-3 text-left transition-colors",
+                      on ? "border-volt-line bg-volt-soft" : "border-border hover:border-line-2"
+                    )}
+                  >
+                    <CheckMark checked={on} className="mt-0.5" />
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <b className="truncate text-[13.5px] font-semibold">{v.name}</b>
+                      <span className="text-xs text-text-3">
+                        {v.allAddresses ? "all addresses" : `${v.addressCount} addresses`} · {formatUsd(v.startingBalanceUsd)} start · {formatUsd(v.tradeSizeUsd)}/trade · {v.pumpFeePercent}% + {formatUsd(v.jitoFeeUsd)}
+                      </span>
                     </span>
-                  </span>
-                </label>
-              ))}
+                  </button>
+                );
+              })}
             </div>
 
-            <div className="flex flex-col gap-2">
-              <Label>Import settings from an existing wallet (optional)</Label>
+            <Field
+              label="Import settings from an existing wallet"
+              optional
+              htmlFor="views-wallet"
+              help="Stop-loss, take-profit, trailing stops, max trade time, execution delay and dust settings come from that wallet. The view's own balance, trade amount and fees are kept."
+            >
               <Select value={walletId} onValueChange={setWalletId}>
-                <SelectTrigger>
+                <SelectTrigger id="views-wallet" className="w-full max-md:h-11">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -146,30 +163,24 @@ export function AddViewsToWalletsDialog({ runId, views, open, onOpenChange }: Pr
                   ))}
                 </SelectContent>
               </Select>
-              {walletId !== NO_WALLET && (
-                <>
-                  <p className="text-xs text-muted-foreground">
-                    Stop-loss, take-profit, trailing stops, max trade time, execution delay and dust settings come from that wallet. The view&apos;s own balance, trade amount and fees are kept.
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <Switch id="money-too" checked={moneyToo} onCheckedChange={setMoneyToo} />
-                    <Label htmlFor="money-too" className="text-sm font-normal">
-                      Also take starting balance, trade amount, fees and daily reset from that wallet
-                    </Label>
-                  </div>
-                </>
-              )}
-            </div>
+            </Field>
+            {walletId !== NO_WALLET && (
+              <SettingsList>
+                <SettingsRow label="Also take balance, trade amount, fees and daily reset from that wallet" htmlFor="money-too">
+                  <Switch id="money-too" checked={moneyToo} onCheckedChange={setMoneyToo} />
+                </SettingsRow>
+              </SettingsList>
+            )}
           </div>
         )}
 
         <DialogFooter>
           <DialogClose asChild>
-            <Button variant="outline">{result ? "Close" : "Cancel"}</Button>
+            <Button variant={result ? "outline" : "ghost"}>{result ? "Close" : "Cancel"}</Button>
           </DialogClose>
           {!result && (
             <Button className="gap-1.5" disabled={busy || picked.size === 0} onClick={submit}>
-              {busy ? <Loader2 className="size-4 animate-spin" /> : <Wallet className="size-4" />}
+              {busy ? <Loader2 className="animate-spin" /> : <Wallet />}
               Create {picked.size} wallet{picked.size === 1 ? "" : "s"}
             </Button>
           )}

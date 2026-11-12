@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { HelpTip } from "@/components/ui/help-tip";
 import { addTraderSingle, addTradersBulk } from "@/lib/api";
 import { formatAddress } from "@/lib/format";
 
@@ -117,22 +118,29 @@ export function AddTraderDialog({ onAdded }: { onAdded: () => void }) {
       }}
     >
       <DialogTrigger asChild>
-        <Button className="gap-1.5">
-          <Plus className="size-4" />
-          Add Trader
+        <Button className="hidden gap-1.5 sm:inline-flex">
+          <Plus className="size-4" strokeWidth={2.2} />
+          Add trader
+        </Button>
+      </DialogTrigger>
+      {/* Phone: a floating button above the tab bar. */}
+      <DialogTrigger asChild>
+        <Button size="lg" className="fixed right-4 bottom-[84px] z-20 h-[52px] gap-2 rounded-full px-5 text-sm font-semibold shadow-[0_10px_28px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.06)] sm:hidden">
+          <Plus className="size-5" strokeWidth={2.2} />
+          Add trader
         </Button>
       </DialogTrigger>
       <DialogContent className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Add trader(s) to track</DialogTitle>
-          <DialogDescription>
-            Only new addresses are added. Anything already on the platform is skipped - including
-            blacklisted addresses, which stay blacklisted and untracked.
-          </DialogDescription>
+          <DialogTitle>
+            Add trader(s) to track
+            <HelpTip>Only new addresses are added. Already-tracked and blacklisted ones are skipped.</HelpTip>
+          </DialogTitle>
+          <DialogDescription className="sr-only">Add one wallet address, or paste many.</DialogDescription>
         </DialogHeader>
 
         <Tabs defaultValue="single">
-          <TabsList className="w-full">
+          <TabsList className="h-11 w-full sm:h-10">
             <TabsTrigger value="single" className="flex-1">
               Single
             </TabsTrigger>
@@ -188,7 +196,7 @@ export function AddTraderDialog({ onAdded }: { onAdded: () => void }) {
                 // comma-joined line can't stretch it sideways either.
                 className="field-sizing-fixed h-40 max-h-40 resize-none overflow-x-hidden overflow-y-auto font-mono text-sm break-all whitespace-pre-wrap"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-text-3">
                 {bulkAddresses.length} address{bulkAddresses.length === 1 ? "" : "es"} detected
               </p>
             </div>

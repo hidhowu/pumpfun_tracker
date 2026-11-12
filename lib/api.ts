@@ -100,14 +100,37 @@ export function updateSettings(profileId: string, patch: Partial<GlobalSettings>
   return request(`/api/settings?profileId=${profileId}`, { method: "PATCH", body: JSON.stringify(patch) });
 }
 
+/** Optional narrowing for a trader's closed-trade history (all handled by the server). */
+export type PositionFilters = {
+  q?: string;
+  result?: "win" | "loss";
+  reason?: string;
+  /** Closed on or after / on or before this UTC day, YYYY-MM-DD. */
+  from?: string;
+  to?: string;
+  sort?: "closed" | "pnl";
+  dir?: "asc" | "desc";
+};
+
 export function getPositions(
   profileId: string,
   address: string,
   status: "open" | "closed",
   page = 1,
-  limit = 25
+  limit = 25,
+  filters: PositionFilters = {}
 ): Promise<{ positions: SimPosition[]; page: number; totalPages: number; total: number }> {
-  return request(`/api/traders/${address}/positions?profileId=${profileId}&status=${status}&page=${page}&limit=${limit}`);
+  const extra = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) if (value) extra.set(key, value);
+  const tail = extra.toString();
+  return request(`/api/traders/${address}/positions?profileId=${profileId}&status=${status}&page=${page}&limit=${limit}${tail ? `&${tail}` : ""}`);
+}
+
+export type HourlyPnl = { date: string; hours: { hour: number; pnlUsd: number; trades: number }[] };
+
+/** One UTC day of this trader's realized P&L, per hour. */
+export function getHourlyPnl(profileId: string, address: string, date: string): Promise<HourlyPnl> {
+  return request(`/api/traders/${address}/pnl/hourly?profileId=${profileId}&date=${date}`);
 }
 
 export function getPnl(profileId: string, address: string, period: "day" | "week" | "month" = "week"): Promise<PnlBreakdown> {
@@ -411,9 +434,13 @@ export function getWalletPositions(
   walletId: string,
   status: "open" | "closed",
   page = 1,
-  limit = 25
+  limit = 25,
+  filters: Pick<PositionFilters, "q" | "result" | "reason"> = {}
 ): Promise<{ positions: WalletPositionView[]; page: number; totalPages: number; total: number }> {
-  return request(`/api/wallets/${walletId}/positions?status=${status}&page=${page}&limit=${limit}`);
+  const extra = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) if (value) extra.set(key, value);
+  const tail = extra.toString();
+  return request(`/api/wallets/${walletId}/positions?status=${status}&page=${page}&limit=${limit}${tail ? `&${tail}` : ""}`);
 }
 
 /** The wallet's positions that nothing could price - sold for it, or still open without a price. */

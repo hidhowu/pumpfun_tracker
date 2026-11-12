@@ -2,14 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Plus } from "lucide-react";
+import { FlaskConical, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { addAddressesToRunBatched, listBacktestRuns } from "@/lib/backtest-api";
 import type { BacktestRunSummary } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
 import { BatchProgress, type BatchState } from "./batch-progress";
+import { DialogHead } from "./dialog-parts";
 import { RunStatusBadge } from "./shared";
 
 /**
@@ -56,42 +57,48 @@ export function AddToBacktestDialog({ addresses, open, onOpenChange, onDone }: {
 
   return (
     <Dialog open={open} onOpenChange={(next) => !working && onOpenChange(next)}>
-      <DialogContent className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-lg" onInteractOutside={(e) => working && e.preventDefault()} onEscapeKeyDown={(e) => working && e.preventDefault()}>
+      <DialogContent className="sm:max-w-[520px]" onInteractOutside={(e) => working && e.preventDefault()} onEscapeKeyDown={(e) => working && e.preventDefault()}>
         {working && state ? (
-          <BatchProgress title="Adding to the backtest…" note="Sent in batches so the page and the server stay responsive. Closing is disabled until it finishes." state={state} stopping={false} />
+          <BatchProgress title="Adding to the backtest…" note="Sent in batches so the page and the server stay responsive." state={state} stopping={false} />
         ) : (
           <>
-            <DialogHeader>
-              <DialogTitle>
-                Add {addresses.length.toLocaleString()} address{addresses.length === 1 ? "" : "es"} to a backtest
-              </DialogTitle>
-              <DialogDescription>
-                Pick the backtest to grow. If it is running the new addresses are picked up at once; if it has finished it is paused with them waiting, and Resume processes only
-                the new ones. Addresses it already has are skipped.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto">
+            <DialogHead
+              icon={<FlaskConical className="size-5" />}
+              title={`Add ${addresses.length.toLocaleString()} address${addresses.length === 1 ? "" : "es"} to a backtest`}
+              help="Pick the backtest to grow. A running one picks the new addresses up at once; a finished one is paused with them waiting, and Resume processes only them. Addresses it already has are skipped."
+              description="Choose the backtest to add the selected addresses to."
+            />
+            <div role="radiogroup" aria-label="Backtest to add to" className="flex max-h-72 flex-col gap-1.5 overflow-y-auto">
               {runs === null ? (
-                Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)
+                Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-14 w-full rounded-[14px]" />)
               ) : runs.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">There are no backtests yet.</p>
+                <p className="rounded-[14px] border border-dashed border-line-3 px-4 py-8 text-center text-sm text-text-2">There are no backtests yet.</p>
               ) : (
-                runs.map((r) => (
-                  <button
-                    key={r._id}
-                    type="button"
-                    onClick={() => setChoice(r._id)}
-                    className={cn("flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition-colors", choice === r._id ? "border-primary bg-primary/5" : "border-border/60 hover:bg-muted/40")}
-                  >
-                    <span className="flex min-w-0 flex-col">
-                      <span className="truncate text-sm font-medium">{r.name}</span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {r.addressCount.toLocaleString()} address{r.addressCount === 1 ? "" : "es"} · {r.days}d · {r.profileName}
+                runs.map((r) => {
+                  const on = choice === r._id;
+                  return (
+                    <button
+                      key={r._id}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      onClick={() => setChoice(r._id)}
+                      className={cn(
+                        "flex min-h-[56px] items-center gap-3 rounded-[14px] border bg-surface-2 px-3.5 py-2 text-left transition-colors",
+                        on ? "border-volt-line bg-volt-soft" : "border-border hover:border-line-2"
+                      )}
+                    >
+                      <span className={cn("flex size-[18px] shrink-0 items-center justify-center rounded-full border", on ? "border-primary" : "border-line-3")}>{on && <span className="size-2 rounded-full bg-primary" />}</span>
+                      <span className="flex min-w-0 flex-1 flex-col leading-[1.3]">
+                        <b className="truncate text-[13.5px] font-semibold">{r.name}</b>
+                        <span className="truncate text-xs text-text-3">
+                          {r.addressCount.toLocaleString()} address{r.addressCount === 1 ? "" : "es"} · {r.days}d · {r.profileName}
+                        </span>
                       </span>
-                    </span>
-                    <RunStatusBadge status={r.status} control={r.control} queuePosition={r.progress.queuePosition} />
-                  </button>
-                ))
+                      <RunStatusBadge status={r.status} control={r.control} queuePosition={r.progress.queuePosition} />
+                    </button>
+                  );
+                })
               )}
             </div>
             <DialogFooter>
@@ -99,7 +106,7 @@ export function AddToBacktestDialog({ addresses, open, onOpenChange, onDone }: {
                 <Button variant="ghost">Cancel</Button>
               </DialogClose>
               <Button className="gap-1.5" disabled={!chosen || addresses.length === 0} onClick={add}>
-                {runs === null ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+                {runs === null ? <Loader2 className="animate-spin" /> : <Plus />}
                 Add to backtest
               </Button>
             </DialogFooter>

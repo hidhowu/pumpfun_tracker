@@ -18,6 +18,14 @@ export function formatUsd(value: number | null | undefined): string {
   return usdFormatter.format(value);
 }
 
+/** A per-token price: normal USD formatting from a cent up, and enough decimals below that for the first significant digits to show ($0.0000064). */
+export function formatPrice(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  if (value === 0 || Math.abs(value) >= 0.01) return formatUsd(value);
+  const decimals = Math.min(12, 2 - Math.floor(Math.log10(Math.abs(value))));
+  return `${value < 0 ? "-" : ""}$${Math.abs(value).toFixed(decimals)}`;
+}
+
 export function formatUsdCompact(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
   return compactUsdFormatter.format(value);

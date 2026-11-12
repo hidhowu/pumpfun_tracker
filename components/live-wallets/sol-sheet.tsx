@@ -20,14 +20,14 @@ export function SolSheet({ walletId, open, chain, onClose }: { walletId: string;
         <SheetHeader className="flex-row items-center gap-3.5 px-5 pt-5 pr-14 pb-3">
           <TokenAvatar symbol="SOL" className="size-12" />
           <div className="min-w-0">
-            <SheetTitle className="text-xl font-extrabold">Solana</SheetTitle>
+            <SheetTitle className="text-[20px] leading-7 font-semibold">Solana</SheetTitle>
             <SheetDescription>SOL · the network&apos;s own coin</SheetDescription>
           </div>
         </SheetHeader>
         <div className="flex flex-col gap-5 px-5 pb-8">
           <div>
-            <div className="text-4xl font-extrabold tracking-tight tabular-nums">{chain ? formatUsd(chain.solValueUsd) : "-"}</div>
-            <div className="mt-0.5 text-[13px] text-muted-foreground tabular-nums">{chain ? `${formatSol(chain.solBalance)} · ${formatPrice(chain.solUsd)} each` : "waiting for the chain"}</div>
+            <div className="text-4xl font-semibold tracking-[-0.025em] tabular-nums">{chain ? formatUsd(chain.solValueUsd) : "-"}</div>
+            <div className="mt-0.5 text-[13px] text-text-2 tabular-nums">{chain ? `${formatSol(chain.solBalance)} · ${formatPrice(chain.solUsd)} each` : "waiting for the chain"}</div>
           </div>
           <div className="grid grid-cols-2 gap-2.5">
             <StatBox label="Balance" value={chain ? formatSol(chain.solBalance) : "-"} />
@@ -36,7 +36,7 @@ export function SolSheet({ walletId, open, chain, onClose }: { walletId: string;
             <StatBox label="Tokens value" value={chain ? formatUsd(chain.tokensValueUsd) : "-"} hint={chain ? `${chain.tokens.length} held` : undefined} />
           </div>
           <div>
-            <h3 className="mb-3 text-[15px] font-extrabold">SOL history</h3>
+            <h3 className="mb-3 text-[15px] font-semibold">SOL history</h3>
             {open ? <ActivityTable walletId={walletId} mint="SOL" layout="list" showSummary={false} /> : null}
           </div>
         </div>

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Segmented } from "@/components/ui/segmented";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -14,6 +15,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { controlBacktestRun } from "@/lib/backtest-api";
+import { Field } from "./dialog-parts";
 
 type Props = {
   run: { _id: string; name: string; collectMethod?: "api" | "rpc" };
@@ -21,6 +23,11 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   onRestarted: () => void;
 };
+
+const METHODS = [
+  { value: "api", label: "API (fast)" },
+  { value: "rpc", label: "RPC (slow, long history)" },
+] as const;
 
 /**
  * Mount it only while it is open (its choice of method starts from the backtest's current one each time).
@@ -51,25 +58,16 @@ export function RestartRunDialog({ run, open, onOpenChange, onRestarted }: Props
         <AlertDialogHeader>
           <AlertDialogTitle>Restart &quot;{run.name}&quot; from the first address?</AlertDialogTitle>
           <AlertDialogDescription>
-            Every result of this backtest is thrown away and all its addresses go back to waiting. Its window, settings and addresses stay the same, and the
-            trades already collected are kept, so it is much faster than the first time.
+            Every result is discarded and all addresses go back to waiting. The window, settings and addresses stay, and the trades already collected are kept, so it is much faster than the first time.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Read the trades from</span>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant={method === "api" ? "default" : "outline"} onClick={() => setMethod("api")}>
-              API (fast)
-            </Button>
-            <Button type="button" size="sm" variant={method === "rpc" ? "default" : "outline"} onClick={() => setMethod("rpc")}>
-              RPC (slow, long history)
-            </Button>
-          </div>
-        </div>
+        <Field label="Read the trades from">
+          <Segmented options={METHODS} value={method} onChange={setMethod} label="Read the trades from" block tall />
+        </Field>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-          <Button className="bg-negative text-negative-foreground hover:bg-negative/90" disabled={busy} onClick={restart}>
-            {busy && <Loader2 className="size-4 animate-spin" />}
+          <Button className="bg-negative font-semibold text-negative-foreground hover:bg-negative/90" disabled={busy} onClick={restart}>
+            {busy && <Loader2 className="animate-spin" />}
             Restart
           </Button>
         </AlertDialogFooter>

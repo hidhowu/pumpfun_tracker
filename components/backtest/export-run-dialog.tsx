@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Download } from "lucide-react";
+import { Check, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { runExportUrl, type RunExportMode } from "@/lib/backtest-api";
 import type { BacktestTraderQuery } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
+import { DialogHead } from "./dialog-parts";
 
 const MODES: Array<{ value: RunExportMode; title: string; description: string }> = [
   { value: "addresses", title: "Addresses only", description: "One column: the address. Ready to paste into a list or back into the backtest list." },
@@ -34,29 +36,44 @@ export function ExportRunDialog({ open, onOpenChange, runId, query, matching }: 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Export to CSV</DialogTitle>
-          <DialogDescription>
-            Exports the <span className="font-medium text-foreground">{matching.toLocaleString()}</span> address{matching === 1 ? "" : "es"} matching your current filters, search and sort - not just
-            the page you are looking at. Change the filters first to export a different set.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-2">
-          {MODES.map((m) => (
-            <button
-              key={m.value}
-              type="button"
-              onClick={() => setMode(m.value)}
-              className={cn("flex flex-col gap-0.5 rounded-lg border px-3 py-2.5 text-left transition-colors", mode === m.value ? "border-primary bg-primary/5" : "border-border/60 hover:bg-muted/40")}
-            >
-              <span className="text-sm font-medium">{m.title}</span>
-              <span className="text-xs text-muted-foreground">{m.description}</span>
-            </button>
-          ))}
+      <DialogContent className="sm:max-w-[520px]">
+        <DialogHead
+          icon={<Download className="size-5" />}
+          title="Export to CSV"
+          help={`Exports the ${matching.toLocaleString()} address${matching === 1 ? "" : "es"} matching your filters, search and sort - not just this page. Change the filters first to export a different set.`}
+          description="Choose what the CSV contains."
+        />
+        <p className="-mt-1 text-[13px] text-text-2">
+          <b className="font-semibold text-foreground">{matching.toLocaleString()}</b> address{matching === 1 ? "" : "es"} match your current filters.
+        </p>
+        <div role="radiogroup" aria-label="What to export" className="flex flex-col gap-2">
+          {MODES.map((m) => {
+            const on = mode === m.value;
+            return (
+              <button
+                key={m.value}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                onClick={() => setMode(m.value)}
+                className={cn(
+                  "flex items-start gap-3 rounded-[14px] border bg-surface-2 px-3.5 py-3 text-left transition-colors",
+                  on ? "border-volt-line bg-volt-soft" : "border-border hover:border-line-2"
+                )}
+              >
+                <span className={cn("mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full border", on ? "border-primary bg-primary text-primary-foreground" : "border-line-3")}>
+                  {on && <Check className="size-3" strokeWidth={3} />}
+                </span>
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <b className="text-[13.5px] font-semibold">{m.title}</b>
+                  <span className="text-xs leading-[18px] text-text-3">{m.description}</span>
+                </span>
+              </button>
+            );
+          })}
           {mode === "trades" && (
-            <label className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
-              <input type="checkbox" className="size-4 accent-primary" checked={includeSkipped} onChange={(e) => setIncludeSkipped(e.target.checked)} />
+            <label className="flex items-center gap-2.5 px-1 pt-1 text-[13px] text-text-2">
+              <Checkbox checked={includeSkipped} onCheckedChange={(v) => setIncludeSkipped(v === true)} />
               Also include signals that were looked at but not traded (dust, no data, ...)
             </label>
           )}
@@ -66,7 +83,7 @@ export function ExportRunDialog({ open, onOpenChange, runId, query, matching }: 
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
           <Button className="gap-1.5" disabled={matching === 0} onClick={download}>
-            <Download className="size-4" /> Download CSV
+            <Download /> Download CSV
           </Button>
         </DialogFooter>
       </DialogContent>

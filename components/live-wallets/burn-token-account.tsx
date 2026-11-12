@@ -2,9 +2,11 @@
 
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { Flame, Loader2, TriangleAlert } from "lucide-react";
+import { Flame, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Notice } from "@/components/ui/dialog-parts";
+import { cn } from "@/lib/utils";
 import { formatAmount, tokenLabel } from "./shared";
 import { burnTokenAccount } from "@/lib/live-wallet-api";
 import { formatSol } from "@/lib/format";
@@ -66,46 +68,39 @@ export function BurnTokenAccountButton({
       <AlertDialogTrigger asChild>
         {compact ? (
           <Button variant="ghost" size="icon-sm" disabled={frozen} aria-label={`${verb}: ${label}`} title={frozen ? "Frozen by the token's issuer - it can't be closed" : verb} className={className}>
-            <Flame className="size-4 text-negative" />
+            <Flame className="size-4 text-destructive" />
           </Button>
         ) : (
           <Button variant="outline" size="sm" disabled={frozen} title={frozen ? "Frozen by the token's issuer - it can't be closed" : undefined} className={className}>
-            <Flame className="size-3.5 text-negative" /> {verb}
+            <Flame className="size-3.5 text-destructive" /> {verb}
           </Button>
         )}
       </AlertDialogTrigger>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader className="items-start text-left">
-          <span className="mb-1 flex size-12 items-center justify-center rounded-full bg-negative/15 text-negative">
-            <Flame className="size-6" />
+          <span className={cn("mb-1 flex size-10 items-center justify-center rounded-xl", hasTokens ? "bg-neg-soft text-destructive" : "bg-surface-3 text-primary")}>
+            <Flame className="size-5" />
           </span>
-          <AlertDialogTitle className="text-xl font-extrabold">{hasTokens ? `Burn ${label} and close the account?` : `Close this ${label} account?`}</AlertDialogTitle>
-          <AlertDialogDescription className="leading-relaxed">
+          <AlertDialogTitle>{hasTokens ? `Burn ${label} and close the account?` : `Close this ${label} account?`}</AlertDialogTitle>
+          <AlertDialogDescription>
             {hasTokens ? (
               <>
-                This permanently destroys <b className="text-foreground">{formatAmount(account.balance)} {account.symbol ?? "tokens"}</b> and closes the token account. The{" "}
-                <b className="text-foreground">{formatSol(account.rentLamports / 1e9)}</b> deposit held in it is returned to the wallet, minus a tiny network fee.
+                This permanently destroys <b className="font-semibold text-foreground">{formatAmount(account.balance)} {account.symbol ?? "tokens"}</b> and closes the token account. The{" "}
+                <b className="font-semibold text-foreground">{formatSol(account.rentLamports / 1e9)}</b> deposit held in it is returned to the wallet, minus a tiny network fee.
               </>
             ) : (
               <>
-                The account is empty. Closing it returns the <b className="text-foreground">{formatSol(account.rentLamports / 1e9)}</b> deposit held in it to the wallet, minus a tiny network fee.
+                The account is empty. Closing it returns the <b className="font-semibold text-foreground">{formatSol(account.rentLamports / 1e9)}</b> deposit held in it to the wallet, minus a tiny network fee.
               </>
             )}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {hasTokens ? (
-          <div className="flex items-start gap-2.5 rounded-2xl border border-negative/30 bg-negative/10 px-4 py-3 text-[13px] leading-relaxed">
-            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-negative" />
-            <span>Burned tokens are gone for good. They can&apos;t be sent back or recovered, even by the token&apos;s creator.</span>
-          </div>
-        ) : null}
-        <AlertDialogFooter className="mx-0 mb-0 border-0 bg-transparent p-0 pt-2">
-          <Button variant="outline" className="h-11 px-5" onClick={() => setOpen(false)} disabled={busy}>
-            Cancel
-          </Button>
-          <Button className="h-11 bg-negative px-6 text-negative-foreground hover:bg-negative/90" onClick={confirm} disabled={busy}>
-            {busy ? <Loader2 className="size-4 animate-spin" /> : <Flame className="size-4" />}
-            {busy ? "Sending..." : verb}
+        {hasTokens ? <Notice tone="neg">Burned tokens are gone for good. They can&apos;t be sent back or recovered, even by the token&apos;s creator.</Notice> : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <Button className={cn(hasTokens && "bg-negative font-semibold text-negative-foreground hover:bg-negative/90")} onClick={confirm} disabled={busy}>
+            {busy ? <Loader2 className="animate-spin" /> : <Flame />}
+            {busy ? "Sending…" : verb}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

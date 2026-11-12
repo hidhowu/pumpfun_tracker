@@ -5,92 +5,83 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Wallet palette - the look of the Live Wallet design, used across the whole app. Always dark (no light mode):
- * a deep violet-black ground, slightly lighter violet-tinted surfaces, one violet brand accent, and explicit mint
- * green / coral red for gains and losses. Surfaces are solid (not translucent) so cards read the same everywhere.
+ * Night Ledger palette - near-black green-tinted surfaces, one Volt lime brand accent (actions, focus, active),
+ * emerald for gains and coral for losses. Always dark (no light mode). Surfaces are solid so cards read the same
+ * everywhere. The same values are set under .dark so either selector resolves identically.
  */
-:root {
-  --background: #0b0a12;
-  --foreground: #f4f3fa;
-  --card: #16152a;
-  --card-foreground: #f4f3fa;
-  --popover: #1b1a33;
-  --popover-foreground: #f4f3fa;
-  --primary: #7261ff;
-  --primary-foreground: #ffffff;
-  --secondary: #1f1d36;
-  --secondary-foreground: #f4f3fa;
-  --muted: #1b1a33;
-  --muted-foreground: #9a97b3;
-  --accent: #26214f;
-  --accent-foreground: #f4f3fa;
-  --destructive: #ff6b7a;
-  --border: #24213a;
-  --input: #2f2b52;
-  --ring: rgb(114 97 255 / 60%);
-  --chart-1: #8b7cff;
-  --chart-2: #3ddc97;
-  --chart-3: #ff6b7a;
-  --chart-4: #35d6b0;
-  --chart-5: #f5b83d;
-  --radius: 0.875rem;
-  --sidebar: #0f0e19;
-  --sidebar-foreground: #b8b5d0;
-  --sidebar-primary: #7261ff;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #26214f;
-  --sidebar-accent-foreground: #f4f3fa;
-  --sidebar-border: #221f38;
-  --sidebar-ring: rgb(114 97 255 / 60%);
+:root, .dark {
+  --background: #070a08;
+  --foreground: #eef4ef;
+  --card: #0f1410;
+  --card-foreground: #eef4ef;
+  --popover: #141b16;
+  --popover-foreground: #eef4ef;
+  --primary: #b6f24f;
+  --primary-foreground: #08130a;
+  --secondary: #1a231c;
+  --secondary-foreground: #eef4ef;
+  --muted: #141b16;
+  --muted-foreground: #a9b8ad;
+  --accent: #1a231c;
+  --accent-foreground: #eef4ef;
+  --destructive: #ff6b7b;
+  --border: #1c251e;
+  --input: #5b7160;
+  --ring: rgb(182 242 79 / 55%);
+  --chart-1: #62a61f;
+  --chart-2: #4793e0;
+  --chart-3: #c98424;
+  --chart-4: #8570e0;
+  --chart-5: #d4608a;
+  --radius: 0.625rem;
+  --sidebar: #0a0e0b;
+  --sidebar-foreground: #a9b8ad;
+  --sidebar-primary: #b6f24f;
+  --sidebar-primary-foreground: #08130a;
+  --sidebar-accent: #1a231c;
+  --sidebar-accent-foreground: #eef4ef;
+  --sidebar-border: #1c251e;
+  --sidebar-ring: rgb(182 242 79 / 55%);
 
   /* Trade/PnL semantic colors - not part of shadcn's default token set. */
-  --positive: #3ddc97;
-  --positive-foreground: #06251a;
-  --negative: #ff6b7a;
-  --negative-foreground: #2b0a10;
-  --brand-soft: #b9b0ff; /* readable violet for text/icons on dark surfaces */
-}
+  --positive: #35d49a;
+  --positive-foreground: #04231a;
+  --negative: #ff6b7b;
+  --negative-foreground: #2a0710;
+  --brand-soft: #c9f873; /* readable lime for text/icons on dark surfaces */
 
-.dark {
-  --background: #0b0a12;
-  --foreground: #f4f3fa;
-  --card: #16152a;
-  --card-foreground: #f4f3fa;
-  --popover: #1b1a33;
-  --popover-foreground: #f4f3fa;
-  --primary: #7261ff;
-  --primary-foreground: #ffffff;
-  --secondary: #1f1d36;
-  --secondary-foreground: #f4f3fa;
-  --muted: #1b1a33;
-  --muted-foreground: #9a97b3;
-  --accent: #26214f;
-  --accent-foreground: #f4f3fa;
-  --destructive: #ff6b7a;
-  --border: #24213a;
-  --input: #2f2b52;
-  --ring: rgb(114 97 255 / 60%);
-  --sidebar: #0f0e19;
-  --sidebar-foreground: #b8b5d0;
-  --sidebar-primary: #7261ff;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #26214f;
-  --sidebar-accent-foreground: #f4f3fa;
-  --sidebar-border: #221f38;
-  --sidebar-ring: rgb(114 97 255 / 60%);
-  --positive: #3ddc97;
-  --positive-foreground: #06251a;
-  --negative: #ff6b7a;
-  --negative-foreground: #2b0a10;
-  --brand-soft: #b9b0ff;
+  /* Night Ledger extras */
+  --surface-1: #0f1410;
+  --surface-2: #141b16;
+  --surface-3: #1a231c;
+  --surface-4: #222e25;
+  --line: #1c251e;
+  --line-2: #2a362d;
+  --line-3: #3b4d40;
+  --edge: #5b7160;
+  --text-1: #eef4ef;
+  --text-2: #a9b8ad;
+  --text-3: #7e8f83;
+  --volt: #b6f24f;
+  --volt-hover: #c9f873;
+  --volt-press: #9bd53a;
+  --volt-ink: #08130a;
+  --volt-soft: rgb(182 242 79 / 12%);
+  --volt-line: rgb(182 242 79 / 34%);
+  --pos-soft: rgb(53 212 154 / 13%);
+  --neg-soft: rgb(255 107 123 / 13%);
+  --warn: #f5b73d;
+  --warn-soft: rgb(245 183 61 / 13%);
+  --info: #6cb8ff;
+  --info-soft: rgb(108 184 255 / 13%);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-heading: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-heading: var(--font-geist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -125,6 +116,27 @@
   --color-negative: var(--negative);
   --color-negative-foreground: var(--negative-foreground);
   --color-brand-soft: var(--brand-soft);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-surface-4: var(--surface-4);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-line-3: var(--line-3);
+  --color-edge: var(--edge);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-volt: var(--volt);
+  --color-volt-hover: var(--volt-hover);
+  --color-volt-ink: var(--volt-ink);
+  --color-volt-soft: var(--volt-soft);
+  --color-volt-line: var(--volt-line);
+  --color-pos-soft: var(--pos-soft);
+  --color-neg-soft: var(--neg-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -137,7 +149,13 @@
 body {
   background: var(--background);
   color: var(--foreground);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* Numbers line up in columns everywhere. */
+table, .tabular { font-variant-numeric: tabular-nums; }
 
 @layer base {
   * {
@@ -146,6 +164,12 @@ body {
   body {
     @apply bg-background text-foreground;
   }
+  /* A visible keyboard focus ring for anything interactive that does not draw its own (plain buttons, links, chips, role=checkbox rows).
+     Components that set their own ring use outline-none, which beats this base rule. */
+  :where(a[href], button, summary, [role="checkbox"], [role="option"], [role="radio"], [role="tab"], [role="switch"], [tabindex]:not([tabindex="-1"])):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
   html {
     @apply font-sans;
   }
@@ -153,6 +177,6 @@ body {
 
 /* Subtle scrollbar that fits the dark aesthetic. */
 * {
-  scrollbar-color: #3a3665 transparent;
+  scrollbar-color: #2a362d transparent;
   scrollbar-width: thin;
 }

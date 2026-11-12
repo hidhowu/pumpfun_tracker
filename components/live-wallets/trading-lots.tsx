@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { AlertOctagon, ChevronDown, ChevronLeft, ChevronRight, Loader2, TestTube2 } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, FlaskConical, Loader2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AddressChip, formatAmount, formatPrice, PnlPill, signedUsd, TokenAvatar, toneClass, tokenLabel, TypePill } from "./shared";
 import { getTradingLots, sellLotNow } from "@/lib/live-wallet-api";
@@ -23,22 +23,22 @@ const REASONS: Record<string, string> = {
   blacklisted: "Trader blacklisted",
   no_price: "No price available (left out of the results)",
 };
-const reasonLabel = (reason: string | null | undefined) => (reason ? (REASONS[reason] ?? reason) : "-");
+const reasonLabel = (reason: string | null | undefined) => (reason ? (REASONS[reason] ?? reason) : "—");
 
 function Row({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-[13px]">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={cn("ml-auto min-w-0 text-right font-bold tabular-nums", className)}>{children}</span>
+      <span className="text-text-3">{label}</span>
+      <span className={cn("ml-auto min-w-0 text-right font-medium tabular-nums", className)}>{children}</span>
     </div>
   );
 }
 
 function Side({ title, tag, children }: { title: string; tag?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="min-w-0 space-y-1.5 rounded-xl border border-border bg-secondary/40 p-3">
+    <div className="min-w-0 space-y-1.5 rounded-[14px] border border-border bg-surface-2 p-3.5">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-extrabold tracking-wide text-muted-foreground uppercase">{title}</span>
+        <span className="text-[11px] font-medium tracking-[0.07em] text-text-3 uppercase">{title}</span>
         {tag}
       </div>
       {children}
@@ -48,21 +48,21 @@ function Side({ title, tag, children }: { title: string; tag?: React.ReactNode; 
 
 function ExitLine({ label, exit, chosen }: { label: string; exit: LotDryExit | null; chosen: boolean }) {
   return (
-    <div className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg px-2.5 py-1.5 text-[13px]", chosen ? "bg-primary/10" : "bg-secondary/40")}>
-      <span className="font-bold">
+    <div className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg px-2.5 py-1.5 text-[13px]", chosen ? "bg-volt-soft" : "bg-surface-2")}>
+      <span className="font-medium">
         {label}
-        {chosen ? <span className="ml-1.5 text-[11px] font-semibold text-brand-soft">in use</span> : null}
+        {chosen ? <span className="ml-1.5 text-[11px] font-medium text-primary">in use</span> : null}
       </span>
       {exit ? (
         <span className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-text-3">
             {reasonLabel(exit.reason)}
             {exit.at ? <span className="ml-1.5 tabular-nums">sold {formatExactTime(exit.at)}</span> : null}
           </span>
           <PnlPill usd={exit.pnlUsd} pct={exit.pnlPercent} />
         </span>
       ) : (
-        <span className="text-xs text-muted-foreground">would still be holding</span>
+        <span className="text-xs text-text-3">would still be holding</span>
       )}
     </div>
   );
@@ -90,14 +90,14 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
   const dry = lot.mode === "dry";
   const open = lot.status === "open";
   const result = (value: number | null | undefined, pct: number | null | undefined, unrealized: boolean) =>
-    value == null ? <span className="text-muted-foreground">-</span> : <span className={cn(toneClass(value))}>{signedUsd(value)} <span className="text-xs">({pct != null ? `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%` : "-"}{unrealized ? ", open" : ""})</span></span>;
+    value == null ? <span className="text-text-3">-</span> : <span className={cn(toneClass(value))}>{signedUsd(value)} <span className="text-xs">({pct != null ? `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%` : "-"}{unrealized ? ", open" : ""})</span></span>;
 
   return (
-    <Card className={cn("gap-3 p-4", lot.sellFailure && "border-negative/60")}>
+    <article className={cn("flex min-w-0 flex-col gap-3 rounded-[20px] border border-border bg-card p-4 md:p-5", lot.sellFailure && "border-destructive/40")}>
       {lot.sellFailure ? (
-        <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-negative/10 px-3 py-2 text-[13px]">
-          <span className="flex min-w-0 items-center gap-2 font-bold text-negative">
-            <AlertOctagon className="size-4 shrink-0" />
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-destructive/30 bg-neg-soft px-3.5 py-2.5 text-[13px]">
+          <span className="flex min-w-0 items-center gap-2 font-semibold text-destructive">
+            <TriangleAlert className="size-4 shrink-0" />
             <span className="min-w-0">Sell failed - still held. {lot.sellFailure.reason}</span>
           </span>
           <Button size="sm" className="gap-1.5 bg-negative text-negative-foreground hover:bg-negative/90" disabled={selling} onClick={sellNow}>
@@ -109,8 +109,8 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
         <div className="flex min-w-0 items-center gap-2.5">
           <TokenAvatar icon={lot.icon} symbol={lot.symbol} className="size-9" />
           <div className="min-w-0">
-            <div className="truncate text-[15px] font-extrabold">{tokenLabel(lot.symbol, lot.mint)}</div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+            <div className="truncate text-[15px] font-semibold">{tokenLabel(lot.symbol, lot.mint)}</div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-text-3">
               <span className="inline-flex items-center gap-1.5">
                 <span>token</span> <AddressChip value={lot.mint} label="token address" kind="token" chars={6} />
               </span>
@@ -122,13 +122,13 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {dry ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2.5 py-0.5 text-xs font-extrabold text-brand-soft">
-              <TestTube2 className="size-3" /> Dry run
+            <span className="inline-flex h-[22px] items-center gap-1 rounded-full border border-volt-line bg-volt-soft px-2 text-[11.5px] font-medium text-primary">
+              <FlaskConical className="size-3" /> Dry run
             </span>
           ) : null}
           <TypePill label={open ? "Open" : reasonLabel(lot.closeReason)} tone={open ? "receive" : "neutral"} />
           {!lot.paired ? <TypePill label="Simulation didn't take it - own entry rules" tone="neutral" /> : null}
-          <span className="text-xs text-muted-foreground">{formatRelativeTime(lot.openedAt)}</span>
+          <span className="text-xs text-text-3">{formatRelativeTime(lot.openedAt)}</span>
         </div>
       </div>
 
@@ -137,20 +137,20 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
         type="button"
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
-        className="flex items-center justify-between gap-3 rounded-xl bg-secondary/40 px-3 py-2 text-left text-[13px] font-bold outline-none focus-visible:ring-3 focus-visible:ring-ring/50 md:hidden"
+        className="flex items-center justify-between gap-3 rounded-xl bg-surface-2 px-3.5 py-2.5 text-left text-[13px] font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50 md:hidden"
       >
         <span className="min-w-0">
           Live {open ? result(live.unrealizedUsd, live.unrealizedPercent, true) : result(live.pnlUsd, live.pnlPercent, false)}
-          {sim ? <span className="text-muted-foreground"> · sim </span> : null}
+          {sim ? <span className="text-text-3"> · sim </span> : null}
           {sim ? (sim.status === "open" ? result(sim.unrealizedUsd, sim.unrealizedPercent, true) : result(sim.pnlUsd, sim.pnlPercent, false)) : null}
         </span>
-        <span className="flex shrink-0 items-center gap-1 text-xs text-brand-soft">
+        <span className="flex shrink-0 items-center gap-1 text-xs text-primary">
           {expanded ? "Hide details" : "Details"} <ChevronDown className={cn("size-4 transition-transform", expanded && "rotate-180")} />
         </span>
       </button>
 
       <div className={cn("grid-cols-1 gap-2.5 md:grid md:grid-cols-2", expanded ? "grid" : "hidden")}>
-        <Side title={dry ? "Live (dry run)" : "Live"} tag={!live.verified && !dry ? <span className="text-[11px] text-muted-foreground">estimated</span> : undefined}>
+        <Side title={dry ? "Live (dry run)" : "Live"} tag={!live.verified && !dry ? <span className="text-[11px] text-text-3">estimated</span> : undefined}>
           <Row label="Bought at">{formatPrice(live.buyPriceUsd)}</Row>
           <Row label={open ? "Value now" : "Sold at"}>{open ? (live.valueUsd != null ? formatUsd(live.valueUsd) : "-") : formatPrice(live.sellPriceUsd)}</Row>
           <Row label="Bought (UTC)">{formatExactTime(live.boughtAt)}</Row>
@@ -172,22 +172,22 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
               <Row label="Result">{sim.status === "open" ? result(sim.unrealizedUsd, sim.unrealizedPercent, true) : result(sim.pnlUsd, sim.pnlPercent, false)}</Row>
             </>
           ) : (
-            <p className="py-3 text-center text-xs text-muted-foreground">The simulation did not take this trade.</p>
+            <p className="py-3 text-center text-xs text-text-3">The simulation did not take this trade.</p>
           )}
         </Side>
       </div>
 
       {live.soldAt && sim?.closedAt ? (
-        <div className="flex items-center justify-between rounded-xl bg-secondary/40 px-3 py-1.5 text-[13px]">
-          <span className="font-semibold text-muted-foreground">Live sold {new Date(live.soldAt) >= new Date(sim.closedAt) ? "after" : "before"} the simulation by</span>
-          <span className="font-extrabold tabular-nums">{formatHeld(Math.abs(new Date(live.soldAt).getTime() - new Date(sim.closedAt).getTime()))}</span>
+        <div className="flex items-center justify-between rounded-xl bg-surface-2 px-3.5 py-2 text-[13px]">
+          <span className="text-text-2">Live sold {new Date(live.soldAt) >= new Date(sim.closedAt) ? "after" : "before"} the simulation by</span>
+          <span className="font-semibold tabular-nums">{formatHeld(Math.abs(new Date(live.soldAt).getTime() - new Date(sim.closedAt).getTime()))}</span>
         </div>
       ) : null}
 
       {lot.differenceUsd != null ? (
-        <div className="flex items-center justify-between rounded-xl bg-secondary/60 px-3 py-2 text-[13px]">
-          <span className="font-semibold text-muted-foreground">Live minus simulation{lot.scale !== 1 ? " (at live size)" : ""}</span>
-          <span className={cn("font-extrabold tabular-nums", toneClass(lot.differenceUsd))}>
+        <div className="flex items-center justify-between rounded-xl border border-line-2 bg-surface-3 px-3.5 py-2.5 text-[13px]">
+          <span className="text-text-2">Live minus simulation{lot.scale !== 1 ? " (at live size)" : ""}</span>
+          <span className={cn("font-semibold tabular-nums", toneClass(lot.differenceUsd))}>
             {signedUsd(lot.differenceUsd)}
             {lot.differencePercent != null ? <span className="ml-1.5 text-xs">({lot.differencePercent > 0 ? "+" : ""}{lot.differencePercent.toFixed(1)} pts)</span> : null}
           </span>
@@ -196,35 +196,35 @@ function LotCard({ lot, exitMode, walletId, onChanged }: { lot: TradingLot; exit
 
       {lot.dry ? (
         <div className="space-y-1.5">
-          <div className="text-xs font-extrabold tracking-wide text-muted-foreground uppercase">What each exit way would have done</div>
+          <div className="text-[11px] font-medium tracking-[0.07em] text-text-3 uppercase">What each exit way would have done</div>
           {Object.entries(lot.dry).map(([id, exit]) => (
             <ExitLine key={id} label={styleLabel(id)} exit={exit} chosen={exitMode === id} />
           ))}
         </div>
       ) : null}
 
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-3">
         <span>{formatAmount(live.tokenAmount)} tokens</span>
         {live.venue ? <span>{live.venue === "curve" ? "bonding curve" : "PumpSwap pool"}{live.route && live.route !== "direct" ? `, ${ROUTES[live.route] ?? live.route}` : ""}</span> : null}
         {live.sendMode ? <span>{live.sendMode === "jito" ? "sent via Jito" : "sent raw"}</span> : null}
         {live.rentSol > 0 ? <span>{live.rentSol.toFixed(4)} SOL deposit (returned when the account is burned, not counted as a cost)</span> : null}
         {live.buySignature ? (
-          <a href={`https://solscan.io/tx/${live.buySignature}`} target="_blank" rel="noreferrer" className="hover:text-primary">
+          <a href={`https://solscan.io/tx/${live.buySignature}`} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-primary">
             buy tx
           </a>
         ) : null}
         {live.sellSignature ? (
-          <a href={`https://solscan.io/tx/${live.sellSignature}`} target="_blank" rel="noreferrer" className="hover:text-primary">
+          <a href={`https://solscan.io/tx/${live.sellSignature}`} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-primary">
             sell tx
           </a>
         ) : null}
       </div>
-    </Card>
+    </article>
   );
 }
 
 const FILTERS = [
-  { value: undefined, label: "All" },
+  { value: "all", label: "All" },
   { value: "open", label: "Open" },
   { value: "closed", label: "Closed" },
 ] as const;
@@ -257,34 +257,28 @@ export function TradingLots({ walletId, exitMode, refreshKey }: { walletId: stri
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex gap-1.5">
-          {FILTERS.map((f) => (
-            <Button
-              key={f.label}
-              size="sm"
-              variant={status === f.value ? "default" : "outline"}
-              onClick={() => {
-                setStatus(f.value);
-                setPage(1);
-                setLoading(true);
-              }}
-            >
-              {f.label}
-            </Button>
-          ))}
-        </div>
-        {data ? <span className="text-xs text-muted-foreground">{data.total.toLocaleString()} trade{data.total === 1 ? "" : "s"}</span> : null}
+        <Segmented
+          options={FILTERS}
+          value={status ?? "all"}
+          label="Which trades"
+          onChange={(v) => {
+            setStatus(v === "all" ? undefined : v);
+            setPage(1);
+            setLoading(true);
+          }}
+        />
+        {data ? <span className="text-xs text-text-3">{data.total.toLocaleString()} trade{data.total === 1 ? "" : "s"}</span> : null}
       </div>
 
       {loading && !data ? (
         <div className="flex flex-col gap-3">
-          <Skeleton className="h-60 w-full rounded-2xl" />
-          <Skeleton className="h-60 w-full rounded-2xl" />
+          <Skeleton className="h-60 w-full rounded-[20px]" />
+          <Skeleton className="h-60 w-full rounded-[20px]" />
         </div>
       ) : error && !data ? (
-        <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
+        <div role="alert" className="rounded-[20px] border border-destructive/30 bg-neg-soft p-4 text-sm text-[#ffc9d0]">{error}</div>
       ) : data && data.lots.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-border bg-card/40 p-8 text-center text-sm text-muted-foreground">
+        <div className="rounded-[20px] border border-dashed border-line-3 bg-card/50 px-6 py-10 text-center text-sm text-text-2">
           No trades yet. When the connected simulation wallet takes its next trade, it shows up here.
         </div>
       ) : (
@@ -293,16 +287,16 @@ export function TradingLots({ walletId, exitMode, refreshKey }: { walletId: stri
 
       {data && data.totalPages > 1 ? (
         <div className="flex items-center justify-center gap-3">
-          <Button variant="outline" size="icon" aria-label="Previous page" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+          <Button variant="outline" size="icon-sm" aria-label="Previous page" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
             <ChevronLeft className="size-4" />
           </Button>
-          <span className="text-sm tabular-nums text-muted-foreground">
+          <span className="text-xs tabular-nums text-text-2">
             {data.page} / {data.totalPages}
           </span>
-          <Button variant="outline" size="icon" aria-label="Next page" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>
+          <Button variant="outline" size="icon-sm" aria-label="Next page" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>
             <ChevronRight className="size-4" />
           </Button>
-          {loading ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : null}
+          {loading ? <Loader2 className="size-4 animate-spin text-text-3" /> : null}
         </div>
       ) : null}
     </div>

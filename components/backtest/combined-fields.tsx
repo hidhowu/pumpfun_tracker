@@ -1,7 +1,7 @@
 "use client";
 
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { SettingsList, SettingsRow } from "@/components/ui/settings-row";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
@@ -30,7 +30,7 @@ const FIELDS: Array<{ key: NumberKey; label: string; help: string; viewHelp?: st
   {
     key: "startingBalanceUsd",
     label: "Starting balance ($)",
-    help: "The one balance every address trades from. Each buy takes its cost out, each sell puts the proceeds back, in the order the trades really happened.",
+    help: "The one balance every address trades from, in the order the trades really happened.",
     min: 0,
     max: 1_000_000_000,
     strictlyAbove: true,
@@ -38,8 +38,8 @@ const FIELDS: Array<{ key: NumberKey; label: string; help: string; viewHelp?: st
   {
     key: "tradeSizeUsd",
     label: "Trade amount ($)",
-    help: "Capital used for every single trade, whichever address it comes from. Changing it clears the results and simulates every address again.",
-    viewHelp: "Capital used for every single trade. Every stored trade is scaled to this amount (a trade that made +50% on $20 makes +50% on $10), so it need not match the backtest's own amount.",
+    help: "Capital per trade, whichever address it comes from. Changing it simulates every address again.",
+    viewHelp: "Capital per trade. Every stored trade is scaled to this amount (+50% on $20 is +50% on $10), so it need not match the backtest's own.",
     min: 0,
     max: 1_000_000_000,
     strictlyAbove: true,
@@ -47,16 +47,16 @@ const FIELDS: Array<{ key: NumberKey; label: string; help: string; viewHelp?: st
   {
     key: "pumpFeePercent",
     label: "Pump fee (% of each trade)",
-    help: "Charged on every buy and every sell. Copied from the profile (1.25% on pump.fun); change it to test another number. Changing it clears the results and simulates again.",
-    viewHelp: "Charged on every buy and every sell, on this view's trade amounts. Independent of the fee the backtest was simulated with.",
+    help: "Charged on every buy and sell, copied from the profile. Changing it simulates again.",
+    viewHelp: "Charged on every buy and sell, on this view's trade amounts. Independent of the fee the backtest was simulated with.",
     min: 0,
     max: 100,
   },
   {
     key: "jitoFeeUsd",
     label: "Jito fee ($ per transaction)",
-    help: "A flat amount charged on every buy and every sell to land the transaction. Copied from the profile; lower or raise it to see what it does to the result. Changing it clears the results and simulates again.",
-    viewHelp: "A flat amount charged on every buy and every sell. Independent of the fee the backtest was simulated with - a smaller trade amount usually deserves a smaller tip.",
+    help: "Flat amount per buy and sell to land the transaction. Changing it simulates again.",
+    viewHelp: "Flat amount per buy and sell. Independent of the fee the backtest was simulated with - a smaller trade amount usually deserves a smaller tip.",
     min: 0,
     max: 1000,
   },
@@ -108,42 +108,32 @@ export function CombinedFields({
   recalculated?: boolean;
 }) {
   return (
-    <div className="space-y-3">
+    <SettingsList>
       {FIELDS.map((f) => (
-        <div key={f.key} className="space-y-1">
-          <Label htmlFor={`${idPrefix}-${f.key}`}>{f.label}</Label>
+        <SettingsRow key={f.key} label={f.label} help={recalculated ? (f.viewHelp ?? f.help) : f.help} htmlFor={`${idPrefix}-${f.key}`}>
           <Input
             id={`${idPrefix}-${f.key}`}
             inputMode="decimal"
             disabled={lockedKeys.includes(f.key)}
             value={values[f.key]}
             onChange={(e) => onChange({ ...values, [f.key]: e.target.value.replace(/[^0-9.]/g, "") })}
-            className={cn("w-32", bad(f, values[f.key]) && "border-negative")}
+            className={cn("w-[110px] text-right", bad(f, values[f.key]) && "border-negative")}
             aria-invalid={bad(f, values[f.key])}
           />
-          <p className="text-xs text-muted-foreground">{recalculated ? (f.viewHelp ?? f.help) : f.help}</p>
-        </div>
+        </SettingsRow>
       ))}
 
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-0.5">
-          <Label htmlFor={`${idPrefix}-reset`}>Reset the balance every day</Label>
-          <p className="text-xs text-muted-foreground">
-            Every UTC day starts again from the starting balance, to see whether the group can hold its balance day after day. A trade counts for the day it was entered.
-          </p>
-        </div>
+      <SettingsRow label="Reset the balance every day" help="Each UTC day restarts from the starting balance. A trade counts for the day it was entered." htmlFor={`${idPrefix}-reset`}>
         <Switch id={`${idPrefix}-reset`} checked={values.resetDaily} onCheckedChange={(v) => onChange({ ...values, resetDaily: v })} />
-      </div>
+      </SettingsRow>
 
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-0.5">
-          <Label htmlFor={`${idPrefix}-negative`}>Allow the balance to go negative</Label>
-          <p className="text-xs text-muted-foreground">
-            On: every buy is taken and each one that leaves the balance below zero is counted as a negative-balance event. Off: a buy the balance cannot pay is not taken.
-          </p>
-        </div>
+      <SettingsRow
+        label="Allow the balance to go negative"
+        help="On: every buy is taken, and buys the balance can't cover count as negative-balance events. Off: they are skipped."
+        htmlFor={`${idPrefix}-negative`}
+      >
         <Switch id={`${idPrefix}-negative`} checked={values.allowNegativeBalance} onCheckedChange={(v) => onChange({ ...values, allowNegativeBalance: v })} />
-      </div>
-    </div>
+      </SettingsRow>
+    </SettingsList>
   );
 }

@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { FlaskConical, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Segmented } from "@/components/ui/segmented";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SettingsList, SettingsRow } from "@/components/ui/settings-row";
+import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
+import { useMediaQuery } from "@/hooks/use-media-query";
+import { DialogHead, Field, Group, Notice } from "./dialog-parts";
 import { createBacktestRun, getBacktestSettings } from "@/lib/backtest-api";
 import { getSettings } from "@/lib/api";
 import { useProfile } from "@/lib/profile-context";
@@ -18,7 +21,15 @@ import { TimingFields, parseTiming, toTimingValues, type TimingValues } from "./
 import { CombinedFields, parseCombined, toCombinedValues, type CombinedValues } from "./combined-fields";
 import { cn } from "@/lib/utils";
 
-const PRESET_DAYS = [3, 7, 12, 30];
+const PRESETS = [3, 7, 12, 30].map((d) => ({ value: String(d), label: `${d}d` }));
+const STYLES = [
+  { value: "separate", label: "Separate wallets" },
+  { value: "combined", label: "Combined wallet" },
+] as const;
+const METHODS = [
+  { value: "api", label: "API (fast)" },
+  { value: "rpc", label: "RPC (slow, long history)" },
+] as const;
 const DEFAULT_MAX_SIGNATURES = 50_000;
 // pump.fun's user-trades API only keeps about this many days of a wallet's history; beyond it the chain (RPC) is the way.
 const API_HISTORY_DAYS = 60;
@@ -40,6 +51,7 @@ type Props = {
  */
 export function NewRunDialog({ open, onOpenChange, selected, allCount, onCreated }: Props) {
   const { profiles, currentProfileId } = useProfile();
+  const phone = !useMediaQuery("(min-width: 640px)");
   const [name, setName] = useState("");
   const [days, setDays] = useState("7");
   const [maxSignatures, setMaxSignatures] = useState(String(DEFAULT_MAX_SIGNATURES));
@@ -192,101 +204,93 @@ export function NewRunDialog({ open, onOpenChange, selected, allCount, onCreated
     }
   }
 
+  const scopeOptions = [
+    { value: "selected", label: `Selected (${selected.length})` },
+    { value: "all", label: `All on the list (${allCount.toLocaleString()})` },
+  ] as const;
+  const timingSummary =timingNumbers ? `Delay ${timingNumbers.executionDelaySeconds}s · checks ${timingNumbers.riskCheckIntervalSeconds}s · +${timingNumbers.fillLatencySeconds}s` : undefined;
+  const speedSummary = `Addresses at once ${screening.addressParallelism || (autoParallelism ? `auto (${autoParallelism})` : "auto")} · days at once ${screening.daysAtOnce || 0} · signature limit ${maxSignaturesNumber ? maxSignaturesNumber.toLocaleString() : "none"}`;
+  const combinedSummary = combinedNumbers ? `$${combinedNumbers.startingBalanceUsd} start · $${combinedNumbers.tradeSizeUsd}/trade · ${combinedNumbers.pumpFeePercent}% + $${combinedNumbers.jitoFeeUsd}` : undefined;
+
+  const addressesField = (
+    <Field label="Addresses">
+      <Segmented options={scopeOptions} value={scope} onChange={setScope} label="Addresses" block tall />
+    </Field>
+  );
+
+  const signatureRow = (
+    <SettingsList>
+      <SettingsRow label="Skip addresses with more signatures than" help="Skips an address with more trades than this in the window (signatures, if read over RPC). 0 = no limit." htmlFor="bt-max-signatures">
+        <Input
+          id="bt-max-signatures"
+          inputMode="numeric"
+          value={maxSignatures}
+          onChange={(e) => setMaxSignatures(e.target.value.replace(/[^0-9]/g, ""))}
+          className={cn("w-[140px] text-right", !maxSignaturesValid && "border-negative")}
+          aria-invalid={!maxSignaturesValid}
+        />
+      </SettingsRow>
+    </SettingsList>
+  );
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90vh] flex-col overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>New backtest</DialogTitle>
-          <DialogDescription>
-            Replays each address&apos;s trades from the last N days against the real pool history, using the chosen profile&apos;s settings.
-            Anything already collected for an address in an earlier backtest is reused.
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="sm:max-w-[600px]">
+        <DialogHead
+          icon={<FlaskConical className="size-5" />}
+          title="New backtest"
+          help="Replays each address's recent trades against real pool history, using the chosen profile's settings. Anything already collected for an address is reused."
+          description="Choose the window, the profile to follow and the addresses to replay."
+        />
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label>Backtest style</Label>
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" size="sm" variant={mode === "separate" ? "default" : "outline"} onClick={() => setMode("separate")}>
-                Separate wallets
-              </Button>
-              <Button type="button" size="sm" variant={mode === "combined" ? "default" : "outline"} onClick={() => setMode("combined")}>
-                Combined wallet
-              </Button>
+        <div className="flex flex-col gap-4">
+          <Field
+            label="Backtest style"
+            help={mode === "combined" ? "All addresses trade as ONE wallet, with a shared balance and trade amount, added up in the order the trades happened." : "Each address gets its own wallet, so you can compare them and drop the weak ones."}
+          >
+            <Segmented options={STYLES} value={mode} onChange={setMode} label="Backtest style" block tall />
+          </Field>
+
+          <Field label="Name" optional htmlFor="bt-name">
+            <Input id="bt-name" placeholder={`${daysValid ? daysNumber : "7"}-day backtest`} value={name} onChange={(e) => setName(e.target.value)} className="max-md:h-11" />
+          </Field>
+
+          <Field label="Days back from now" htmlFor="bt-days">
+            <div className="flex items-center gap-2">
+              <Segmented options={PRESETS} value={String(daysNumber)} onChange={setDays} label="Days back" className="min-w-0 flex-1 sm:flex-none" block={phone} tall />
+              <div className="relative w-[110px] shrink-0">
+                <Input
+                  id="bt-days"
+                  inputMode="numeric"
+                  value={days}
+                  onChange={(e) => setDays(e.target.value.replace(/[^0-9]/g, ""))}
+                  className={cn("pr-12 max-md:h-11", !daysValid && days !== "" && "border-negative")}
+                  aria-invalid={!daysValid}
+                />
+                <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-text-3">days</span>
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {mode === "combined"
-                ? "All the addresses trade together as ONE wallet: one starting balance and one trade amount shared by every trade, added up in the order the trades happened. Shows the group's daily P&L and how often the balance went negative."
-                : "Each address is judged on its own wallet, so you can compare the addresses and drop the weak ones."}
-            </p>
-          </div>
+          </Field>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="bt-name">Name (optional)</Label>
-            <Input id="bt-name" placeholder={`${daysValid ? daysNumber : "7"}-day backtest`} value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
+          <Field
+            label="How to read the trades"
+            help={
+              collectMethod === "rpc"
+                ? "Lists each address's transactions over RPC and reads the pump.fun trades out of them. Much slower and uses a lot of requests, but reaches as far back as the RPC keeps history."
+                : "Uses pump.fun's API: a few dozen requests per address, so much faster, but it keeps only about 60 days of history. Use RPC for longer."
+            }
+          >
+            <Segmented options={METHODS} value={collectMethod} onChange={setCollectMethod} label="How to read the trades" block tall />
+          </Field>
+          {collectMethod === "api" && daysValid && daysNumber > API_HISTORY_DAYS && (
+            <Notice>{daysNumber} days is more than pump.fun keeps - the oldest part of the window would be missing. Switch to RPC to cover it.</Notice>
+          )}
 
-          <div className="space-y-1.5">
-            <Label htmlFor="bt-days">Days back from now</Label>
-            <div className="flex flex-wrap items-center gap-2">
-              {PRESET_DAYS.map((d) => (
-                <Button key={d} type="button" size="sm" variant={Number(days) === d ? "default" : "outline"} onClick={() => setDays(String(d))}>
-                  {d}d
-                </Button>
-              ))}
-              <Input
-                id="bt-days"
-                inputMode="numeric"
-                value={days}
-                onChange={(e) => setDays(e.target.value.replace(/[^0-9]/g, ""))}
-                className={cn("w-20", !daysValid && days !== "" && "border-negative")}
-                aria-invalid={!daysValid}
-              />
-              <span className="text-sm text-muted-foreground">days</span>
-            </div>
-          </div>
+          {!phone && signatureRow}
 
-          <div className="space-y-1.5">
-            <Label>How to read the trades</Label>
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" size="sm" variant={collectMethod === "api" ? "default" : "outline"} onClick={() => setCollectMethod("api")}>
-                API (fast)
-              </Button>
-              <Button type="button" size="sm" variant={collectMethod === "rpc" ? "default" : "outline"} onClick={() => setCollectMethod("rpc")}>
-                RPC (slow, long history)
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {collectMethod === "rpc"
-                ? "Lists each address's transactions over RPC and reads the pump.fun trades out of them. Much slower and uses a lot of requests, but reaches as far back as the RPC keeps history - use it for long windows."
-                : "Takes each address's trades from pump.fun's API: a few dozen requests per address, so it is much faster. pump.fun only keeps about the last 60 days, so use RPC for longer windows."}
-            </p>
-            {collectMethod === "api" && daysValid && daysNumber > API_HISTORY_DAYS && (
-              <p className="text-xs text-amber-500">
-                {daysNumber} days is more than pump.fun keeps - the oldest part of the window would be missing. Switch to RPC to cover it.
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="bt-max-signatures">Skip addresses with more signatures than</Label>
-            <Input
-              id="bt-max-signatures"
-              inputMode="numeric"
-              value={maxSignatures}
-              onChange={(e) => setMaxSignatures(e.target.value.replace(/[^0-9]/g, ""))}
-              className={cn("w-32", !maxSignaturesValid && "border-negative")}
-              aria-invalid={!maxSignaturesValid}
-            />
-            <p className="text-xs text-muted-foreground">
-              A very busy address takes very long to read, so one with more than this inside the window is stopped and marked Skipped. It counts trades (signatures, if an address ever has to be read from the chain over RPC). 0 = no limit.
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="bt-profile">Follow the settings of</Label>
+          <Field label="Follow the settings of" help="Copied when you start - editing the profile later never changes this backtest." htmlFor="bt-profile">
             <Select value={profileId} onValueChange={setProfileId}>
-              <SelectTrigger id="bt-profile" className="w-full">
+              <SelectTrigger id="bt-profile" className="w-full max-md:h-11">
                 <SelectValue placeholder="Choose a profile" />
               </SelectTrigger>
               <SelectContent>
@@ -298,61 +302,33 @@ export function NewRunDialog({ open, onOpenChange, selected, allCount, onCreated
                 ))}
               </SelectContent>
             </Select>
-            {previewStrategy ? <StrategyChips settings={previewStrategy} /> : <p className="text-xs text-muted-foreground">Loading the profile&apos;s settings…</p>}
-            <p className="text-xs text-muted-foreground">Copied when you start - editing the profile later never changes this backtest.</p>
-          </div>
+            {previewStrategy ? <StrategyChips settings={previewStrategy} /> : <p className="text-xs text-text-3">Loading the profile&apos;s settings…</p>}
+          </Field>
+
+          {phone && addressesField}
 
           {isCombined && combined && (
-            <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
-              <div>
-                <p className="text-sm font-medium">Combined wallet and fees</p>
-                <p className="text-xs text-muted-foreground">Filled in from the profile. Change the balance, the trade amount or the fees to see what result you would get.</p>
-              </div>
+            <Group title="Combined wallet and fees" summary={combinedSummary} note="Filled in from the profile. Change the balance, the trade amount or the fees to see what result you would get.">
               <CombinedFields values={combined} onChange={setCombined} />
-            </div>
+            </Group>
           )}
 
           {timing && (
-            <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
-              <div>
-                <p className="text-sm font-medium">Timing</p>
-                <p className="text-xs text-muted-foreground">
-                  Filled in from the profile and live settings so the backtest behaves like a live run. Change them to test a different setup.
-                </p>
-              </div>
+            <Group title="Timing" summary={timingSummary} note="Filled in from the profile and live settings so the backtest behaves like a live run. Change them to test a different setup.">
               <TimingFields values={timing} onChange={setTiming} />
-            </div>
+            </Group>
           )}
 
-          <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
-            <div>
-              <p className="text-sm font-medium">{isCombined ? "Speed" : "Speed and loss traders"}</p>
-              <p className="text-xs text-muted-foreground">
-                {isCombined
-                  ? "Choose how many addresses run at once and how many days of one address. There are no loss-trader rules in a combined backtest: dropping one address would change the wallet the others share."
-                  : "Work through a large list faster: choose how many addresses (and how many days of one address) run at once, and drop a trader that is clearly losing instead of simulating every token it bought."}
-              </p>
-            </div>
+          <Group
+            title={isCombined ? "Speed" : "Speed and loss traders"}
+            summary={speedSummary}
+            note={isCombined ? "There are no loss-trader rules in a combined backtest: dropping one address would change the wallet the others share." : undefined}
+          >
             <ScreeningFields values={screening} onChange={setScreening} autoParallelism={autoParallelism} speedOnly={isCombined} />
-          </div>
+            {phone && signatureRow}
+          </Group>
 
-          <div className="space-y-1.5">
-            <Label>Addresses</Label>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant={scope === "selected" ? "default" : "outline"}
-                disabled={selected.length === 0}
-                onClick={() => setScope("selected")}
-              >
-                Selected ({selected.length})
-              </Button>
-              <Button type="button" size="sm" variant={scope === "all" ? "default" : "outline"} onClick={() => setScope("all")}>
-                All on the list ({allCount.toLocaleString()})
-              </Button>
-            </div>
-          </div>
+          {!phone && addressesField}
         </div>
 
         <DialogFooter>
@@ -360,7 +336,7 @@ export function NewRunDialog({ open, onOpenChange, selected, allCount, onCreated
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
           <Button onClick={handleSubmit} disabled={submitting || addressCount === 0 || !daysValid || !maxSignaturesValid || !screeningNumbers || (timing !== null && !timingNumbers) || (isCombined && !combinedNumbers)}>
-            {submitting && <Loader2 className="size-4 animate-spin" />}
+            {submitting ? <Loader2 className="animate-spin" /> : <FlaskConical />}
             Start backtest
           </Button>
         </DialogFooter>

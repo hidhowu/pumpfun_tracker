@@ -5,11 +5,12 @@ import { toast } from "sonner";
 import { UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { promoteBacktestAddresses } from "@/lib/backtest-api";
 import { listTraderLists } from "@/lib/api";
 import type { TraderListView } from "@/lib/types";
 import { BatchProgress, type BatchState } from "./batch-progress";
+import { DialogHead, Field } from "./dialog-parts";
 
 const NO_LIST = "none";
 
@@ -55,26 +56,24 @@ export function PromoteDialog({ runId, addresses, open, onOpenChange, onDone }: 
     }
   }
 
+  const count = `${addresses.length.toLocaleString()} address${addresses.length === 1 ? "" : "es"}`;
+
   return (
     <Dialog open={open} onOpenChange={(next) => !working && onOpenChange(next)}>
-      <DialogContent className="sm:max-w-md" onInteractOutside={(e) => working && e.preventDefault()} onEscapeKeyDown={(e) => working && e.preventDefault()}>
+      <DialogContent className="sm:max-w-[460px]" onInteractOutside={(e) => working && e.preventDefault()} onEscapeKeyDown={(e) => working && e.preventDefault()}>
         {working && state ? (
-          <BatchProgress title="Adding to live Traders…" note="Sent in batches so the page and the server stay responsive. Closing is disabled until it finishes." state={state} stopping={false} />
+          <BatchProgress title="Adding to live Traders…" note="Sent in batches so the page and the server stay responsive." state={state} stopping={false} />
         ) : (
           <>
-            <DialogHeader>
-              <DialogTitle>
-                Add {addresses.length.toLocaleString()} address{addresses.length === 1 ? "" : "es"} to live Traders
-              </DialogTitle>
-              <DialogDescription>
-                They start being tracked for live copy-trading (ones already tracked are skipped; blacklisted ones stay blacklisted). You can also put them straight into one
-                of your trader lists.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium">Also add them to a list</span>
+            <DialogHead
+              icon={<UserPlus className="size-5" />}
+              title={`Add ${count} to live Traders`}
+              help="They start being tracked for live copy-trading. Ones already tracked are skipped and blacklisted ones stay blacklisted."
+              description="Add the selected addresses to live Traders, optionally into a list."
+            />
+            <Field label="Also add them to a list" htmlFor="promote-list">
               <Select value={listId} onValueChange={setListId}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger id="promote-list" className="w-full max-md:h-11">
                   <SelectValue placeholder={lists === null ? "Loading lists…" : "No list"} />
                 </SelectTrigger>
                 <SelectContent>
@@ -86,13 +85,13 @@ export function PromoteDialog({ runId, addresses, open, onOpenChange, onDone }: 
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+            </Field>
             <DialogFooter>
               <DialogClose asChild>
                 <Button variant="ghost">Cancel</Button>
               </DialogClose>
               <Button className="gap-1.5" disabled={addresses.length === 0} onClick={run}>
-                <UserPlus className="size-4" /> Add to Traders
+                <UserPlus /> Add to Traders
               </Button>
             </DialogFooter>
           </>

@@ -2,16 +2,48 @@
 
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, CheckCircle2, GitMerge, Loader2 } from "lucide-react";
+import { CircleCheck, GitMerge, Loader2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { mergeBacktests, previewMerge } from "@/lib/backtest-api";
 import type { BacktestRunSummary, MergePreview } from "@/lib/backtest-types";
 import { cn } from "@/lib/utils";
 import { BatchProgress, type BatchState } from "./batch-progress";
+import { CheckMark, DialogHead, Field } from "./dialog-parts";
 import { RunStatusBadge } from "./shared";
 
 type Props = { runs: BacktestRunSummary[]; open: boolean; onOpenChange: (open: boolean) => void; onMerged: () => void };
+
+/** One backtest in a picker: its name, address count and window, and its status on the right. */
+function RunRow({ run, on, disabled, onClick, check }: { run: BacktestRunSummary; on: boolean; disabled?: boolean; onClick: () => void; check?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      role={check ? "checkbox" : "radio"}
+      aria-checked={on}
+      className={cn(
+        "flex min-h-[52px] items-center gap-3 rounded-[14px] border bg-surface-2 px-3.5 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        on ? "border-volt-line bg-volt-soft" : "border-border hover:border-line-2"
+      )}
+    >
+      {check ? (
+        <CheckMark checked={on} />
+      ) : (
+        <span className={cn("flex size-[18px] shrink-0 items-center justify-center rounded-full border", on ? "border-primary" : "border-line-3")}>{on && <span className="size-2 rounded-full bg-primary" />}</span>
+      )}
+      <span className="flex min-w-0 flex-1 flex-col leading-[1.3]">
+        <b className="truncate text-[13.5px] font-semibold">{run.name}</b>
+        <span className="text-xs text-text-3">
+          {run.addressCount.toLocaleString()} addresses · {run.days}d
+        </span>
+      </span>
+      <RunStatusBadge status={run.status} control={run.control} queuePosition={run.progress.queuePosition} />
+    </button>
+  );
+}
 
 /**
  * Merges backtests that are really one test: pick the backtest to keep, tick the ones to fold into it, review how their settings differ, and go.
@@ -90,11 +122,11 @@ export function MergeRunsDialog({ runs, open, onOpenChange, onMerged }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={(next) => !working && onOpenChange(next)}>
-      <DialogContent className="flex max-h-[88vh] flex-col overflow-y-auto sm:max-w-2xl" onInteractOutside={(e) => working && e.preventDefault()} onEscapeKeyDown={(e) => working && e.preventDefault()}>
+      <DialogContent className="sm:max-w-[640px]" onInteractOutside={(e) => working && e.preventDefault()} onEscapeKeyDown={(e) => working && e.preventDefault()}>
         {working && state ? (
           <BatchProgress
             title="Merging backtests…"
-            note="Moving the addresses and their results a page at a time. Closing is disabled until it finishes or you stop it; if it is interrupted, run the merge again - what already moved stays moved."
+            note="Moving the addresses and their results a page at a time. If it is interrupted, run the merge again - what already moved stays moved."
             state={state}
             stopping={stopping}
             onStop={() => {
@@ -104,21 +136,20 @@ export function MergeRunsDialog({ runs, open, onOpenChange, onMerged }: Props) {
           />
         ) : (
           <>
-            <DialogHeader>
-              <DialogTitle>Merge backtests</DialogTitle>
-              <DialogDescription>
-                Fold several backtests into one. Pick the one to <span className="font-medium text-foreground">keep</span>, then tick the ones to merge into it - their addresses and
-                results move over and they are removed. An address that is in more than one stays as it is in the one you keep.
-              </DialogDescription>
-            </DialogHeader>
+            <DialogHead
+              icon={<GitMerge className="size-5" />}
+              title="Merge backtests"
+              help="Pick one to keep, then tick the ones to merge into it. Their addresses and results move over and they are removed. An address in more than one stays as it is in the one you keep."
+              description="Fold several backtests into one."
+            />
 
-            <div className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium">1. Keep this one</span>
-              <div className="flex max-h-44 flex-col gap-1 overflow-y-auto">
+            <Field label="1. Keep this one">
+              <div role="radiogroup" aria-label="Keep this one" className="flex max-h-48 flex-col gap-1.5 overflow-y-auto">
                 {runs.map((r) => (
-                  <button
+                  <RunRow
                     key={r._id}
-                    type="button"
+                    run={r}
+                    on={target === r._id}
                     onClick={() => {
                       setTarget(r._id);
                       setSources((prev) => {
@@ -128,89 +159,84 @@ export function MergeRunsDialog({ runs, open, onOpenChange, onMerged }: Props) {
                       });
                       setPreview(null);
                     }}
-                    className={cn("flex items-center justify-between gap-3 rounded-lg border px-3 py-1.5 text-left transition-colors", target === r._id ? "border-primary bg-primary/5" : "border-border/60 hover:bg-muted/40")}
-                  >
-                    <span className="min-w-0 truncate text-sm">
-                      {r.name} <span className="text-xs text-muted-foreground">· {r.addressCount.toLocaleString()} addresses · {r.days}d</span>
-                    </span>
-                    <RunStatusBadge status={r.status} control={r.control} queuePosition={r.progress.queuePosition} />
-                  </button>
+                  />
                 ))}
               </div>
-            </div>
+            </Field>
 
-            <div className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium">2. Merge these into it</span>
-              <div className="flex max-h-44 flex-col gap-1 overflow-y-auto">
-                {runs.filter((r) => r._id !== target).map((r) => (
-                  <label key={r._id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-border/60 px-3 py-1.5 hover:bg-muted/40">
-                    <input type="checkbox" className="size-4 accent-primary" checked={sources.has(r._id)} onChange={() => toggleSource(r._id)} disabled={!target} />
-                    <span className="min-w-0 flex-1 truncate text-sm">
-                      {r.name} <span className="text-xs text-muted-foreground">· {r.addressCount.toLocaleString()} addresses · {r.days}d</span>
-                    </span>
-                    <RunStatusBadge status={r.status} control={r.control} queuePosition={r.progress.queuePosition} />
-                  </label>
-                ))}
-                {!target && <p className="px-1 text-xs text-muted-foreground">Choose the backtest to keep first.</p>}
+            <Field label="2. Merge these into it" note={!target ? "Choose the backtest to keep first." : undefined}>
+              <div className="flex max-h-48 flex-col gap-1.5 overflow-y-auto">
+                {runs
+                  .filter((r) => r._id !== target)
+                  .map((r) => (
+                    <RunRow key={r._id} run={r} check on={sources.has(r._id)} disabled={!target} onClick={() => toggleSource(r._id)} />
+                  ))}
               </div>
-            </div>
+            </Field>
 
             {preview && (
-              <div className="flex flex-col gap-2">
-                <span className="text-sm font-medium">3. Check</span>
-                {preview.sources.map((s) => (
-                  <div key={s._id} className={cn("flex flex-col gap-1.5 rounded-lg border px-3 py-2", s.blocked ? "border-negative/40" : s.sameResults ? "border-positive/30" : "border-amber-500/40")}>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
-                        {s.blocked ? <AlertTriangle className="size-4 shrink-0 text-negative" /> : s.sameResults ? <CheckCircle2 className="size-4 shrink-0 text-positive" /> : <AlertTriangle className="size-4 shrink-0 text-amber-500" />}
-                        <span className="truncate">{s.name}</span>
-                      </span>
-                      <span className="shrink-0 text-xs text-muted-foreground">{s.addressCount.toLocaleString()} addresses</span>
-                    </div>
-                    {s.blocked ? (
-                      <p className="text-xs text-negative">{s.blocked}.</p>
-                    ) : s.sameResults ? (
-                      <p className="text-xs text-muted-foreground">Same simulation settings - its results are kept as they are.</p>
-                    ) : (
-                      <>
-                        <p className="text-xs text-muted-foreground">
-                          Different settings, so its results are not comparable:{" "}
-                          {s.differences.map((d) => `${d.label} (${d.source} here, ${d.target} in "${preview.target.name}")`).join("; ")}.
+              <Field label="3. Check">
+                <div className="flex flex-col gap-2">
+                  {preview.sources.map((s) => (
+                    <div
+                      key={s._id}
+                      className={cn(
+                        "flex flex-col gap-1.5 rounded-[14px] border bg-surface-2 px-3.5 py-3",
+                        s.blocked ? "border-destructive/40" : s.sameResults ? "border-positive/30" : "border-warn/40"
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-2 text-[13.5px] font-semibold">
+                          {s.blocked ? <TriangleAlert className="size-4 shrink-0 text-destructive" /> : s.sameResults ? <CircleCheck className="size-4 shrink-0 text-positive" /> : <TriangleAlert className="size-4 shrink-0 text-warn" />}
+                          <span className="truncate">{s.name}</span>
+                        </span>
+                        <span className="shrink-0 text-xs text-text-3">{s.addressCount.toLocaleString()} addresses</span>
+                      </div>
+                      {s.blocked ? (
+                        <p className="text-xs text-destructive">{s.blocked}.</p>
+                      ) : s.sameResults ? (
+                        <p className="text-xs text-text-2">Same simulation settings - its results are kept as they are.</p>
+                      ) : (
+                        <>
+                          <p className="text-xs leading-[18px] text-text-2">
+                            Different settings, so its results are not comparable: {s.differences.map((d) => `${d.label} (${d.source} here, ${d.target} in "${preview.target.name}")`).join("; ")}.
+                          </p>
+                          <label className="flex items-start gap-2.5 text-xs leading-[18px] text-text-2">
+                            <Checkbox
+                              className="mt-px"
+                              checked={keepResults.has(s._id)}
+                              onCheckedChange={() =>
+                                setKeepResults((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(s._id)) next.delete(s._id);
+                                  else next.add(s._id);
+                                  return next;
+                                })
+                              }
+                            />
+                            <span>Keep its existing results anyway (otherwise its addresses are simulated again with the settings of &quot;{preview.target.name}&quot;)</span>
+                          </label>
+                        </>
+                      )}
+                      {s.otherDifferences.length > 0 && !s.blocked && (
+                        <p className="text-[11px] leading-4 text-text-3">
+                          Also differs (does not change any result; the settings of &quot;{preview.target.name}&quot; apply from now on): {s.otherDifferences.map((d) => d.label).join(", ")}.
                         </p>
-                        <label className="flex items-center gap-2 text-xs">
-                          <input
-                            type="checkbox"
-                            className="size-4 accent-primary"
-                            checked={keepResults.has(s._id)}
-                            onChange={() =>
-                              setKeepResults((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(s._id)) next.delete(s._id);
-                                else next.add(s._id);
-                                return next;
-                              })
-                            }
-                          />
-                          Keep its existing results anyway (otherwise its addresses are simulated again with the settings of &quot;{preview.target.name}&quot;)
-                        </label>
-                      </>
-                    )}
-                    {s.otherDifferences.length > 0 && !s.blocked && (
-                      <p className="text-[11px] text-muted-foreground">
-                        Also differs (does not change any result; the settings of &quot;{preview.target.name}&quot; apply from now on): {s.otherDifferences.map((d) => d.label).join(", ")}.
-                      </p>
-                    )}
-                    {s.windowOffsetHours >= 6 && !s.blocked && (
-                      <p className="text-[11px] text-muted-foreground">Its period ends about {s.windowOffsetHours} hours {s.windowOffsetHours >= 24 ? `(${Math.round(s.windowOffsetHours / 24)} days) ` : ""}away from the kept one&apos;s. Results that are kept stay on the period they were collected for.</p>
-                    )}
-                  </div>
-                ))}
-                <p className="text-xs text-muted-foreground">
-                  {totalAddresses.toLocaleString()} addresses will move; {preview.sources.length} backtest{preview.sources.length === 1 ? "" : "s"} will be removed.
-                  {rerunCount > 0 ? ` ${rerunCount.toLocaleString()} will be simulated again (already-collected data is reused, so that is much faster than the first time).` : ""}
-                  {preview.target.status === "completed" || preview.target.status === "failed" ? ' If the kept backtest has work waiting afterwards it is paused: press Resume to process just that.' : ""}
-                </p>
-              </div>
+                      )}
+                      {s.windowOffsetHours >= 6 && !s.blocked && (
+                        <p className="text-[11px] leading-4 text-text-3">
+                          Its period ends about {s.windowOffsetHours} hours {s.windowOffsetHours >= 24 ? `(${Math.round(s.windowOffsetHours / 24)} days) ` : ""}away from the kept one&apos;s. Results that are kept stay on the period they were collected for.
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                  <p className="text-xs leading-[18px] text-text-3">
+                    {totalAddresses.toLocaleString()} addresses will move; {preview.sources.length} backtest{preview.sources.length === 1 ? "" : "s"} will be removed.
+                    {rerunCount > 0 ? ` ${rerunCount.toLocaleString()} will be simulated again (already-collected data is reused, so that is much faster than the first time).` : ""}
+                    {preview.target.status === "completed" || preview.target.status === "failed" ? " If the kept backtest has work waiting afterwards it is paused: press Resume to process just that." : ""}
+                  </p>
+                </div>
+              </Field>
             )}
 
             <DialogFooter>
@@ -219,12 +245,12 @@ export function MergeRunsDialog({ runs, open, onOpenChange, onMerged }: Props) {
               </DialogClose>
               {!preview ? (
                 <Button className="gap-1.5" disabled={!target || sources.size === 0 || checking} onClick={check}>
-                  {checking ? <Loader2 className="size-4 animate-spin" /> : <GitMerge className="size-4" />}
+                  {checking ? <Loader2 className="animate-spin" /> : <GitMerge />}
                   Check the merge
                 </Button>
               ) : (
                 <Button className="gap-1.5" disabled={blocked} onClick={merge}>
-                  <GitMerge className="size-4" /> Merge {preview.sources.length} backtest{preview.sources.length === 1 ? "" : "s"}
+                  <GitMerge /> Merge {preview.sources.length} backtest{preview.sources.length === 1 ? "" : "s"}
                 </Button>
               )}
             </DialogFooter>
